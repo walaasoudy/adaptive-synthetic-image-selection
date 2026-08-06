@@ -1,0 +1,42 @@
+# Datasets and derived images (large, not suitable for git)
+data/chexpert/raw/*
+!data/chexpert/raw/.gitkeep
+data/chexpert/processed/images_768/*
+!data/chexpert/processed/images_768/.gitkeep
+
+# Model weights / checkpoints
+checkpoints/**/*
+!checkpoints/**/.gitkeep
+!checkpoints/**/*.json
+
+# Logs and generated samples
+logs/**/*
+!logs/**/.gitkeep
+outputs/**/*
+!outputs/**/.gitkeep
+
+# Caches
+.cache/**/*
+!.cache/**/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.egg-info/
+
+# Environment
+.venv/
+venv/
+
+# Secrets
+.env
+*kaggle.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Stray browser downloads landing in the project root
+*.crdownload

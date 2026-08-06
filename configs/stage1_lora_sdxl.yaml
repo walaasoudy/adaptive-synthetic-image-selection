@@ -1,0 +1,102 @@
+# Stage 1 — SDXL + LoRA fine-tuning on CheXpert. Single source of truth for tunables.
+# See docs/stage1_plan.md for the full rationale behind every value here.
+#
+# All paths are relative to PROJECT_ROOT, which defaults to the current working directory.
+# On RunPod, set PROJECT_ROOT=/workspace/chest-synth-thesis (or wherever this repo is cloned on
+# the persistent volume) before launching any script, so nothing resolves onto the ephemeral
+# container disk.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  data_root: ${paths.project_root}/data/chexpert
+  raw_dir: ${paths.data_root}/raw
+  processed_dir: ${paths.data_root}/processed
+  images_dir: ${paths.processed_dir}/images_768
+  splits_dir: ${paths.processed_dir}/splits
+  captions_dir: ${paths.processed_dir}/captions
+  checkpoints_dir: ${paths.project_root}/checkpoints/stage1_lora_sdxl
+  logs_dir: ${paths.project_root}/logs/stage1_lora_sdxl
+  outputs_dir: ${paths.project_root}/outputs/stage1_samples
+  hf_cache_dir: ${paths.project_root}/.cache/huggingface
+
+run:
+  # run_id is composed at launch time as "<timestamp>_<git_sha>_<config_hash>" by scripts/utils/manifest.py.
+  # Leave null here; set explicitly only when resuming a specific prior run.
+  run_id: null
+  seed: 42
+
+model:
+  base_model_id: "stabilityai/stable-diffusion-xl-base-1.0"
+  revision: null  # pin to a specific commit hash after first successful download; null = latest at first pull
+  vae_upcast_fp32: true  # avoids the known SDXL-VAE fp16 NaN/black-image bug (plan §2)
+  use_refiner: false
+
+lora:
+  rank: 32
+  alpha: 32
+  dropout: 0.0
+  target_modules: ["to_q", "to_k", "to_v", "to_out.0"]  # UNet self+cross attention projections only
+  train_text_encoders: false  # documented fallback: set true (+ text_encoder_lr) if rare-label conditioning is weak
+
+optimizer:
+  name: "adamw_8bit"        # falls back to "adamw" automatically if bitsandbytes/CUDA mismatch is detected
+  learning_rate: 1.0e-4
+  lr_scheduler: "cosine"
+  lr_warmup_steps: 750
+  weight_decay: 1.0e-2
+  max_grad_norm: 1.0
+
+data:
+  view_filter: "frontal"   # "frontal" | "both" — lateral images are flagged, not deleted, when filtered
+  resolution: 768
+  aspect_mode: "letterbox" # aspect-preserving resize + minimal pad; never non-uniform stretch, never center-crop
+  normalize_mean: 0.5
+  normalize_std: 0.5
+  horizontal_flip: false   # MUST stay false — flipping inverts CXR left/right anatomy
+  min_source_resolution: 200  # px, below this an image is flagged/dropped as low quality
+
+split:
+  gen_train_fraction: 0.70
+  gen_val_fraction: 0.10
+  classifier_heldout_fraction: 0.20
+  split_seed: 42
+  split_unit: "patient_id"  # never split at image level — CheXpert patients have multiple studies
+
+captions:
+  template_version: "v1"
+  num_paraphrase_variants: 4
+  age_bucket_width_years: 10
+  uncertain_label_policy: "omit"  # -1 labels are omitted from the finding clause, not asserted present/absent
+  no_finding_overrides_positives: true  # treat "No Finding"==1 as authoritative over spurious co-positive labels
+
+training:
+  precision: "bf16"
+  attention_backend: "sdpa"  # PyTorch 2.x scaled_dot_product_attention; xformers intentionally not used (plan §5)
+  train_batch_size: 8
+  gradient_accumulation_steps: 2
+  gradient_checkpointing: true
+  cache_latents_and_embeddings: true
+  ema:
+    enabled: true
+    decay: 0.9999
+  max_train_steps: 30000    # upper bound; actual stop driven by val-loss plateau + stable probe samples (plan §9)
+  min_train_steps: 15000
+
+checkpointing:
+  save_every_n_steps: 1000
+  keep_last_n_full_checkpoints: 3
+  keep_all_lora_weight_snapshots: true
+
+validation:
+  val_every_n_steps: 1000
+  probe_seed: 123
+  fid:
+    inception: true
+    domain_torchxrayvision: true
+  clip_score: true
+
+logging:
+  tensorboard: true
+  wandb:
+    enabled: false  # set true + WANDB_API_KEY env var to enable the optional supplementary tracker
+    project: "chexpert-sdxl-lora-stage1"

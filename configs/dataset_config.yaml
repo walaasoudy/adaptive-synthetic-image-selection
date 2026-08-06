@@ -1,0 +1,57 @@
+# CheXpert-v1.0-small schema and acquisition reference. Kept separate from stage1_lora_sdxl.yaml
+# because this describes the *dataset itself*, not a tunable pipeline choice — it should stay
+# stable even as training hyperparameters change.
+
+source:
+  provider: "kaggle"
+  # Downloaded via kagglehub.dataset_download() by scripts/data/00_download_dataset.py.
+  kaggle_dataset_slug: "ashery/chexpert"
+  expected_train_rows: 224316
+  expected_valid_rows: 234
+
+schema:
+  path_column: "Path"
+  patient_id_regex: "patient\\d+"   # extracted from Path, e.g. CheXpert-v1.0-small/train/patient00001/...
+  sex_column: "Sex"
+  age_column: "Age"
+  frontal_lateral_column: "Frontal/Lateral"
+  ap_pa_column: "AP/PA"
+  # All 14 pathology label columns, ternary-valued in {-1, 0, 1, <blank>}. Order here is the
+  # canonical serialization order used by scripts/utils/caption_builder.py.
+  pathology_columns:
+    - "No Finding"
+    - "Enlarged Cardiomediastinum"
+    - "Cardiomegaly"
+    - "Lung Opacity"
+    - "Lung Lesion"
+    - "Edema"
+    - "Consolidation"
+    - "Pneumonia"
+    - "Atelectasis"
+    - "Pneumothorax"
+    - "Pleural Effusion"
+    - "Pleural Other"
+    - "Fracture"
+    - "Support Devices"
+  device_column: "Support Devices"  # handled separately from pathology findings in captions (plan §7)
+
+expected_directory_structure: |
+  data/chexpert/raw/
+    train.csv
+    valid.csv
+    train/
+      patient00001/
+        study1/
+          view1_frontal.jpg
+          ...
+    valid/
+      patient64541/
+        ...
+
+integrity_checks:
+  # Executed by scripts/data/01_verify_download.py — see docs/stage1_plan.md §6.
+  - "train.csv row count within 1% of expected_train_rows"
+  - "valid.csv row count matches expected_valid_rows"
+  - "all pathology_columns present with values in {-1, 0, 1, NaN}"
+  - "spot-check N random images open correctly and have plausible dimensions"
+  - "per-label positive-rate roughly consistent with published CheXpert statistics"

@@ -1,0 +1,28 @@
+# torch is provided by the RunPod PyTorch 2.8.0 / CUDA 12.8 template — do not reinstall/downgrade it.
+# Versions below are starting anchors (plan §5); verify compatibility with a Day-1 smoke test,
+# then freeze the exact working set with `pip freeze > requirements-lock.txt`.
+
+diffusers>=0.31,<0.35
+transformers>=4.44,<4.50
+accelerate>=0.34
+peft>=0.13
+bitsandbytes>=0.43        # if incompatible with CUDA 12.8, training falls back to plain AdamW (see configs/stage1_lora_sdxl.yaml)
+
+safetensors
+pillow
+numpy
+pandas
+opencv-python-headless
+scipy
+
+torchmetrics[image]
+torchxrayvision            # CXR-domain feature extractor for domain FID
+
+omegaconf                  # nested YAML config + CLI overrides
+tensorboard
+wandb                      # optional supplementary tracker, see docs/stage1_plan.md §10
+
+huggingface_hub
+kagglehub
+tqdm
+python-dotenv
