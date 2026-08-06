@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -105,15 +106,51 @@ def build_models(cfg, device_dtype: torch.dtype):
 
 def _load_captions(captions_path: Path) -> list[dict]:
     records = []
+    seen = set()
     with open(captions_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
-                records.append(json.loads(line))
+                record = json.loads(line)
+                image_id = record.get("image_id")
+                if not image_id or image_id in seen:
+                    raise ValueError(f"Missing or duplicate image_id {image_id!r} in {captions_path}")
+                if not record.get("caption_variants"):
+                    raise ValueError(f"Caption record {image_id!r} has no variants")
+                seen.add(image_id)
+                records.append(record)
     return records
 
 
-def build_or_load_cache(cfg, models, split_name: str, device: torch.device):
+def validate_training_inputs(cfg) -> None:
+    """Fail before model downloads when captions/preprocessing no longer match the config."""
+    metadata_path = Path(cfg.paths.captions_dir) / "caption_template_version.json"
+    if not metadata_path.is_file():
+        raise FileNotFoundError(f"Missing caption metadata: {metadata_path}; run 04_generate_captions.py")
+    metadata = read_json(metadata_path)
+    expected_caption = {
+        "template_version": cfg.captions.template_version,
+        "num_paraphrase_variants": cfg.captions.num_paraphrase_variants,
+        "age_bucket_width_years": cfg.captions.age_bucket_width_years,
+        "uncertain_label_policy": cfg.captions.uncertain_label_policy,
+        "no_finding_overrides_positives": cfg.captions.no_finding_overrides_positives,
+    }
+    mismatches = {key: (metadata.get(key), value) for key, value in expected_caption.items() if metadata.get(key) != value}
+    preprocessing = metadata.get("preprocessing_manifest", {})
+    output_settings = preprocessing.get("output_settings", {})
+    if output_settings.get("resolution") != cfg.data.resolution:
+        mismatches["preprocessing_resolution"] = (output_settings.get("resolution"), cfg.data.resolution)
+    for split_name in ("gen_train", "gen_val"):
+        split_path = Path(cfg.paths.splits_dir) / f"{split_name}.csv"
+        recorded = preprocessing.get("source_splits", {}).get(split_name, {}).get("sha256")
+        current = hashlib.sha256(split_path.read_bytes()).hexdigest() if split_path.is_file() else None
+        if recorded != current:
+            mismatches[f"{split_name}_sha256"] = (recorded, current)
+    if mismatches:
+        raise ValueError(f"Caption/preprocessing provenance is stale or incompatible: {mismatches}. Rerun preprocessing and captions.")
+
+
+def build_or_load_cache(cfg, models, split_name: str, device: torch.device, max_samples: int | None = None):
     """One-time VAE latent + text embedding cache per split (docs/stage1_plan.md §8).
 
     Latents are cached per image (as encoder-distribution moments, so a fresh sample is still
@@ -125,10 +162,11 @@ def build_or_load_cache(cfg, models, split_name: str, device: torch.device):
     captions_path = Path(cfg.paths.captions_dir) / f"{split_name}_captions.jsonl"
     cache_dir = Path(cfg.paths.processed_dir) / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    latent_cache_path = cache_dir / f"{split_name}_latent_cache.pt"
-    prompt_cache_path = cache_dir / f"{split_name}_prompt_cache.pt"
-
     records = _load_captions(captions_path)
+    if max_samples is not None:
+        if max_samples < 1:
+            raise ValueError("--max-samples-per-split must be positive")
+        records = records[:max_samples]
     if not records:
         raise FileNotFoundError(
             f"No caption records found at {captions_path} — run 03_preprocess_images.py and "
@@ -136,6 +174,17 @@ def build_or_load_cache(cfg, models, split_name: str, device: torch.device):
         )
 
     resolution = cfg.data.resolution
+    record_identity = json.dumps([record["image_id"] for record in records], separators=(",", ":"))
+    captions_hash = hashlib.sha256((hashlib.sha256(captions_path.read_bytes()).hexdigest() + record_identity).encode()).hexdigest()[:12]
+    model_key = hashlib.sha256(f"{cfg.model.base_model_id}:{cfg.model.revision}:{resolution}".encode()).hexdigest()[:8]
+    cache_key = f"{captions_hash}_{model_key}"
+    latent_cache_path = cache_dir / f"{split_name}_latent_cache_{cache_key}.pt"
+    prompt_cache_path = cache_dir / f"{split_name}_prompt_cache_{cache_key}.pt"
+
+    for record in records:
+        image_path = images_dir / record["image_relpath"]
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Caption record {record['image_id']} references missing image: {image_path}")
 
     if not latent_cache_path.exists():
         from PIL import Image
@@ -203,6 +252,11 @@ class CachedSDXLDataset(Dataset):
         self.records = records
         self.target_size = target_size
         self.epoch = 0
+        expected_ids = [record["image_id"] for record in records]
+        if self.latent_cache.get("image_ids") != expected_ids:
+            raise ValueError("Latent cache image order does not match the caption records; refusing stale cache")
+        if self.latent_cache.get("target_size") != target_size:
+            raise ValueError("Latent cache resolution does not match the configured target size")
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
@@ -262,7 +316,13 @@ class LoraEMA:
                 param.data.copy_(self.shadow[name].to(param.dtype))
 
     def state_dict(self) -> dict:
-        return {k: v.cpu() for k, v in self.shadow.items()}
+        return {"decay": self.decay, "shadow": {k: v.cpu() for k, v in self.shadow.items()}}
+
+    def load_state_dict(self, state: dict) -> None:
+        self.decay = float(state["decay"])
+        if set(state["shadow"]) != set(self.shadow):
+            raise ValueError("EMA checkpoint parameters do not match the current LoRA adapter")
+        self.shadow = {name: value.float() for name, value in state["shadow"].items()}
 
 
 # --------------------------------------------------------------------------------------
@@ -322,17 +382,19 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resume-from", type=str, default=None, help="Full checkpoint directory to resume from")
     parser.add_argument("--run-id", type=str, default=None, help="Existing run_id to continue writing into")
+    parser.add_argument("--max-samples-per-split", type=int, default=None, help="Diagnostic/smoke-test limit; uses separate caches")
     parser.add_argument("overrides", nargs="*", help="OmegaConf dotlist overrides, e.g. training.train_batch_size=4")
     return parser.parse_args()
 
 
 def main() -> int:
+    args = parse_args()
     from accelerate import Accelerator
     from accelerate.utils import ProjectConfiguration
 
-    args = parse_args()
     cfg = load_stage1_config(overrides=args.overrides)
     ensure_dirs(cfg)
+    validate_training_inputs(cfg)
     set_seed(cfg.run.seed)
 
     checkpoints_root = Path(cfg.paths.checkpoints_dir)
@@ -367,8 +429,8 @@ def main() -> int:
     weight_dtype = torch.bfloat16 if cfg.training.precision == "bf16" else torch.float16
     models = build_models(cfg, weight_dtype)
 
-    train_latent_cache, train_prompt_cache, train_records = build_or_load_cache(cfg, models, "gen_train", accelerator.device)
-    val_latent_cache, val_prompt_cache, val_records = build_or_load_cache(cfg, models, "gen_val", accelerator.device)
+    train_latent_cache, train_prompt_cache, train_records = build_or_load_cache(cfg, models, "gen_train", accelerator.device, args.max_samples_per_split)
+    val_latent_cache, val_prompt_cache, val_records = build_or_load_cache(cfg, models, "gen_val", accelerator.device, args.max_samples_per_split)
 
     train_dataset = CachedSDXLDataset(train_latent_cache, train_prompt_cache, train_records, cfg.data.resolution)
     val_dataset = CachedSDXLDataset(val_latent_cache, val_prompt_cache, val_records, cfg.data.resolution)
@@ -403,11 +465,15 @@ def main() -> int:
     )
 
     ema = LoraEMA(accelerator.unwrap_model(unet), cfg.training.ema.decay) if cfg.training.ema.enabled else None
+    if ema is not None:
+        accelerator.register_for_checkpointing(ema)
 
     global_step = 0
     if args.resume_from:
-        accelerator.load_state(args.resume_from)
         resumed_metadata = read_json(Path(args.resume_from) / "metadata.json")
+        if resumed_metadata.get("split_manifest_hash") != split_manifest_hash:
+            raise ValueError("Checkpoint split manifest differs from the current dataset splits; refusing unsafe resume")
+        accelerator.load_state(args.resume_from)
         global_step = resumed_metadata["step"]
         print(f"Resumed from {args.resume_from} at step {global_step}")
 

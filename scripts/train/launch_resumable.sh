@@ -18,6 +18,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 : "${PROJECT_ROOT:=$REPO_ROOT}"
 export PROJECT_ROOT
+export PYTHONUNBUFFERED=1
 
 CHECKPOINTS_DIR="${PROJECT_ROOT}/checkpoints/stage1_lora_sdxl"
 LOGS_DIR="${PROJECT_ROOT}/logs/stage1_lora_sdxl"
@@ -27,10 +28,10 @@ LATEST_RUN_FILE="${CHECKPOINTS_DIR}/latest_run.json"
 RESUME_ARGS=()
 
 if [[ -f "$LATEST_RUN_FILE" ]]; then
-  RUN_ID=$(python3 -c "import json; print(json.load(open('${LATEST_RUN_FILE}'))['run_id'])")
+  RUN_ID=$(python3 -u -c "import json; print(json.load(open('${LATEST_RUN_FILE}'))['run_id'])")
   RUN_LATEST_JSON="${CHECKPOINTS_DIR}/${RUN_ID}/latest.json"
   if [[ -f "$RUN_LATEST_JSON" ]]; then
-    CHECKPOINT_DIR=$(python3 -c "import json; print(json.load(open('${RUN_LATEST_JSON}'))['checkpoint_dir'])")
+    CHECKPOINT_DIR=$(python3 -u -c "import json; print(json.load(open('${RUN_LATEST_JSON}'))['checkpoint_dir'])")
     echo "Found existing run ${RUN_ID}; resuming from ${CHECKPOINT_DIR}"
     RESUME_ARGS=(--resume-from "$CHECKPOINT_DIR" --run-id "$RUN_ID")
   else

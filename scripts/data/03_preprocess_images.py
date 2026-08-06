@@ -1,180 +1,216 @@
 #!/usr/bin/env python3
-"""Preprocess gen_train / gen_val images for SDXL LoRA training (docs/stage1_plan.md §6).
-
-Applies, per image:
-  - frontal-only filtering (lateral images are flagged and skipped, not deleted from raw/)
-  - grayscale -> 3-channel RGB
-  - aspect-preserving resize + centered letterbox padding to a square target resolution
-    (never a non-uniform stretch: that would distort the cardiothoracic ratio; never a
-    center-crop: that risks losing peripheral pathology)
-  - quality filtering (corrupt/unreadable, below minimum source resolution, near-uniform/blank)
-
-classifier_heldout.csv is intentionally NOT read or processed by this script — it must stay
-completely untouched by Stage 1 (docs/stage1_plan.md §6).
-
-Every filtering decision is logged to <split>_preprocessing_log.jsonl with image id + reason;
-nothing is silently dropped.
-
-Usage:
-    python scripts/data/03_preprocess_images.py [--splits gen_train gen_val]
-"""
+"""Safely preprocess the generation splits into square RGB JPEG images."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
+import tempfile
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from PIL import Image
+from tqdm.auto import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.utils.config import ensure_dirs, load_dataset_config, load_stage1_config  # noqa: E402
 from scripts.utils.identifiers import sanitize_image_id  # noqa: E402
-from scripts.utils.manifest import write_json  # noqa: E402
+from scripts.utils.manifest import read_json, write_json  # noqa: E402
 
-BLANK_STD_THRESHOLD = 5.0  # pixel intensity std below this is treated as a likely blank/corrupt export
+BLANK_STD_THRESHOLD = 5.0
+JPEG_QUALITY = 95
+MANIFEST_VERSION = 2
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def resolve_source_path(raw_dir: Path, raw_path: str) -> Path:
-    p = str(raw_path).replace("\\", "/")
+    value = str(raw_path).replace("\\", "/")
     for prefix in ("CheXpert-v1.0-small/", "CheXpert-v1.0/"):
-        if p.startswith(prefix):
-            p = p[len(prefix):]
-    return raw_dir / p
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+    return raw_dir / value
+
+
+def validate_processed_jpeg(path: Path, resolution: int) -> tuple[bool, str | None]:
+    """Fully decode a JPEG and require its encoded mode and dimensions to match the config."""
+    if not path.is_file():
+        return False, "missing"
+    try:
+        with Image.open(path) as image:
+            if image.format != "JPEG":
+                return False, f"format_{image.format or 'unknown'}"
+            if image.mode != "RGB":
+                return False, f"mode_{image.mode}"
+            if image.size != (resolution, resolution):
+                return False, f"size_{image.size[0]}x{image.size[1]}"
+            image.load()
+    except Exception as exc:
+        return False, f"unreadable_{type(exc).__name__}"
+    return True, None
 
 
 def letterbox_resize(image: Image.Image, target_size: int) -> Image.Image:
-    """Aspect-preserving resize so the longer side fits target_size, then center-pad to a
-    target_size x target_size square canvas (docs/stage1_plan.md §6: never stretch, never crop)."""
-    w, h = image.size
-    scale = target_size / max(w, h)
-    new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
-    resized = image.resize((new_w, new_h), Image.BICUBIC)
-
-    canvas = Image.new("RGB", (target_size, target_size), color=(0, 0, 0))
-    offset = ((target_size - new_w) // 2, (target_size - new_h) // 2)
-    canvas.paste(resized, offset)
+    width, height = image.size
+    scale = target_size / max(width, height)
+    new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    resized = image.resize(new_size, Image.Resampling.BICUBIC)
+    canvas = Image.new("RGB", (target_size, target_size), (0, 0, 0))
+    canvas.paste(resized, ((target_size - new_size[0]) // 2, (target_size - new_size[1]) // 2))
     return canvas
 
 
-def process_one_image(
-    raw_path: str,
-    raw_dir: Path,
-    out_dir: Path,
-    resolution: int,
-    min_source_resolution: int,
-    view_filter: str,
-    frontal_lateral_value: str,
-) -> tuple[str | None, str | None]:
-    """Returns (image_id, filter_reason). filter_reason is None on success."""
-    image_id = sanitize_image_id(raw_path)
-
-    is_frontal = str(frontal_lateral_value).strip().lower().startswith("front")
-    if view_filter == "frontal" and not is_frontal:
-        return image_id, "filtered_lateral_view"
-
-    source_path = resolve_source_path(raw_dir, raw_path)
-    if not source_path.exists():
-        return image_id, "source_file_missing"
-
+def atomic_save_jpeg(image: Image.Image, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+    os.close(fd)
+    temporary = Path(temporary_name)
     try:
-        with Image.open(source_path) as im:
-            im = im.convert("L")
-            w, h = im.size
-            if min(w, h) < min_source_resolution:
-                return image_id, "below_min_source_resolution"
-
-            arr = np.asarray(im, dtype=np.float32)
-            if arr.std() < BLANK_STD_THRESHOLD:
-                return image_id, "near_uniform_blank"
-
-            im_rgb = im.convert("RGB")
-            processed = letterbox_resize(im_rgb, resolution)
-    except Exception:
-        return image_id, "corrupt_or_unreadable"
-
-    out_path = out_dir / f"{image_id}.jpg"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    processed.save(out_path, format="JPEG", quality=95)
-    return image_id, None
+        image.save(temporary, format="JPEG", quality=JPEG_QUALITY)
+        valid, reason = validate_processed_jpeg(temporary, image.width)
+        if not valid:
+            raise OSError(f"temporary JPEG validation failed: {reason}")
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
-def process_split(
-    split_name: str,
-    df: pd.DataFrame,
-    raw_dir: Path,
-    images_dir: Path,
-    dataset_cfg,
-    data_cfg,
-) -> None:
+def expected_manifest(stage1_cfg, split_paths: dict[str, Path]) -> dict:
+    data = stage1_cfg.data
+    return {
+        "manifest_version": MANIFEST_VERSION,
+        "preprocessing_algorithm_version": 2,
+        "output_settings": {
+            "resolution": int(data.resolution),
+            "aspect_mode": str(data.aspect_mode),
+            "view_filter": str(data.view_filter),
+            "min_source_resolution": int(data.min_source_resolution),
+            "horizontal_flip": bool(data.horizontal_flip),
+            "blank_std_threshold": BLANK_STD_THRESHOLD,
+            "jpeg_quality": JPEG_QUALITY,
+        },
+        "source_splits": {
+            name: {"path": path.name, "sha256": sha256_file(path), "size_bytes": path.stat().st_size}
+            for name, path in sorted(split_paths.items())
+        },
+    }
+
+
+def check_manifest(path: Path, expected: dict, adopt_legacy: bool) -> None:
+    if not path.exists():
+        return
+    actual = read_json(path)
+    if actual == expected:
+        return
+    if "manifest_version" not in actual and adopt_legacy:
+        legacy_settings = {k: actual.get(k) for k in expected["output_settings"] if k in actual}
+        current_settings = {k: expected["output_settings"][k] for k in legacy_settings}
+        if legacy_settings != current_settings:
+            raise SystemExit(f"Legacy preprocessing settings conflict with the current configuration:\nold={legacy_settings}\nnew={current_settings}")
+        print("WARNING: adopting a legacy preprocessing manifest with no split hashes. Existing files will still be decoded and validated before skipping.", flush=True)
+        return
+    raise SystemExit(
+        "Existing preprocessing outputs were created with incompatible or unverifiable settings/splits.\n"
+        f"Manifest: {path}\nExisting: {json.dumps(actual, indent=2, sort_keys=True)}\n"
+        f"Requested: {json.dumps(expected, indent=2, sort_keys=True)}\n"
+        "Use the original configuration/split files. For a legacy manifest only, review it and rerun with --adopt-legacy-manifest."
+    )
+
+
+def process_split(split_name, df, raw_dir, images_dir, dataset_cfg, data_cfg) -> Counter:
     out_dir = images_dir / split_name
     out_dir.mkdir(parents=True, exist_ok=True)
     schema = dataset_cfg.schema
-
-    log_records = []
-    n_ok = 0
-    for _, row in df.iterrows():
-        raw_path = row[schema.path_column]
-        fl_value = row.get(schema.frontal_lateral_column, "Frontal")
-        image_id, reason = process_one_image(
-            raw_path=raw_path,
-            raw_dir=raw_dir,
-            out_dir=out_dir,
-            resolution=data_cfg.resolution,
-            min_source_resolution=data_cfg.min_source_resolution,
-            view_filter=data_cfg.view_filter,
-            frontal_lateral_value=fl_value,
-        )
-        if reason is None:
-            n_ok += 1
-        log_records.append({"image_id": image_id, "raw_path": raw_path, "kept": reason is None, "reason": reason})
+    image_ids = [sanitize_image_id(value) for value in df[schema.path_column]]
+    duplicates = [item for item, count in Counter(image_ids).items() if count > 1]
+    if duplicates:
+        raise SystemExit(f"{split_name}: {len(duplicates)} duplicate output image IDs; first examples: {duplicates[:5]}")
 
     log_path = images_dir / f"{split_name}_preprocessing_log.jsonl"
-    with open(log_path, "w", encoding="utf-8") as f:
-        for rec in log_records:
-            f.write(json.dumps(rec))
-            f.write("\n")
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{log_path.name}.", suffix=".tmp", dir=images_dir)
+    counts = Counter(processed=0, skipped_existing=0, filtered=0, failed=0)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", buffering=1) as log:
+            progress = tqdm(df.itertuples(index=False, name=None), total=len(df), desc=f"[{split_name}] preprocess", unit="image")
+            columns = {name: index for index, name in enumerate(df.columns)}
+            for values in progress:
+                raw_path = values[columns[schema.path_column]]
+                image_id = sanitize_image_id(raw_path)
+                destination = out_dir / f"{image_id}.jpg"
+                frontal_value = values[columns[schema.frontal_lateral_column]] if schema.frontal_lateral_column in columns else "Frontal"
+                reason = None
+                detail = None
+                action = "processed"
 
-    print(f"[{split_name}] kept {n_ok}/{len(df)} images -> {out_dir}")
-    print(f"[{split_name}] filtering log -> {log_path}")
+                if str(data_cfg.view_filter) == "frontal" and not str(frontal_value).strip().lower().startswith("front"):
+                    action, reason = "filtered", "filtered_lateral_view"
+                else:
+                    valid, validation_reason = validate_processed_jpeg(destination, int(data_cfg.resolution))
+                    if valid:
+                        action, reason = "skipped_existing", "validated_existing"
+                    else:
+                        source = resolve_source_path(raw_dir, raw_path)
+                        if not source.is_file():
+                            action, reason = "failed", "source_file_missing"
+                        else:
+                            try:
+                                with Image.open(source) as source_image:
+                                    gray = source_image.convert("L")
+                                    width, height = gray.size
+                                    if min(width, height) < int(data_cfg.min_source_resolution):
+                                        action, reason = "filtered", "below_min_source_resolution"
+                                    elif np.asarray(gray, dtype=np.float32).std() < BLANK_STD_THRESHOLD:
+                                        action, reason = "filtered", "near_uniform_blank"
+                                    else:
+                                        atomic_save_jpeg(letterbox_resize(gray.convert("RGB"), int(data_cfg.resolution)), destination)
+                                        detail = validation_reason and f"replaced_{validation_reason}"
+                            except Exception as exc:
+                                action, reason, detail = "failed", "corrupt_or_unreadable", f"{type(exc).__name__}: {exc}"
+
+                counts[action] += 1
+                record = {"image_id": image_id, "raw_path": str(raw_path), "kept": action in ("processed", "skipped_existing"), "action": action, "reason": reason, "detail": detail}
+                log.write(json.dumps(record, ensure_ascii=False) + "\n")
+                progress.set_postfix({key: counts[key] for key in ("processed", "skipped_existing", "filtered", "failed")}, refresh=False)
+            progress.close()
+            log.flush()
+            os.fsync(log.fileno())
+        os.replace(temporary_name, log_path)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+    print(f"[{split_name}] processed={counts['processed']} skipped-existing={counts['skipped_existing']} filtered={counts['filtered']} failed={counts['failed']} log={log_path}", flush=True)
+    return counts
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--splits", nargs="+", default=["gen_train", "gen_val"])
+    parser.add_argument("--adopt-legacy-manifest", action="store_true", help="Explicitly accept an old manifest lacking split hashes after checking its recorded settings")
     args = parser.parse_args()
-
-    stage1_cfg = load_stage1_config()
-    dataset_cfg = load_dataset_config()
-    ensure_dirs(stage1_cfg)
-
-    raw_dir = Path(stage1_cfg.paths.raw_dir)
-    splits_dir = Path(stage1_cfg.paths.splits_dir)
-    images_dir = Path(stage1_cfg.paths.images_dir)
-    data_cfg = stage1_cfg.data
-
-    for split_name in args.splits:
-        csv_path = splits_dir / f"{split_name}.csv"
-        if not csv_path.exists():
-            print(f"Skipping {split_name}: {csv_path} not found (run 02_build_patient_splits.py first)")
-            continue
-        df = pd.read_csv(csv_path)
-        process_split(split_name, df, raw_dir, images_dir, dataset_cfg, data_cfg)
-
-    write_json(
-        images_dir / "preprocessing_config_used.json",
-        {
-            "resolution": data_cfg.resolution,
-            "aspect_mode": data_cfg.aspect_mode,
-            "view_filter": data_cfg.view_filter,
-            "min_source_resolution": data_cfg.min_source_resolution,
-            "horizontal_flip": data_cfg.horizontal_flip,
-        },
-    )
-
+    cfg, dataset_cfg = load_stage1_config(), load_dataset_config()
+    ensure_dirs(cfg)
+    split_paths = {name: Path(cfg.paths.splits_dir) / f"{name}.csv" for name in args.splits}
+    provenance_paths = {name: Path(cfg.paths.splits_dir) / f"{name}.csv" for name in ("gen_train", "gen_val")}
+    missing = [str(path) for path in {**provenance_paths, **split_paths}.values() if not path.is_file()]
+    if missing:
+        raise SystemExit("Missing split files (run 02_build_patient_splits.py first): " + ", ".join(missing))
+    manifest = expected_manifest(cfg, provenance_paths)
+    manifest_path = Path(cfg.paths.images_dir) / "preprocessing_config_used.json"
+    check_manifest(manifest_path, manifest, args.adopt_legacy_manifest)
+    # Record provenance before work starts; atomic JSON replacement prevents a torn manifest.
+    write_json(manifest_path, manifest)
+    for name, path in split_paths.items():
+        process_split(name, pd.read_csv(path), Path(cfg.paths.raw_dir), Path(cfg.paths.images_dir), dataset_cfg, cfg.data)
     return 0
 
 

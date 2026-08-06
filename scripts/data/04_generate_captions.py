@@ -1,137 +1,152 @@
 #!/usr/bin/env python3
-"""Generate structured label-to-text captions for preprocessed gen_train / gen_val images
-(docs/stage1_plan.md §7), using scripts/utils/caption_builder.py — the same module Stage 2 will
-import for generation prompts.
-
-Only images that survived 03_preprocess_images.py (i.e. exist on disk under images_dir/<split>/)
-get captions; the raw ternary label vector is preserved unmodified alongside each record so a
-future revision of the captioning policy can regenerate captions without redoing preprocessing.
-
-Usage:
-    python scripts/data/04_generate_captions.py [--splits gen_train gen_val]
-"""
+"""Generate and reconcile captions for valid, successfully preprocessed images."""
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
+import os
 import sys
+import tempfile
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
+from tqdm.auto import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.utils.caption_builder import (  # noqa: E402
-    CaptionConfig,
-    PATHOLOGY_COLUMNS,
-    build_caption_variants,
-)
+from scripts.utils.caption_builder import CaptionConfig, PATHOLOGY_COLUMNS, build_caption_variants  # noqa: E402
 from scripts.utils.config import ensure_dirs, load_dataset_config, load_stage1_config  # noqa: E402
 from scripts.utils.identifiers import sanitize_image_id  # noqa: E402
-from scripts.utils.manifest import write_json  # noqa: E402
+from scripts.utils.manifest import read_json, write_json  # noqa: E402
+
+_preprocess = importlib.import_module("scripts.data.03_preprocess_images")
+expected_manifest = _preprocess.expected_manifest
+validate_processed_jpeg = _preprocess.validate_processed_jpeg
 
 
-def build_caption_config(stage1_cfg) -> CaptionConfig:
-    c = stage1_cfg.captions
-    return CaptionConfig(
-        age_bucket_width_years=c.age_bucket_width_years,
-        uncertain_label_policy=c.uncertain_label_policy,
-        no_finding_overrides_positives=c.no_finding_overrides_positives,
-        num_paraphrase_variants=c.num_paraphrase_variants,
-        template_version=c.template_version,
-    )
+def build_caption_config(cfg) -> CaptionConfig:
+    value = cfg.captions
+    return CaptionConfig(value.age_bucket_width_years, value.uncertain_label_policy, value.no_finding_overrides_positives, value.num_paraphrase_variants, value.template_version)
 
 
 def raw_label_vector(row: pd.Series) -> dict:
-    """Preserve the raw ternary labels verbatim (docs/stage1_plan.md §6/§7) regardless of what
-    the caption policy does with them, so captions can be regenerated later without redoing
-    image preprocessing."""
-    vector = {}
-    for col in PATHOLOGY_COLUMNS:
-        value = row.get(col)
-        if value is None or (isinstance(value, float) and value != value):  # NaN
-            vector[col] = None
-        else:
-            vector[col] = int(value)
-    return vector
+    result = {}
+    for column in PATHOLOGY_COLUMNS:
+        value = row.get(column)
+        result[column] = None if value is None or pd.isna(value) else int(value)
+    return result
 
 
-def process_split(
-    split_name: str,
-    df: pd.DataFrame,
-    images_dir: Path,
-    captions_dir: Path,
-    schema,
-    caption_config: CaptionConfig,
-) -> int:
-    split_images_dir = images_dir / split_name
-    out_path = captions_dir / f"{split_name}_captions.jsonl"
+def load_preprocessing_status(path: Path) -> dict[str, dict]:
+    if not path.is_file():
+        raise SystemExit(f"Missing preprocessing log: {path}. Complete preprocessing for this split first.")
+    result = {}
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            try:
+                record = json.loads(line)
+            except Exception as exc:
+                raise SystemExit(f"Invalid preprocessing log JSON at {path}:{line_number}: {exc}") from exc
+            image_id = record.get("image_id")
+            if not image_id or image_id in result:
+                raise SystemExit(f"Missing/duplicate image_id in {path}:{line_number}: {image_id!r}")
+            result[image_id] = record
+    return result
 
-    n_written = 0
-    with open(out_path, "w", encoding="utf-8") as f:
-        for _, row in df.iterrows():
-            image_id = sanitize_image_id(row[schema.path_column])
-            image_path = split_images_dir / f"{image_id}.jpg"
-            if not image_path.exists():
-                continue  # filtered out during preprocessing (lateral view, corrupt, etc.)
 
-            variants = build_caption_variants(row.to_dict(), caption_config)
-            record = {
-                "image_id": image_id,
-                "split": split_name,
-                "image_relpath": str(image_path.relative_to(images_dir)),
-                "patient_id": row.get("patient_id"),
-                "caption_variants": variants,
-                "raw_labels": raw_label_vector(row),
-                "sex": row.get(schema.sex_column),
-                "age": row.get(schema.age_column),
-                "frontal_lateral": row.get(schema.frontal_lateral_column),
-                "ap_pa": row.get(schema.ap_pa_column),
-            }
-            f.write(json.dumps(record))
-            f.write("\n")
-            n_written += 1
+def previous_caption_ids(path: Path) -> tuple[set[str], int]:
+    ids, duplicates = set(), 0
+    if path.is_file():
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                image_id = json.loads(line).get("image_id")
+                duplicates += image_id in ids
+                ids.add(image_id)
+    return ids, duplicates
 
-    print(f"[{split_name}] wrote {n_written} caption records -> {out_path}")
-    return n_written
+
+def process_split(name, df, images_dir, captions_dir, schema, caption_cfg, resolution) -> Counter:
+    ids = [sanitize_image_id(value) for value in df[schema.path_column]]
+    duplicate_source_ids = [key for key, count in Counter(ids).items() if count > 1]
+    if duplicate_source_ids:
+        raise SystemExit(f"{name}: duplicate image IDs in split CSV: {duplicate_source_ids[:5]}")
+    status = load_preprocessing_status(images_dir / f"{name}_preprocessing_log.jsonl")
+    split_ids = set(ids)
+    unknown_log_ids = set(status) - split_ids
+    missing_log_ids = split_ids - set(status)
+    if unknown_log_ids or missing_log_ids:
+        raise SystemExit(f"{name}: stale/incomplete preprocessing log: missing={len(missing_log_ids)}, not-in-split={len(unknown_log_ids)}")
+
+    destination = captions_dir / f"{name}_captions.jsonl"
+    previous_ids, previous_duplicates = previous_caption_ids(destination)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=captions_dir)
+    counts = Counter(written=0, filtered_or_failed=0, missing_or_invalid=0)
+    written_ids = set()
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", buffering=1) as output:
+            for (_, row), image_id in tqdm(zip(df.iterrows(), ids), total=len(df), desc=f"[{name}] captions", unit="record"):
+                preprocess_record = status[image_id]
+                if not preprocess_record.get("kept", False):
+                    counts["filtered_or_failed"] += 1
+                    continue
+                image_path = images_dir / name / f"{image_id}.jpg"
+                valid, reason = validate_processed_jpeg(image_path, resolution)
+                if not valid:
+                    counts["missing_or_invalid"] += 1
+                    print(f"[{name}] WARNING: excluding {image_id}: processed image is {reason}", flush=True)
+                    continue
+                record = {
+                    "image_id": image_id, "split": name,
+                    "image_relpath": (Path(name) / f"{image_id}.jpg").as_posix(),
+                    "patient_id": row.get("patient_id"),
+                    "caption_variants": build_caption_variants(row.to_dict(), caption_cfg),
+                    "raw_labels": raw_label_vector(row), "sex": row.get(schema.sex_column),
+                    "age": row.get(schema.age_column), "frontal_lateral": row.get(schema.frontal_lateral_column),
+                    "ap_pa": row.get(schema.ap_pa_column),
+                }
+                output.write(json.dumps(record, ensure_ascii=False, default=lambda value: None if pd.isna(value) else str(value)) + "\n")
+                written_ids.add(image_id)
+                counts["written"] += 1
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_name, destination)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+    stale = previous_ids - written_ids
+    missing_previous = written_ids - previous_ids if previous_ids else set()
+    print(f"[{name}] written={counts['written']} filtered/failed={counts['filtered_or_failed']} missing/invalid={counts['missing_or_invalid']} prior-duplicates={previous_duplicates} stale-prior={len(stale)} new-vs-prior={len(missing_previous)} -> {destination}", flush=True)
+    return counts
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--splits", nargs="+", default=["gen_train", "gen_val"])
     args = parser.parse_args()
-
-    stage1_cfg = load_stage1_config()
-    dataset_cfg = load_dataset_config()
-    ensure_dirs(stage1_cfg)
-
-    splits_dir = Path(stage1_cfg.paths.splits_dir)
-    images_dir = Path(stage1_cfg.paths.images_dir)
-    captions_dir = Path(stage1_cfg.paths.captions_dir)
-    schema = dataset_cfg.schema
-    caption_config = build_caption_config(stage1_cfg)
-
-    for split_name in args.splits:
-        csv_path = splits_dir / f"{split_name}.csv"
-        if not csv_path.exists():
-            print(f"Skipping {split_name}: {csv_path} not found (run 02_build_patient_splits.py first)")
-            continue
-        df = pd.read_csv(csv_path)
-        if "patient_id" not in df.columns:
-            df["patient_id"] = None
-        process_split(split_name, df, images_dir, captions_dir, schema, caption_config)
-
-    write_json(
-        captions_dir / "caption_template_version.json",
-        {
-            "template_version": caption_config.template_version,
-            "num_paraphrase_variants": caption_config.num_paraphrase_variants,
-            "age_bucket_width_years": caption_config.age_bucket_width_years,
-            "uncertain_label_policy": caption_config.uncertain_label_policy,
-            "no_finding_overrides_positives": caption_config.no_finding_overrides_positives,
-        },
-    )
-
+    cfg, dataset_cfg = load_stage1_config(), load_dataset_config()
+    ensure_dirs(cfg)
+    split_paths = {name: Path(cfg.paths.splits_dir) / f"{name}.csv" for name in args.splits}
+    provenance_paths = {name: Path(cfg.paths.splits_dir) / f"{name}.csv" for name in ("gen_train", "gen_val")}
+    missing = [str(path) for path in {**provenance_paths, **split_paths}.values() if not path.is_file()]
+    if missing:
+        raise SystemExit("Missing split files: " + ", ".join(missing))
+    expected = expected_manifest(cfg, provenance_paths)
+    manifest_path = Path(cfg.paths.images_dir) / "preprocessing_config_used.json"
+    if not manifest_path.is_file() or read_json(manifest_path) != expected:
+        raise SystemExit("Preprocessing provenance does not match the current settings and requested split files. Rerun preprocessing first.")
+    for name, path in split_paths.items():
+        process_split(name, pd.read_csv(path), Path(cfg.paths.images_dir), Path(cfg.paths.captions_dir), dataset_cfg.schema, build_caption_config(cfg), int(cfg.data.resolution))
+    write_json(Path(cfg.paths.captions_dir) / "caption_template_version.json", {
+        "template_version": cfg.captions.template_version,
+        "num_paraphrase_variants": cfg.captions.num_paraphrase_variants,
+        "age_bucket_width_years": cfg.captions.age_bucket_width_years,
+        "uncertain_label_policy": cfg.captions.uncertain_label_policy,
+        "no_finding_overrides_positives": cfg.captions.no_finding_overrides_positives,
+        "preprocessing_manifest": expected,
+    })
     return 0
 
 
