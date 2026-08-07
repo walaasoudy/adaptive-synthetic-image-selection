@@ -60,6 +60,15 @@ def get_library_versions() -> dict[str, str]:
     return versions
 
 
+def sha256_file(path: str | Path) -> str:
+    """Stream-hash a file's contents (used for provenance of split/checkpoint/manifest inputs)."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def write_json(path: str | Path, data: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

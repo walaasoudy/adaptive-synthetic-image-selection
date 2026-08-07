@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -20,19 +19,11 @@ from tqdm.auto import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.utils.config import ensure_dirs, load_dataset_config, load_stage1_config  # noqa: E402
 from scripts.utils.identifiers import sanitize_image_id  # noqa: E402
-from scripts.utils.manifest import read_json, write_json  # noqa: E402
+from scripts.utils.manifest import read_json, sha256_file, write_json  # noqa: E402
 
 BLANK_STD_THRESHOLD = 5.0
 JPEG_QUALITY = 95
 MANIFEST_VERSION = 2
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def resolve_source_path(raw_dir: Path, raw_path: str) -> Path:

@@ -25,6 +25,20 @@ run:
   run_id: null
   seed: 42
 
+dev_subset:
+  # Fast-iteration development subset (docs/stage1_plan.md's "small subset" made concrete/configurable).
+  # This ONLY exists to validate the pipeline quickly; the full CheXpert dataset generates final
+  # thesis results. Never hardcode a sample size in code — this is the single source of truth for it.
+  enabled: false            # 01b_build_dev_subset.py no-ops (prints a message) when false.
+  target_size: 10000        # approximate output image count; configurable (5k/10k/20k/...).
+  seed: 42                  # independent of split_seed so subset draws can vary without perturbing
+                             # the 70/10/20 patient-splitting logic.
+  prevalence_tolerance_pct: 5.0   # report-only threshold; deviations beyond this are WARNINGs, not
+                                   # fatal — the subset only needs to be "reasonably representative."
+  output_csv: ${paths.processed_dir}/dev_subset/train_subset.csv
+  manifest_path: ${paths.processed_dir}/dev_subset/dev_subset_manifest.json
+  prevalence_report_path: ${paths.processed_dir}/dev_subset/prevalence_report.json
+
 model:
   base_model_id: "stabilityai/stable-diffusion-xl-base-1.0"
   revision: null  # pin to a specific commit hash after first successful download; null = latest at first pull
@@ -56,11 +70,22 @@ data:
   min_source_resolution: 200  # px, below this an image is flagged/dropped as low quality
 
 split:
+  input_csv: ${paths.raw_dir}/train.csv  # source CSV for patient splitting. Point this at
+                                          # dev_subset.output_csv (below) to build gen_train/gen_val/
+                                          # classifier_heldout from the dev subset instead of the full
+                                          # ~224k-image CheXpert train.csv — a config-only switch, no
+                                          # code change required in 02_build_patient_splits.py or any
+                                          # downstream script.
   gen_train_fraction: 0.70
   gen_val_fraction: 0.10
   classifier_heldout_fraction: 0.20
   split_seed: 42
   split_unit: "patient_id"  # never split at image level — CheXpert patients have multiple studies
+  # classifier_heldout is further split so ASISM's weight/threshold search (Stage 3) never tunes
+  # against the same data Stage 5 reports its headline numbers on (leakage/optimistic-bias risk).
+  asism_tuning_fraction: 0.35   # fraction of classifier_heldout patients used only by Stage 3's search
+  heldout_split_seed: 43        # separate seed from split_seed so this sub-split can be reseeded
+                                 # independently of the top-level gen_train/gen_val/heldout split
 
 captions:
   template_version: "v1"

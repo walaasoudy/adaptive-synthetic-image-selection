@@ -22,6 +22,9 @@ omegaconf                  # nested YAML config + CLI overrides
 tensorboard
 wandb                      # optional supplementary tracker, see docs/stage1_plan.md §10
 
+pyarrow                    # parquet I/O for the experiment registry (scripts/utils/experiment_registry.py)
+                            # and, starting Stage 3, the ASISM signal cache
+
 huggingface_hub
 kagglehub
 tqdm
