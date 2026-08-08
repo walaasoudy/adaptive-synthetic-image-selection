@@ -27,6 +27,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
@@ -40,6 +41,27 @@ from scripts.utils.seed import set_seed  # noqa: E402
 # --------------------------------------------------------------------------------------
 # Model / cache construction
 # --------------------------------------------------------------------------------------
+
+def tracker_hparams(cfg) -> dict[str, int | float | str | bool]:
+    """Flatten a resolved OmegaConf config into TensorBoard-safe scalar hparams."""
+    resolved = OmegaConf.to_container(cfg, resolve=True)
+    flattened: dict[str, int | float | str | bool] = {}
+
+    def visit(prefix: str, value) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                visit(f"{prefix}.{key}" if prefix else str(key), child)
+        elif isinstance(value, (list, tuple)):
+            flattened[prefix] = json.dumps(value, sort_keys=True)
+        elif value is None:
+            flattened[prefix] = "null"
+        elif isinstance(value, (int, float, str, bool)):
+            flattened[prefix] = value
+        else:
+            flattened[prefix] = str(value)
+
+    visit("", resolved)
+    return flattened
 
 def build_models(cfg, device_dtype: torch.dtype):
     from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
@@ -463,7 +485,7 @@ def main() -> int:
         project_config=ProjectConfiguration(project_dir=str(run_dir), logging_dir=str(log_dir)),
     )
     if trackers:
-        accelerator.init_trackers("stage1_lora_sdxl", config=dict(cfg))
+        accelerator.init_trackers("stage1_lora_sdxl", config=tracker_hparams(cfg))
 
     weight_dtype = {
         "fp32": torch.float32,
