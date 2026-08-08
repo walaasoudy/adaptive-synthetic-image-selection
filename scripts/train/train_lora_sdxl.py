@@ -448,16 +448,28 @@ def main() -> int:
     if cfg.logging.wandb.enabled:
         trackers.append("wandb")
 
+    precision = str(cfg.training.precision).lower()
+    accelerate_precision = "no" if precision == "fp32" else precision
+    if accelerate_precision not in {"no", "fp16", "bf16"}:
+        raise ValueError(
+            f"Unsupported training.precision={cfg.training.precision!r}; "
+            "expected one of: fp32, fp16, bf16"
+        )
+
     accelerator = Accelerator(
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
-        mixed_precision=cfg.training.precision,
+        mixed_precision=accelerate_precision,
         log_with=trackers or None,
         project_config=ProjectConfiguration(project_dir=str(run_dir), logging_dir=str(log_dir)),
     )
     if trackers:
         accelerator.init_trackers("stage1_lora_sdxl", config=dict(cfg))
 
-    weight_dtype = torch.bfloat16 if cfg.training.precision == "bf16" else torch.float16
+    weight_dtype = {
+        "fp32": torch.float32,
+        "fp16": torch.float16,
+        "bf16": torch.bfloat16,
+    }[precision]
     models = build_models(cfg, weight_dtype)
 
     train_latent_cache, train_prompt_cache, train_records = build_or_load_cache(cfg, models, "gen_train", accelerator.device, args.max_samples_per_split)
