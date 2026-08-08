@@ -124,7 +124,8 @@ def _load_captions(captions_path: Path) -> list[dict]:
 
 def validate_training_inputs(cfg) -> None:
     """Fail before model downloads when captions/preprocessing no longer match the config."""
-    metadata_path = Path(cfg.paths.captions_dir) / "caption_template_version.json"
+    namespace = str(cfg.split.namespace)
+    metadata_path = Path(cfg.paths.captions_dir) / namespace / "caption_template_version.json"
     if not metadata_path.is_file():
         raise FileNotFoundError(f"Missing caption metadata: {metadata_path}; run 04_generate_captions.py")
     metadata = read_json(metadata_path)
@@ -136,13 +137,20 @@ def validate_training_inputs(cfg) -> None:
         "no_finding_overrides_positives": cfg.captions.no_finding_overrides_positives,
     }
     mismatches = {key: (metadata.get(key), value) for key, value in expected_caption.items() if metadata.get(key) != value}
-    preprocessing = metadata.get("preprocessing_manifest", {})
+    if metadata.get("split_namespace") != namespace:
+        mismatches["split_namespace"] = (metadata.get("split_namespace"), namespace)
+    from scripts.utils.splits import read_split_manifest, resolve_splits_dir
+    split_manifest = read_split_manifest(namespace)
+    if metadata.get("split_manifest_hash") != split_manifest.get("manifest_hash"):
+        mismatches["split_manifest_hash"] = (metadata.get("split_manifest_hash"), split_manifest.get("manifest_hash"))
+    preprocessing_by_split = metadata.get("preprocessing_manifests", {})
+    preprocessing = preprocessing_by_split.get("gen_train", {})
     output_settings = preprocessing.get("output_settings", {})
     if output_settings.get("resolution") != cfg.data.resolution:
         mismatches["preprocessing_resolution"] = (output_settings.get("resolution"), cfg.data.resolution)
     for split_name in ("gen_train", "gen_val"):
-        split_path = Path(cfg.paths.splits_dir) / f"{split_name}.csv"
-        recorded = preprocessing.get("source_splits", {}).get(split_name, {}).get("sha256")
+        split_path = resolve_splits_dir(namespace) / f"{split_name}.csv"
+        recorded = preprocessing_by_split.get(split_name, {}).get("source_splits", {}).get(split_name, {}).get("sha256")
         current = hashlib.sha256(split_path.read_bytes()).hexdigest() if split_path.is_file() else None
         if recorded != current:
             mismatches[f"{split_name}_sha256"] = (recorded, current)
@@ -158,9 +166,10 @@ def build_or_load_cache(cfg, models, split_name: str, device: torch.device, max_
     paraphrase variants of all images, since many images share the low-cardinality caption
     vocabulary.
     """
-    images_dir = Path(cfg.paths.images_dir)
-    captions_path = Path(cfg.paths.captions_dir) / f"{split_name}_captions.jsonl"
-    cache_dir = Path(cfg.paths.processed_dir) / "cache"
+    namespace = str(cfg.split.namespace)
+    images_dir = Path(cfg.paths.images_dir) / namespace
+    captions_path = Path(cfg.paths.captions_dir) / namespace / f"{split_name}_captions.jsonl"
+    cache_dir = Path(cfg.paths.processed_dir) / "cache" / namespace
     cache_dir.mkdir(parents=True, exist_ok=True)
     records = _load_captions(captions_path)
     if max_samples is not None:
@@ -349,12 +358,25 @@ def save_checkpoint(accelerator, unet, ema, cfg, run_dir: Path, step: int, epoch
     if ema is not None:
         torch.save(ema.state_dict(), lora_dir / "ema_shadow.pt")
 
+    from scripts.utils.manifest import sha256_file
+    from scripts.utils.splits import read_split_manifest, resolve_splits_dir
+    namespace = str(cfg.split.namespace)
+    manifest = read_split_manifest(namespace)
+    split_dir = resolve_splits_dir(namespace)
+    source_csv = Path(manifest["input_csv_path"])
     metadata = build_checkpoint_metadata(
         step=step,
         epoch=epoch,
         config=dict(cfg),
         split_manifest_hash=split_manifest_hash,
         seed=seed,
+        extra={
+            "split_namespace": namespace,
+            "split_manifest_version": manifest["manifest_version"],
+            "source_csv_hash": manifest.get("source_csv_sha256") or (sha256_file(source_csv) if source_csv.is_file() else None),
+            "gen_train_csv_hash": sha256_file(split_dir / "gen_train.csv"),
+            "gen_val_csv_hash": sha256_file(split_dir / "gen_val.csv"),
+        },
     )
     write_json(full_checkpoint_dir / "metadata.json", metadata)
     write_json(lora_dir / "metadata.json", metadata)
@@ -403,12 +425,21 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     write_json(checkpoints_root / "latest_run.json", {"run_id": run_id})
 
-    split_manifest_path = Path(cfg.paths.splits_dir) / "split_manifest.json"
-    split_manifest_hash = "unknown"
-    if split_manifest_path.exists():
-        from scripts.utils.manifest import hash_dict
-
-        split_manifest_hash = hash_dict(read_json(split_manifest_path))
+    from scripts.utils.manifest import sha256_file
+    from scripts.utils.splits import read_split_manifest, resolve_splits_dir
+    namespace = str(cfg.split.namespace)
+    split_manifest = read_split_manifest(namespace)
+    split_manifest_hash = split_manifest["manifest_hash"]
+    split_dir = resolve_splits_dir(namespace)
+    source_csv = Path(split_manifest["input_csv_path"])
+    stage1_provenance = {
+        "split_namespace": namespace,
+        "split_manifest_version": split_manifest["manifest_version"],
+        "split_manifest_hash": split_manifest_hash,
+        "source_csv_hash": split_manifest.get("source_csv_sha256") or (sha256_file(source_csv) if source_csv.is_file() else None),
+        "gen_train_csv_hash": sha256_file(split_dir / "gen_train.csv"),
+        "gen_val_csv_hash": sha256_file(split_dir / "gen_val.csv"),
+    }
 
     log_dir = Path(cfg.paths.logs_dir) / run_id
     trackers = []
@@ -471,8 +502,9 @@ def main() -> int:
     global_step = 0
     if args.resume_from:
         resumed_metadata = read_json(Path(args.resume_from) / "metadata.json")
-        if resumed_metadata.get("split_manifest_hash") != split_manifest_hash:
-            raise ValueError("Checkpoint split manifest differs from the current dataset splits; refusing unsafe resume")
+        for key, value in stage1_provenance.items():
+            if resumed_metadata.get(key) != value:
+                raise ValueError(f"Checkpoint {key} differs from current data ({resumed_metadata.get(key)!r} != {value!r}); refusing unsafe resume")
         accelerator.load_state(args.resume_from)
         global_step = resumed_metadata["step"]
         print(f"Resumed from {args.resume_from} at step {global_step}")
@@ -560,7 +592,8 @@ def main() -> int:
         StableDiffusionXLPipeline.save_lora_weights(str(final_dir), unet_lora_layers=state, safe_serialization=True)
         write_json(
             final_dir / "metadata.json",
-            build_checkpoint_metadata(global_step, epoch, dict(cfg), split_manifest_hash, cfg.run.seed, extra={"ema_applied": ema is not None}),
+            build_checkpoint_metadata(global_step, epoch, dict(cfg), split_manifest_hash, cfg.run.seed,
+                                      extra={"ema_applied": ema is not None, **stage1_provenance}),
         )
         print(f"Final LoRA weights (EMA applied: {ema is not None}) -> {final_dir}")
 

@@ -1,0 +1,119 @@
+{
+  "all_within_tolerance": false,
+  "columns": {
+    "Atelectasis": {
+      "absolute_deviation_pct": 3.245395298605913,
+      "full_dataset_positive_rate": 0.24635399403380842,
+      "full_dataset_uncertain_rate": 0.05029830957905204,
+      "subset_positive_rate": 0.27880794701986755,
+      "subset_uncertain_rate": 0.051655629139072845,
+      "within_tolerance": true
+    },
+    "Cardiomegaly": {
+      "absolute_deviation_pct": 4.591124905886512,
+      "full_dataset_positive_rate": 0.11600928074245939,
+      "full_dataset_uncertain_rate": 0.052452767649983426,
+      "subset_positive_rate": 0.16192052980132451,
+      "subset_uncertain_rate": 0.04768211920529802,
+      "within_tolerance": true
+    },
+    "Consolidation": {
+      "absolute_deviation_pct": 3.536823343218451,
+      "full_dataset_positive_rate": 0.06264501160092807,
+      "full_dataset_uncertain_rate": 0.05444149817699702,
+      "subset_positive_rate": 0.09801324503311258,
+      "subset_uncertain_rate": 0.048344370860927154,
+      "within_tolerance": true
+    },
+    "Edema": {
+      "absolute_deviation_pct": 5.751766480012818,
+      "full_dataset_positive_rate": 0.18221743453762015,
+      "full_dataset_uncertain_rate": 0.04855817036791515,
+      "subset_positive_rate": 0.23973509933774834,
+      "subset_uncertain_rate": 0.04768211920529802,
+      "within_tolerance": false
+    },
+    "Enlarged Cardiomediastinum": {
+      "absolute_deviation_pct": 2.6355837889926175,
+      "full_dataset_positive_rate": 0.05178985747431223,
+      "full_dataset_uncertain_rate": 0.05104408352668213,
+      "subset_positive_rate": 0.0781456953642384,
+      "subset_uncertain_rate": 0.05,
+      "within_tolerance": true
+    },
+    "Fracture": {
+      "absolute_deviation_pct": 1.7272102676444956,
+      "full_dataset_positive_rate": 0.029416639045409348,
+      "full_dataset_uncertain_rate": 0.05046403712296984,
+      "subset_positive_rate": 0.046688741721854304,
+      "subset_uncertain_rate": 0.05132450331125828,
+      "within_tolerance": true
+    },
+    "Lung Lesion": {
+      "absolute_deviation_pct": 1.7518059912153425,
+      "full_dataset_positive_rate": 0.031819688432217434,
+      "full_dataset_uncertain_rate": 0.04764666887636725,
+      "subset_positive_rate": 0.04933774834437086,
+      "subset_uncertain_rate": 0.04602649006622517,
+      "within_tolerance": true
+    },
+    "Lung Opacity": {
+      "absolute_deviation_pct": 1.3535440451130143,
+      "full_dataset_positive_rate": 0.4576566125290023,
+      "full_dataset_uncertain_rate": 0.04590652966523036,
+      "subset_positive_rate": 0.47119205298013245,
+      "subset_uncertain_rate": 0.05099337748344371,
+      "within_tolerance": true
+    },
+    "No Finding": {
+      "absolute_deviation_pct": 4.013273568981071,
+      "full_dataset_positive_rate": 0.18304607225720915,
+      "full_dataset_uncertain_rate": 0.04516075571760027,
+      "subset_positive_rate": 0.22317880794701986,
+      "subset_uncertain_rate": 0.043377483443708606,
+      "within_tolerance": true
+    },
+    "Pleural Effusion": {
+      "absolute_deviation_pct": 2.484771724027418,
+      "full_dataset_positive_rate": 0.40329797812396423,
+      "full_dataset_uncertain_rate": 0.04789526019224395,
+      "subset_positive_rate": 0.4281456953642384,
+      "subset_uncertain_rate": 0.04304635761589404,
+      "within_tolerance": true
+    },
+    "Pleural Other": {
+      "absolute_deviation_pct": 2.29065099096291,
+      "full_dataset_positive_rate": 0.024113357640039773,
+      "full_dataset_uncertain_rate": 0.048226715280079546,
+      "subset_positive_rate": 0.04701986754966887,
+      "subset_uncertain_rate": 0.05364238410596026,
+      "within_tolerance": true
+    },
+    "Pneumonia": {
+      "absolute_deviation_pct": 2.3810109160672304,
+      "full_dataset_positive_rate": 0.03115677825654624,
+      "full_dataset_uncertain_rate": 0.046652303612860456,
+      "subset_positive_rate": 0.05496688741721854,
+      "subset_uncertain_rate": 0.04933774834437086,
+      "within_tolerance": true
+    },
+    "Pneumothorax": {
+      "absolute_deviation_pct": 4.130479161133269,
+      "full_dataset_positive_rate": 0.08650977792509115,
+      "full_dataset_uncertain_rate": 0.05187272124627113,
+      "subset_positive_rate": 0.12781456953642384,
+      "subset_uncertain_rate": 0.054304635761589407,
+      "within_tolerance": true
+    },
+    "Support Devices": {
+      "absolute_deviation_pct": 0.3605287476924346,
+      "full_dataset_positive_rate": 0.5459893934371892,
+      "full_dataset_uncertain_rate": 0.05344713291349022,
+      "subset_positive_rate": 0.5423841059602649,
+      "subset_uncertain_rate": 0.052980132450331126,
+      "within_tolerance": true
+    }
+  },
+  "num_columns_exceeding_tolerance": 1,
+  "tolerance_pct": 5.0
+}

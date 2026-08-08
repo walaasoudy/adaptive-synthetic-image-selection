@@ -59,6 +59,13 @@ def check_row_counts(df_train: pd.DataFrame, df_valid: pd.DataFrame, dataset_cfg
 
 
 def check_schema(df: pd.DataFrame, dataset_cfg, csv_name: str) -> tuple[bool, list[str]]:
+    from scripts.utils.chexpert_schema import validate_chexpert_frame
+    try:
+        validate_chexpert_frame(df, dataset_cfg)
+        return True, []
+    except ValueError as exc:
+        return False, [f"{csv_name}: {exc}"]
+    """Legacy body retained below for source-history readability; shared validator returns above."""
     errors = []
     schema = dataset_cfg.schema
     required_columns = [

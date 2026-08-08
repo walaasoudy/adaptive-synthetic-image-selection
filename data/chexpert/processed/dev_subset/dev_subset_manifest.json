@@ -1,0 +1,15 @@
+{
+  "actual_num_images": 3020,
+  "actual_num_patients": 1767,
+  "algorithm": "rarity_first_greedy_quota_patient_sampling",
+  "algorithm_version": 1,
+  "all_within_tolerance": false,
+  "dev_subset_config_hash": "bd168d29",
+  "git_commit_hash": "eac004b",
+  "seed": 42,
+  "source_num_images": 12068,
+  "source_num_patients": 8000,
+  "source_train_csv_hash": "f4a553861aa3becd976ad6c9e703e3b76ee4e6b56da528468b42db0a7c6bbfbd",
+  "source_train_csv_path": "C:\\Users\\walaa\\OneDrive\\Desktop\\master\\data\\chexpert\\raw\\train.csv",
+  "target_size": 3000
+}

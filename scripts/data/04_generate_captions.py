@@ -20,6 +20,7 @@ from scripts.utils.caption_builder import CaptionConfig, PATHOLOGY_COLUMNS, buil
 from scripts.utils.config import ensure_dirs, load_dataset_config, load_stage1_config  # noqa: E402
 from scripts.utils.identifiers import sanitize_image_id  # noqa: E402
 from scripts.utils.manifest import read_json, write_json  # noqa: E402
+from scripts.utils.splits import read_split_manifest, resolve_splits_dir  # noqa: E402
 
 _preprocess = importlib.import_module("scripts.data.03_preprocess_images")
 expected_manifest = _preprocess.expected_manifest
@@ -124,28 +125,35 @@ def process_split(name, df, images_dir, captions_dir, schema, caption_cfg, resol
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--namespace", default=None)
     parser.add_argument("--splits", nargs="+", default=["gen_train", "gen_val"])
     args = parser.parse_args()
     cfg, dataset_cfg = load_stage1_config(), load_dataset_config()
     ensure_dirs(cfg)
-    split_paths = {name: Path(cfg.paths.splits_dir) / f"{name}.csv" for name in args.splits}
-    provenance_paths = {name: Path(cfg.paths.splits_dir) / f"{name}.csv" for name in ("gen_train", "gen_val")}
-    missing = [str(path) for path in {**provenance_paths, **split_paths}.values() if not path.is_file()]
+    namespace = args.namespace or str(cfg.split.namespace)
+    split_manifest = read_split_manifest(namespace)
+    split_paths = {name: resolve_splits_dir(namespace) / f"{name}.csv" for name in args.splits}
+    missing = [str(path) for path in split_paths.values() if not path.is_file()]
     if missing:
         raise SystemExit("Missing split files: " + ", ".join(missing))
-    expected = expected_manifest(cfg, provenance_paths)
-    manifest_path = Path(cfg.paths.images_dir) / "preprocessing_config_used.json"
-    if not manifest_path.is_file() or read_json(manifest_path) != expected:
-        raise SystemExit("Preprocessing provenance does not match the current settings and requested split files. Rerun preprocessing first.")
+    images_dir = Path(cfg.paths.images_dir) / namespace
+    captions_dir = Path(cfg.paths.captions_dir) / namespace
+    captions_dir.mkdir(parents=True, exist_ok=True)
     for name, path in split_paths.items():
-        process_split(name, pd.read_csv(path), Path(cfg.paths.images_dir), Path(cfg.paths.captions_dir), dataset_cfg.schema, build_caption_config(cfg), int(cfg.data.resolution))
-    write_json(Path(cfg.paths.captions_dir) / "caption_template_version.json", {
+        expected = expected_manifest(cfg, {name: path}, namespace, split_manifest)
+        manifest_path = images_dir / f"{name}_preprocessing_manifest.json"
+        if not manifest_path.is_file() or read_json(manifest_path) != expected:
+            raise SystemExit(f"Preprocessing provenance for {name} does not match the current namespace/settings. Rerun preprocessing first.")
+        process_split(name, pd.read_csv(path), images_dir, captions_dir, dataset_cfg.schema, build_caption_config(cfg), int(cfg.data.resolution))
+    write_json(captions_dir / "caption_template_version.json", {
         "template_version": cfg.captions.template_version,
         "num_paraphrase_variants": cfg.captions.num_paraphrase_variants,
         "age_bucket_width_years": cfg.captions.age_bucket_width_years,
         "uncertain_label_policy": cfg.captions.uncertain_label_policy,
         "no_finding_overrides_positives": cfg.captions.no_finding_overrides_positives,
-        "preprocessing_manifest": expected,
+        "preprocessing_manifests": {name: read_json(images_dir / f"{name}_preprocessing_manifest.json") for name in args.splits},
+        "split_namespace": namespace,
+        "split_manifest_hash": split_manifest.get("manifest_hash"),
     })
     return 0
 

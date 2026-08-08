@@ -1,0 +1,130 @@
+# Stage 3 — ASISM (docs/stages2_to_5_plan.md §4).
+#
+# Five independent signals, each written to its own versioned parquet artifact, each subject to the
+# SAME Go/No-Go gate (§4.6). No signal is admitted to the frozen selector merely because it was
+# implemented.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  data_root: ${paths.project_root}/data/chexpert
+  synthetic_root: ${paths.data_root}/synthetic
+  scores_dir: ${paths.synthetic_root}/scores
+  asism_dir: ${paths.synthetic_root}/asism
+  gonogo_report: ${paths.synthetic_root}/asism/gonogo_report.json
+  search_log: ${paths.synthetic_root}/asism/proxy_search_log.jsonl
+  frozen_manifest: ${paths.synthetic_root}/asism/asism_frozen_manifest.json
+  fold_manifest: ${paths.synthetic_root}/asism/asism_patient_folds.json
+  selected_manifest: ${paths.synthetic_root}/asism/selected_manifest.jsonl
+  rejected_log: ${paths.synthetic_root}/asism/rejected_log.jsonl
+
+split_namespace: "dev-smoke-v1"
+
+auxiliary_classifier:
+  checkpoint_path: ${paths.project_root}/checkpoints/auxiliary_classifier/auxiliary_classifier.pt
+  resolution: 320
+  dropout_p: 0.2
+  pretrained_source: "imagenet"   # CheXpert-pretrained is rejected in code (§2)
+
+signals:
+  similarity:
+    encoder: "vit_small_patch14_dinov2"  # architecture; pinned weights are declared below
+    weights_repo_id: "timm/vit_small_patch14_dinov2.lvd142m"
+    weights_filename: "model.safetensors"
+    weights_revision: "936966a8732c5442c9def5d126f2cc4ad4243dba"
+    batch_size: 32
+    k_neighbors: 15               # k-NN aggregation, never single-nearest-neighbor
+    reference_sample_per_label: 400
+    min_exact_match_references: 25    # below this, fall back down the hierarchy (§4.1)
+    # Memorization flag: high single-NN similarity with low rank-k spread means the image is
+    # suspiciously close to ONE real training image rather than to the class in general.
+    near_duplicate_similarity: 0.95
+    near_duplicate_spread: 0.02
+
+  iqa:
+    # Generic NR-IQA is a BASELINE component; the domain checks below carry the signal (§4.2).
+    blank_std_threshold: 5.0
+    clipping_percentile: 0.995
+    low_contrast_std: 15.0
+    border_uniform_fraction: 0.30
+    laplacian_blur_threshold: 40.0
+
+  uncertainty:
+    mc_dropout_passes: 20
+    # Band edges on predictive std over the 12 primary labels (§4.3). Moderate uncertainty is NOT
+    # penalized: it may be the informative band (TSynD's premise).
+    low_band_max: 0.05
+    moderate_band_max: 0.15
+
+  explainability:
+    method: "gradcam"
+    # Fixed central-thorax box is an explicit BASELINE (§4.4). Pathology-specific expected regions
+    # are relative (x0, y0, x1, y1) fractions of the image.
+    region_mode: "pathology_specific"
+    baseline_box: [0.20, 0.15, 0.80, 0.85]
+    pathology_regions:
+      Cardiomegaly: [0.30, 0.40, 0.75, 0.85]
+      Enlarged Cardiomediastinum: [0.30, 0.30, 0.75, 0.80]
+      Pleural Effusion: [0.10, 0.60, 0.90, 0.95]
+      Pneumothorax: [0.05, 0.15, 0.95, 0.70]
+      Edema: [0.15, 0.25, 0.85, 0.80]
+      Consolidation: [0.10, 0.25, 0.90, 0.85]
+      Pneumonia: [0.10, 0.25, 0.90, 0.85]
+      Atelectasis: [0.10, 0.30, 0.90, 0.90]
+      Lung Opacity: [0.10, 0.20, 0.90, 0.85]
+      Lung Lesion: [0.10, 0.15, 0.90, 0.85]
+      Pleural Other: [0.05, 0.50, 0.95, 0.95]
+      Fracture: [0.05, 0.10, 0.95, 0.60]
+
+  agreement:
+    # agreement = mean P(intended positives) - penalty * mean P(confident unintended positives)
+    # For a No Finding recipe (all-zero intended vector) this reduces to: all 12 probabilities low.
+    unintended_confidence_threshold: 0.5
+    penalty_weight: 0.5
+    # Support Devices stays OUT of the primary disease-agreement score (§3.4, §4.5).
+    secondary_agreement:
+      enabled: false
+      labels: ["Support Devices"]
+
+gonogo:
+  # A signal must clear every applicable check to enter the frozen selector (§4.6).
+  max_missing_fraction: 0.05
+  min_unique_values: 20            # a near-constant score carries no information
+  directionality_probe_size: 200
+  redundancy_abs_correlation_max: 0.95   # above this, a signal is near-duplicate of another
+  reproducibility_tolerance: 1.0e-6
+
+tuning:
+  # Two-stage bounded search (§4.7). Proxy trains on classifier_train + candidate synthetic subset,
+  # evaluates on asism_tuning_heldout ONLY. classifier_val is NOT used to rank candidates.
+  coarse:
+    trials: 12
+    folds: 1
+    seeds: 1
+    proxy_max_steps: 300
+  shortlist:
+    size: 4
+    folds: 3
+    seeds: 2
+    proxy_max_steps: 800
+  proxy:
+    batch_size: 32
+    learning_rate: 1.0e-4
+    resolution: 320
+    dropout_p: 0.2
+    pretrained_source: "imagenet"
+  # Compute-budget gate: if the pre-execution estimate exceeds this, the search space must be
+  # reduced BEFORE any results are seen — never adjusted afterward.
+  compute_budget:
+    max_gpu_hours: 8.0
+    hours_per_proxy_run_estimate: 0.15
+  # Ties within this band resolve to the SIMPLER configuration (fewer signals, less extreme weights).
+  tie_noise_band: 0.002
+  search_seed: 42
+
+selection:
+  # Ordered policy (§4.8): quality floor FIRST, then class quota. Rarity never bypasses the floor.
+  quality_floor_percentile: 25      # reject the bottom N% by composite score, absolutely
+  target_synthetic_to_real_ratio: 1.0
+  min_accepted_per_label: 50
+  max_accepted_per_label: 2000
+  uncertainty_band_preference: "moderate"   # "any" | "low" | "moderate"

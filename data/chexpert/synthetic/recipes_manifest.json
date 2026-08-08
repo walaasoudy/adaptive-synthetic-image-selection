@@ -1,0 +1,91 @@
+{
+  "config_hash": "9e92af0a",
+  "decisions_path": "data\\chexpert\\synthetic\\recipe_decisions.jsonl",
+  "git_commit_hash": "eac004b",
+  "recipe_config": {
+    "age_buckets": [
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80
+    ],
+    "balance_demographics": true,
+    "base_quota": 400,
+    "max_per_label": 1500,
+    "max_positive_labels": 3,
+    "medical_rule_allow": [],
+    "medical_rule_block": [
+      [
+        "Pneumothorax",
+        "Edema",
+        "Consolidation",
+        "Pneumonia"
+      ]
+    ],
+    "min_per_label": 100,
+    "min_support_patients": 25,
+    "multi_label_proportion": 0.45,
+    "no_finding_proportion": 0.2,
+    "rarity_exponent": 0.5,
+    "sexes": [
+      "Male",
+      "Female"
+    ],
+    "single_label_proportion": 0.55,
+    "support_devices_proportion": 0.35
+  },
+  "recipes_path": "data\\chexpert\\synthetic\\label_recipes.csv",
+  "split_provenance": {
+    "frozen": false,
+    "split_manifest_hash": "572e9c74e7fd9f66",
+    "split_manifest_version": 2,
+    "split_namespace": "dev",
+    "split_seed": 42
+  },
+  "stage": "stage2_recipes",
+  "stats": {
+    "num_accepted_combinations": 40,
+    "num_candidate_combinations": 40,
+    "num_disease_recipes": 5439,
+    "num_no_finding_recipes": 1342,
+    "num_recipes": 6781,
+    "num_rejected_combinations": 0,
+    "per_label_emitted": {
+      "Atelectasis": 542,
+      "Cardiomegaly": 461,
+      "Consolidation": 523,
+      "Edema": 428,
+      "Enlarged Cardiomediastinum": 585,
+      "Fracture": 684,
+      "Lung Lesion": 654,
+      "Lung Opacity": 1754,
+      "Pleural Effusion": 972,
+      "Pleural Other": 727,
+      "Pneumonia": 682,
+      "Pneumothorax": 482
+    },
+    "per_label_quota": {
+      "Atelectasis": 247,
+      "Cardiomegaly": 350,
+      "Consolidation": 470,
+      "Edema": 287,
+      "Enlarged Cardiomediastinum": 517,
+      "Fracture": 663,
+      "Lung Lesion": 654,
+      "Lung Opacity": 190,
+      "Pleural Effusion": 199,
+      "Pleural Other": 727,
+      "Pneumonia": 663,
+      "Pneumothorax": 400
+    },
+    "quota_satisfied": true,
+    "single_vs_multi": {
+      "multi": 2460,
+      "no_finding": 1342,
+      "single": 2979
+    }
+  }
+}

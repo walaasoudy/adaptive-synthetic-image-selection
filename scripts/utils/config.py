@@ -8,11 +8,32 @@ directly, so path resolution (PROJECT_ROOT env var, see docs/stage1_plan.md §4)
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 from omegaconf import OmegaConf, DictConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIGS_DIR = REPO_ROOT / "configs"
+
+
+def _smoke_overlay(section: str) -> DictConfig | None:
+    path = os.environ.get("THESIS_CONFIG_OVERLAY")
+    if not path:
+        return None
+    overlay_path = Path(path)
+    if not overlay_path.is_file():
+        raise SystemExit(f"THESIS_CONFIG_OVERLAY does not exist: {overlay_path}")
+    overlay = OmegaConf.load(overlay_path)
+    return overlay.get(section)
+
+
+def load_named_config(filename: str, section: str) -> DictConfig:
+    config = OmegaConf.load(CONFIGS_DIR / filename)
+    overlay = _smoke_overlay(section)
+    if overlay is not None:
+        config = OmegaConf.merge(config, overlay)
+    OmegaConf.resolve(config)
+    return config
 
 
 def load_stage1_config(overrides: list[str] | None = None) -> DictConfig:
@@ -22,6 +43,9 @@ def load_stage1_config(overrides: list[str] | None = None) -> DictConfig:
     CLI-driven experiment overrides without editing the checked-in YAML.
     """
     config = OmegaConf.load(CONFIGS_DIR / "stage1_lora_sdxl.yaml")
+    overlay = _smoke_overlay("stage1")
+    if overlay is not None:
+        config = OmegaConf.merge(config, overlay)
     if overrides:
         config = OmegaConf.merge(config, OmegaConf.from_dotlist(overrides))
     OmegaConf.resolve(config)
@@ -30,6 +54,9 @@ def load_stage1_config(overrides: list[str] | None = None) -> DictConfig:
 
 def load_dataset_config() -> DictConfig:
     config = OmegaConf.load(CONFIGS_DIR / "dataset_config.yaml")
+    overlay = _smoke_overlay("dataset")
+    if overlay is not None:
+        config = OmegaConf.merge(config, overlay)
     OmegaConf.resolve(config)
     return config
 

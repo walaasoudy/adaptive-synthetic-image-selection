@@ -1,0 +1,119 @@
+# Explicit fixture-only overrides. Activated only through THESIS_CONFIG_OVERLAY.
+smoke_only: true
+namespace: dev-smoke-v1
+
+dataset:
+  source:
+    expected_train_rows: 60
+    expected_valid_rows: 4
+
+splits:
+  namespaces:
+    dev:
+      require_full_cohort: false
+
+stage1:
+  split:
+    namespace: dev-smoke-v1
+  data:
+    resolution: 64
+    min_source_resolution: 32
+  lora:
+    rank: 2
+    alpha: 2
+  optimizer:
+    name: adamw
+    lr_warmup_steps: 0
+  training:
+    precision: fp32
+    train_batch_size: 1
+    gradient_accumulation_steps: 1
+    gradient_checkpointing: false
+    cache_latents_and_embeddings: false
+    max_train_steps: 2
+    min_train_steps: 0
+    ema:
+      enabled: false
+  checkpointing:
+    save_every_n_steps: 1
+    keep_last_n_full_checkpoints: 2
+  validation:
+    val_every_n_steps: 1
+
+stage2:
+  split_namespace: dev-smoke-v1
+  checkpoint:
+    lora_weights_dir: ${oc.env:SMOKE_LORA_DIR,null}
+  generation:
+    resolution: 64
+    num_inference_steps: 4
+    guidance_scale: 3.0
+    batch_size: 1
+    seed: 20260807
+  recipes:
+    min_support_patients: 1
+    base_quota: 1
+    min_per_label: 1
+    max_per_label: 1
+    age_buckets: [40, 60]
+  pilot:
+    num_images: 4
+    checks:
+      min_valid_image_fraction: 1.0
+      max_near_uniform_fraction: 1.0
+
+stage3:
+  split_namespace: dev-smoke-v1
+  auxiliary_classifier:
+    resolution: 64
+    dropout_p: 0.2
+    pretrained_source: random
+  signals:
+    similarity:
+      batch_size: 2
+      k_neighbors: 2
+      reference_sample_per_label: 2
+      min_exact_match_references: 1
+    uncertainty:
+      mc_dropout_passes: 2
+  gonogo:
+    min_unique_values: 2
+    directionality_probe_size: 4
+  tuning:
+    coarse:
+      trials: 10
+      folds: 1
+      seeds: 1
+      proxy_max_steps: 1
+    shortlist:
+      size: 1
+      folds: 2
+      seeds: 1
+      proxy_max_steps: 1
+    proxy:
+      batch_size: 2
+      resolution: 64
+      pretrained_source: random
+    compute_budget:
+      max_gpu_hours: 1.0
+      hours_per_proxy_run_estimate: 0.01
+  selection:
+    quality_floor_percentile: 0
+    target_synthetic_to_real_ratio: 0.25
+    min_accepted_per_label: 0
+    max_accepted_per_label: 4
+
+stage4:
+  split_namespace: dev-smoke-v1
+  conditions: [A, B, C]
+  model:
+    pretrained_source: random
+    resolution: 64
+  training:
+    max_steps: 2
+    batch_size: 2
+    eval_every_n_steps: 1
+  seeds: [42]
+  condition_d:
+    n_draws: 0
+    draw_seeds: []

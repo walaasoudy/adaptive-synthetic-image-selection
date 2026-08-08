@@ -1,0 +1,75 @@
+# Stage 2 — synthetic generation (docs/stages2_to_5_plan.md §3).
+#
+# Conditioning labels are `intended_label_vector` — what the generator was ASKED for, never
+# "ground truth". Stage 3 §4.5 measures whether the pixels agree; nothing here establishes it.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  data_root: ${paths.project_root}/data/chexpert
+  synthetic_root: ${paths.data_root}/synthetic
+  images_dir: ${paths.synthetic_root}/images
+  recipes_path: ${paths.synthetic_root}/label_recipes.csv
+  recipe_decisions_path: ${paths.synthetic_root}/recipe_decisions.jsonl
+  manifest_path: ${paths.synthetic_root}/generation_manifest.jsonl
+  pilot_dir: ${paths.synthetic_root}/pilot
+  pilot_approval_manifest: ${paths.synthetic_root}/pilot/pilot_approval_manifest.json
+
+split_namespace: "dev-smoke-v1"  # immutable run ID; production IDs use production-<version>
+
+checkpoint:
+  # Explicit LoRA checkpoint — NOT "latest". Generation must be reproducible and decoupled from
+  # any training still in progress (docs/stage1_plan.md §11 handoff contract).
+  lora_weights_dir: null      # e.g. checkpoints/stage1_lora_sdxl/<run_id>/lora_weights/step_20000
+  base_model_id: "stabilityai/stable-diffusion-xl-base-1.0"
+  revision: "462165984030d82259a11f4367a4eed129e94a7b"
+
+generation:
+  resolution: 768             # must match Stage 1 data.resolution
+  num_inference_steps: 40
+  guidance_scale: 7.0
+  scheduler: "DPMSolverMultistep"
+  batch_size: 4
+  seed: 20260807              # base seed; per-image seed is derived deterministically from image_id
+  negative_prompt: ""
+
+recipes:
+  # Empirical co-occurrence mining from gen_train (§3.1)
+  min_support_patients: 25          # a label combination must occur in >= this many real patients
+  # Target recipe mix (§3)
+  single_label_proportion: 0.55     # fraction of disease recipes carrying exactly one positive label
+  multi_label_proportion: 0.45
+  no_finding_proportion: 0.20       # fraction of ALL recipes that are the all-zero (No Finding) vector
+  max_positive_labels: 3            # cap on simultaneous positive disease labels per recipe
+
+  # Per-label generation quota, oversampling rare classes relative to real prevalence (§3.7).
+  # target_count = base_quota * (median_prevalence / label_prevalence) ** rarity_exponent,
+  # clipped to [min_per_label, max_per_label]. rarity_exponent=0 disables oversampling.
+  base_quota: 400
+  rarity_exponent: 0.5
+  min_per_label: 100
+  max_per_label: 1500
+
+  # Demographic coverage: recipes are sampled across these buckets rather than left incidental.
+  age_buckets: [20, 30, 40, 50, 60, 70, 80]
+  sexes: ["Male", "Female"]
+  balance_demographics: true
+
+  # Support Devices is carried as a context attribute only. It never affects the primary
+  # disease-agreement score (§4.5) unless secondary_agreement is explicitly enabled in Stage 3.
+  support_devices_proportion: 0.35
+
+  # Medical-rule overrides (§3.2). Both directions, both auditable.
+  # allow: clinically plausible combinations permitted even below min_support_patients.
+  # block: combinations judged likely CheXpert NLP-extraction noise, rejected even if observed.
+  medical_rule_allow: []
+  medical_rule_block: []
+
+pilot:
+  num_images: 48              # small spanning batch for manual visual review before full generation
+  # Automatic artifact checks the pilot must pass before it can be approved.
+  checks:
+    min_valid_image_fraction: 0.95
+    require_correct_resolution: true
+    require_rgb: true
+    max_near_uniform_fraction: 0.02   # near-blank outputs indicate a broken generation config
+    blank_std_threshold: 5.0

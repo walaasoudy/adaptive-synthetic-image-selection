@@ -60,6 +60,36 @@ def get_library_versions() -> dict[str, str]:
     return versions
 
 
+def code_identity(repo_dir: str | Path = ".") -> dict[str, Any]:
+    """Hash the executable/config source, including uncommitted and untracked files.
+
+    A Git SHA alone is insufficient in a dirty research worktree. Data and generated artifacts are
+    intentionally excluded; their identities are recorded by their own manifests.
+    """
+    root = Path(repo_dir).resolve()
+    included_roots = ("scripts", "configs", "environment")
+    files = []
+    for relative_root in included_roots:
+        directory = root / relative_root
+        if not directory.exists():
+            continue
+        for path in sorted(p for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
+            files.append({"path": path.relative_to(root).as_posix(), "sha256": sha256_file(path)})
+    digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode("utf-8")).hexdigest()
+    return {"git_commit": get_git_commit_hash(root, short=False), "source_tree_sha256": digest, "files": files}
+
+
+def sha256_directory(path: str | Path) -> str:
+    root = Path(path)
+    if not root.is_dir():
+        raise FileNotFoundError(root)
+    entries = [
+        {"path": file.relative_to(root).as_posix(), "sha256": sha256_file(file)}
+        for file in sorted(p for p in root.rglob("*") if p.is_file())
+    ]
+    return hashlib.sha256(json.dumps(entries, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def sha256_file(path: str | Path) -> str:
     """Stream-hash a file's contents (used for provenance of split/checkpoint/manifest inputs)."""
     digest = hashlib.sha256()
@@ -81,6 +111,19 @@ def write_json(path: str | Path, data: dict[str, Any]) -> None:
         os.replace(temporary_name, path)
     finally:
         Path(temporary_name).unlink(missing_ok=True)
+
+
+def write_frozen_json(path: str | Path, data: dict[str, Any]) -> None:
+    """Create a freeze artifact exactly once; identical or changed overwrites are refused."""
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(
+            f"Frozen artifact already exists and is immutable: {path}. "
+            "Use a new explicit protocol/run version and record its parent."
+        )
+    payload = dict(data)
+    payload["frozen"] = True
+    write_json(path, payload)
 
 
 def read_json(path: str | Path) -> dict[str, Any]:

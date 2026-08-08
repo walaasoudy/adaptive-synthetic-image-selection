@@ -41,7 +41,7 @@ dev_subset:
 
 model:
   base_model_id: "stabilityai/stable-diffusion-xl-base-1.0"
-  revision: null  # pin to a specific commit hash after first successful download; null = latest at first pull
+  revision: "462165984030d82259a11f4367a4eed129e94a7b"
   vae_upcast_fp32: true  # avoids the known SDXL-VAE fp16 NaN/black-image bug (plan §2)
   use_refiner: false
 
@@ -70,6 +70,10 @@ data:
   min_source_resolution: 200  # px, below this an image is flagged/dropped as low quality
 
 split:
+  # Explicit schema-v2 six-way split namespace. There is deliberately no fallback to the
+  # superseded root-level schema-v1 files.
+  namespace: dev-smoke-v1
+  manifest_version: 2
   input_csv: ${paths.raw_dir}/train.csv  # source CSV for patient splitting. Point this at
                                           # dev_subset.output_csv (below) to build gen_train/gen_val/
                                           # classifier_heldout from the dev subset instead of the full

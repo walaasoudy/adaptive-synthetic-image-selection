@@ -19,7 +19,8 @@ from tqdm.auto import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.utils.config import ensure_dirs, load_dataset_config, load_stage1_config  # noqa: E402
 from scripts.utils.identifiers import sanitize_image_id  # noqa: E402
-from scripts.utils.manifest import read_json, sha256_file, write_json  # noqa: E402
+from scripts.utils.manifest import hash_dict, read_json, sha256_file, write_json  # noqa: E402
+from scripts.utils.splits import SPLIT_NAMES, read_split_manifest, resolve_splits_dir  # noqa: E402
 
 BLANK_STD_THRESHOLD = 5.0
 JPEG_QUALITY = 95
@@ -77,20 +78,24 @@ def atomic_save_jpeg(image: Image.Image, destination: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def expected_manifest(stage1_cfg, split_paths: dict[str, Path]) -> dict:
+def expected_manifest(stage1_cfg, split_paths: dict[str, Path], namespace: str | None = None, split_manifest: dict | None = None) -> dict:
     data = stage1_cfg.data
+    namespace = namespace or str(stage1_cfg.split.namespace)
+    split_manifest = split_manifest or read_split_manifest(namespace)
+    settings = {
+        "resolution": int(data.resolution), "aspect_mode": str(data.aspect_mode),
+        "view_filter": str(data.view_filter), "min_source_resolution": int(data.min_source_resolution),
+        "horizontal_flip": bool(data.horizontal_flip), "blank_std_threshold": BLANK_STD_THRESHOLD,
+        "jpeg_quality": JPEG_QUALITY,
+    }
     return {
         "manifest_version": MANIFEST_VERSION,
         "preprocessing_algorithm_version": 2,
-        "output_settings": {
-            "resolution": int(data.resolution),
-            "aspect_mode": str(data.aspect_mode),
-            "view_filter": str(data.view_filter),
-            "min_source_resolution": int(data.min_source_resolution),
-            "horizontal_flip": bool(data.horizontal_flip),
-            "blank_std_threshold": BLANK_STD_THRESHOLD,
-            "jpeg_quality": JPEG_QUALITY,
-        },
+        "output_schema_version": 2,
+        "split_namespace": namespace,
+        "split_manifest_hash": split_manifest.get("manifest_hash"),
+        "preprocessing_config_hash": hash_dict(settings, length=64),
+        "output_settings": settings,
         "source_splits": {
             name: {"path": path.name, "sha256": sha256_file(path), "size_bytes": path.stat().st_size}
             for name, path in sorted(split_paths.items())
@@ -185,23 +190,33 @@ def process_split(split_name, df, raw_dir, images_dir, dataset_cfg, data_cfg) ->
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--splits", nargs="+", default=["gen_train", "gen_val"])
+    parser.add_argument("--namespace", default=None, help="Explicit v2 split namespace/run (dev or production run ID)")
+    parser.add_argument("--splits", nargs="+", choices=SPLIT_NAMES, default=SPLIT_NAMES)
     parser.add_argument("--adopt-legacy-manifest", action="store_true", help="Explicitly accept an old manifest lacking split hashes after checking its recorded settings")
     args = parser.parse_args()
     cfg, dataset_cfg = load_stage1_config(), load_dataset_config()
     ensure_dirs(cfg)
-    split_paths = {name: Path(cfg.paths.splits_dir) / f"{name}.csv" for name in args.splits}
-    provenance_paths = {name: Path(cfg.paths.splits_dir) / f"{name}.csv" for name in ("gen_train", "gen_val")}
-    missing = [str(path) for path in {**provenance_paths, **split_paths}.values() if not path.is_file()]
+    namespace = args.namespace or str(cfg.split.namespace)
+    split_manifest = read_split_manifest(namespace)
+    split_dir = resolve_splits_dir(namespace)
+    split_paths = {name: split_dir / f"{name}.csv" for name in args.splits}
+    missing = [str(path) for path in split_paths.values() if not path.is_file()]
     if missing:
         raise SystemExit("Missing split files (run 02_build_patient_splits.py first): " + ", ".join(missing))
-    manifest = expected_manifest(cfg, provenance_paths)
-    manifest_path = Path(cfg.paths.images_dir) / "preprocessing_config_used.json"
-    check_manifest(manifest_path, manifest, args.adopt_legacy_manifest)
-    # Record provenance before work starts; atomic JSON replacement prevents a torn manifest.
-    write_json(manifest_path, manifest)
+    images_dir = Path(cfg.paths.images_dir) / namespace
+    images_dir.mkdir(parents=True, exist_ok=True)
     for name, path in split_paths.items():
-        process_split(name, pd.read_csv(path), Path(cfg.paths.raw_dir), Path(cfg.paths.images_dir), dataset_cfg, cfg.data)
+        manifest = expected_manifest(cfg, {name: path}, namespace, split_manifest)
+        manifest_path = images_dir / f"{name}_preprocessing_manifest.json"
+        split_output_dir = images_dir / name
+        if not manifest_path.is_file() and split_output_dir.is_dir() and any(split_output_dir.iterdir()):
+            raise SystemExit(
+                f"Unpinned preprocessing outputs exist at {split_output_dir} without {manifest_path}; "
+                "refusing stale cross-assignment reuse. Preserve them and choose a new versioned namespace."
+            )
+        check_manifest(manifest_path, manifest, args.adopt_legacy_manifest)
+        write_json(manifest_path, manifest)
+        process_split(name, pd.read_csv(path), Path(cfg.paths.raw_dir), images_dir, dataset_cfg, cfg.data)
     return 0
 
 

@@ -1,0 +1,54 @@
+# Six-way patient-level split policy (docs/stages2_to_5_plan.md §1) — FROZEN v1.
+#
+# Supersedes the schema-v1 three-way split in configs/stage1_lora_sdxl.yaml `split:` (which built
+# gen_train/gen_val/classifier_heldout and derived asism_tuning_heldout/final_eval_heldout as
+# children of classifier_heldout). That architecture left no population for a classifier
+# development split. See docs/stages2_to_5_plan.md §1.1 for why deriving one from gen_train was
+# rejected.
+#
+# The v1 artifacts are retained and marked superseded; they are never read by Stage 2-5 code.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  data_root: ${paths.project_root}/data/chexpert
+  raw_dir: ${paths.data_root}/raw
+  processed_dir: ${paths.data_root}/processed
+  # Namespaced so a dev-subset split can never overwrite a production split (plan §1.4).
+  splits_root: ${paths.processed_dir}/splits
+
+manifest_version: 2
+
+# Six DIRECT top-level partitions from one deterministic patient list and one seed.
+# No split is derived from another. Must sum to exactly 1.0 (asserted at build time).
+fractions:
+  gen_train: 0.60             # Stage 1 LoRA training; ASISM real-reference pool; auxiliary classifier
+  gen_val: 0.10               # Stage 1 monitoring; auxiliary classifier validation
+  classifier_train: 0.15      # A-E real training component; ASISM proxy real component
+  classifier_val: 0.05        # A-E model selection ONLY (early stop, checkpoint, threshold, hparams)
+  asism_tuning_heldout: 0.05  # ASISM Go/No-Go evidence + proxy-search evaluation
+  final_eval_heldout: 0.05    # Stage 5 only
+
+split_seed: 42
+split_unit: "patient_id"      # never image level — CheXpert patients have multiple studies
+
+# Minimum-support rule (plan §1.3) — FROZEN. Patient counts, not image counts, decide eligibility.
+# Applied to every label in the primary endpoint set, in every split where that label drives a
+# decision or a metric.
+support_rule:
+  min_positive_patients: 50
+  min_negative_patients: 50
+  decision_bearing_splits:
+    - classifier_train
+    - classifier_val
+    - asism_tuning_heldout
+    - final_eval_heldout
+
+# Production namespace requires the source CSV to match the full-cohort integrity contract in
+# configs/dataset_config.yaml (source.expected_train_rows) within this tolerance. The dev namespace
+# skips that requirement and marks rare-label support insufficiency in its manifest instead.
+namespaces:
+  production:
+    require_full_cohort: true
+    full_cohort_row_tolerance_pct: 1.0
+  dev:
+    require_full_cohort: false

@@ -1,0 +1,57 @@
+# Stage 4 — conditions A-E (docs/stages2_to_5_plan.md §7). FROZEN protocol.
+#
+# Architecture, initialization, label policy, uncertainty policy, optimizer family, batch size,
+# augmentation, checkpoint-selection rule, validation rule, and threshold-selection rule are
+# IDENTICAL across all conditions. Only the training data differs.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  checkpoints_dir: ${paths.project_root}/checkpoints/stage4_conditions
+  results_dir: ${paths.project_root}/outputs/stage4
+  protocol_manifest: ${paths.project_root}/outputs/stage4/frozen_experiment_protocol.json
+  label_policy_manifest: ${paths.project_root}/outputs/stage4/frozen_label_policy.json
+  threshold_policy_manifest: ${paths.project_root}/outputs/stage4/frozen_threshold_policy.json
+  seed_plan_manifest: ${paths.project_root}/outputs/stage4/frozen_seed_run_plan.json
+  d_matching_policy_manifest: ${paths.project_root}/outputs/stage4/frozen_d_matching_policy.json
+
+split_namespace: "dev-smoke-v1"
+conditions: [A, B, C, D, E]
+
+model:
+  architecture: "densenet121"
+  pretrained_source: "imagenet"    # CheXpert-pretrained is rejected in code (§2)
+  dropout_p: 0.2
+  resolution: 320
+
+# FROZEN fairness protocol (§7.1): equal OPTIMIZER STEPS across A-E and every D draw.
+# Not equal epochs — at fixed epochs a larger dataset silently receives more gradient updates,
+# conflating "more data" with "more training".
+training:
+  max_steps: 6000
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  eval_every_n_steps: 500
+  sampling_policy: "shuffled_concat"   # recorded per run; identical across conditions
+  augmentation: "none"                 # horizontal flip is forbidden: it inverts CXR anatomy
+
+# FROZEN seed policy (§7): A/B/C/E get 3 seeds each; EVERY D draw gets the same 3 seeds.
+# Total runs = 4*3 + 5*3 = 27.
+seeds: [42, 43, 44]
+
+condition_d:
+  n_draws: 5                    # FROZEN — exactly five independent matched-random draws
+  draw_seeds: [101, 102, 103, 104, 105]
+  # Each draw must match condition C on:
+  matching:
+    match_total_count: true
+    match_per_label_marginal: true
+    per_label_tolerance_fraction: 0.10   # frozen tolerance on per-label positive counts
+    match_single_multi_proportion: true
+    single_multi_tolerance_fraction: 0.10
+    attempt_joint_vector_matching: true  # only where support permits; never made infeasible
+
+# Classification-threshold selection policy (frozen before Stage 5).
+threshold_policy:
+  method: "max_youden_j"       # chosen on classifier_val ONLY, never on final_eval_heldout
+  selection_split: "classifier_val"

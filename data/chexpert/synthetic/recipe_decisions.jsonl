@@ -1,0 +1,40 @@
+{"combination": ["Atelectasis"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 287}
+{"combination": ["Cardiomegaly"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 135}
+{"combination": ["Consolidation"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 54}
+{"combination": ["Edema"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 196}
+{"combination": ["Enlarged Cardiomediastinum"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 51}
+{"combination": ["Fracture"], "origin": "single_label_guaranteed", "accepted": true, "reason": "accepted_single_label_below_support_but_required_for_coverage", "support_patients": 0}
+{"combination": ["Lung Lesion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 30}
+{"combination": ["Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 717}
+{"combination": ["Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 593}
+{"combination": ["Pleural Other"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 32}
+{"combination": ["Pneumonia"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 43}
+{"combination": ["Pneumothorax"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 72}
+{"combination": ["Atelectasis", "Cardiomegaly"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 46}
+{"combination": ["Atelectasis", "Edema"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 62}
+{"combination": ["Atelectasis", "Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 255}
+{"combination": ["Atelectasis", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 218}
+{"combination": ["Atelectasis", "Pneumothorax"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 29}
+{"combination": ["Cardiomegaly", "Edema"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 25}
+{"combination": ["Cardiomegaly", "Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 105}
+{"combination": ["Cardiomegaly", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 91}
+{"combination": ["Consolidation", "Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 46}
+{"combination": ["Consolidation", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 51}
+{"combination": ["Edema", "Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 172}
+{"combination": ["Edema", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 141}
+{"combination": ["Enlarged Cardiomediastinum", "Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 41}
+{"combination": ["Enlarged Cardiomediastinum", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 34}
+{"combination": ["Fracture", "Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 34}
+{"combination": ["Lung Opacity", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 501}
+{"combination": ["Lung Opacity", "Pneumonia"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 26}
+{"combination": ["Lung Opacity", "Pneumothorax"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 90}
+{"combination": ["Pleural Effusion", "Pneumothorax"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 55}
+{"combination": ["Atelectasis", "Cardiomegaly", "Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 32}
+{"combination": ["Atelectasis", "Edema", "Lung Opacity"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 60}
+{"combination": ["Atelectasis", "Edema", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 48}
+{"combination": ["Atelectasis", "Lung Opacity", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 177}
+{"combination": ["Cardiomegaly", "Lung Opacity", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 68}
+{"combination": ["Consolidation", "Lung Opacity", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 35}
+{"combination": ["Edema", "Lung Opacity", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 107}
+{"combination": ["Enlarged Cardiomediastinum", "Lung Opacity", "Pleural Effusion"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 28}
+{"combination": ["Lung Opacity", "Pleural Effusion", "Pneumothorax"], "origin": "empirical_cooccurrence", "accepted": true, "reason": "accepted_empirical_support", "support_patients": 42}

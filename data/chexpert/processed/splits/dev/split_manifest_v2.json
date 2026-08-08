@@ -1,0 +1,751 @@
+{
+  "fractions": {
+    "asism_tuning_heldout": 0.05,
+    "classifier_train": 0.15,
+    "classifier_val": 0.05,
+    "final_eval_heldout": 0.05,
+    "gen_train": 0.6,
+    "gen_val": 0.1
+  },
+  "frozen": false,
+  "full_cohort_check": null,
+  "git_commit_hash": "eac004b",
+  "images_per_split": {
+    "asism_tuning_heldout": 615,
+    "classifier_train": 1803,
+    "classifier_val": 610,
+    "final_eval_heldout": 629,
+    "gen_train": 7225,
+    "gen_val": 1186
+  },
+  "input_csv_path": "data\\chexpert\\raw\\train.csv",
+  "input_csv_rows": 12068,
+  "manifest_hash": "572e9c74e7fd9f66",
+  "manifest_version": 2,
+  "num_patients_total": 8000,
+  "patient_id_hash_per_split": {
+    "asism_tuning_heldout": "6897e2b2940a4ece",
+    "classifier_train": "c60e00643d6caea3",
+    "classifier_val": "f792fdbe22933b86",
+    "final_eval_heldout": "c51ccc8112a87e7d",
+    "gen_train": "0ed5d705abcac6b8",
+    "gen_val": "945804ea0d6e416e"
+  },
+  "patients_per_split": {
+    "asism_tuning_heldout": 400,
+    "classifier_train": 1200,
+    "classifier_val": 400,
+    "final_eval_heldout": 400,
+    "gen_train": 4800,
+    "gen_val": 800
+  },
+  "primary_endpoint_labels": [
+    "Enlarged Cardiomediastinum",
+    "Cardiomegaly",
+    "Lung Opacity",
+    "Lung Lesion",
+    "Edema",
+    "Consolidation",
+    "Pneumonia",
+    "Atelectasis",
+    "Pneumothorax",
+    "Pleural Effusion",
+    "Pleural Other",
+    "Fracture"
+  ],
+  "split_namespace": "dev",
+  "split_seed": 42,
+  "split_unit": "patient_id",
+  "supersedes": "split_manifest.json (schema v1, three-way + derived children)",
+  "support_adjustment_proposal": {
+    "note": "PROPOSAL ONLY \u2014 frozen fractions were not modified. Applying this requires an explicit decision to change the frozen split policy in configs/splits.yaml, and re-running with --freeze.",
+    "proposals": {
+      "asism_tuning_heldout": {
+        "additional_patients_needed": 776,
+        "current_fraction": 0.05,
+        "current_patients": 400,
+        "limiting_scale_factor": 2.941,
+        "proposed_fraction": 0.1471
+      },
+      "classifier_train": {
+        "additional_patients_needed": 618,
+        "current_fraction": 0.15,
+        "current_patients": 1200,
+        "limiting_scale_factor": 1.515,
+        "proposed_fraction": 0.2273
+      },
+      "classifier_val": {
+        "additional_patients_needed": 1822,
+        "current_fraction": 0.05,
+        "current_patients": 400,
+        "limiting_scale_factor": 5.556,
+        "proposed_fraction": 0.2778
+      },
+      "final_eval_heldout": {
+        "additional_patients_needed": 1418,
+        "current_fraction": 0.05,
+        "current_patients": 400,
+        "limiting_scale_factor": 4.545,
+        "proposed_fraction": 0.2273
+      }
+    },
+    "suggested_donor_split": "gen_train",
+    "suggested_gen_train_fraction": 0.0207,
+    "total_additional_patients_needed": 4634
+  },
+  "support_check": {
+    "passed": false,
+    "per_split": {
+      "asism_tuning_heldout": {
+        "failures": [
+          {
+            "label": "Enlarged Cardiomediastinum",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 332,
+            "positive_ok": false,
+            "positive_patients": 28
+          },
+          {
+            "label": "Lung Lesion",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 346,
+            "positive_ok": false,
+            "positive_patients": 23
+          },
+          {
+            "label": "Consolidation",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 316,
+            "positive_ok": false,
+            "positive_patients": 39
+          },
+          {
+            "label": "Pneumonia",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 343,
+            "positive_ok": false,
+            "positive_patients": 21
+          },
+          {
+            "label": "Pleural Other",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 350,
+            "positive_ok": false,
+            "positive_patients": 21
+          },
+          {
+            "label": "Fracture",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 348,
+            "positive_ok": false,
+            "positive_patients": 17
+          }
+        ],
+        "passed": false,
+        "per_label": [
+          {
+            "label": "Enlarged Cardiomediastinum",
+            "masked_only_patients": 40,
+            "negative_images": 483,
+            "negative_patients": 332,
+            "positive_images": 29,
+            "positive_patients": 28,
+            "total_patients": 400
+          },
+          {
+            "label": "Cardiomegaly",
+            "masked_only_patients": 43,
+            "negative_images": 453,
+            "negative_patients": 297,
+            "positive_images": 63,
+            "positive_patients": 60,
+            "total_patients": 400
+          },
+          {
+            "label": "Lung Opacity",
+            "masked_only_patients": 46,
+            "negative_images": 244,
+            "negative_patients": 137,
+            "positive_images": 266,
+            "positive_patients": 217,
+            "total_patients": 400
+          },
+          {
+            "label": "Lung Lesion",
+            "masked_only_patients": 31,
+            "negative_images": 517,
+            "negative_patients": 346,
+            "positive_images": 23,
+            "positive_patients": 23,
+            "total_patients": 400
+          },
+          {
+            "label": "Edema",
+            "masked_only_patients": 40,
+            "negative_images": 406,
+            "negative_patients": 262,
+            "positive_images": 108,
+            "positive_patients": 98,
+            "total_patients": 400
+          },
+          {
+            "label": "Consolidation",
+            "masked_only_patients": 45,
+            "negative_images": 477,
+            "negative_patients": 316,
+            "positive_images": 40,
+            "positive_patients": 39,
+            "total_patients": 400
+          },
+          {
+            "label": "Pneumonia",
+            "masked_only_patients": 36,
+            "negative_images": 508,
+            "negative_patients": 343,
+            "positive_images": 23,
+            "positive_patients": 21,
+            "total_patients": 400
+          },
+          {
+            "label": "Atelectasis",
+            "masked_only_patients": 36,
+            "negative_images": 385,
+            "negative_patients": 238,
+            "positive_images": 139,
+            "positive_patients": 126,
+            "total_patients": 400
+          },
+          {
+            "label": "Pneumothorax",
+            "masked_only_patients": 30,
+            "negative_images": 470,
+            "negative_patients": 320,
+            "positive_images": 51,
+            "positive_patients": 50,
+            "total_patients": 400
+          },
+          {
+            "label": "Pleural Effusion",
+            "masked_only_patients": 41,
+            "negative_images": 291,
+            "negative_patients": 166,
+            "positive_images": 233,
+            "positive_patients": 193,
+            "total_patients": 400
+          },
+          {
+            "label": "Pleural Other",
+            "masked_only_patients": 29,
+            "negative_images": 511,
+            "negative_patients": 350,
+            "positive_images": 21,
+            "positive_patients": 21,
+            "total_patients": 400
+          },
+          {
+            "label": "Fracture",
+            "masked_only_patients": 35,
+            "negative_images": 499,
+            "negative_patients": 348,
+            "positive_images": 17,
+            "positive_patients": 17,
+            "total_patients": 400
+          }
+        ]
+      },
+      "classifier_train": {
+        "failures": [
+          {
+            "label": "Pleural Other",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 1055,
+            "positive_ok": false,
+            "positive_patients": 33
+          }
+        ],
+        "passed": false,
+        "per_label": [
+          {
+            "label": "Enlarged Cardiomediastinum",
+            "masked_only_patients": 122,
+            "negative_images": 1445,
+            "negative_patients": 983,
+            "positive_images": 95,
+            "positive_patients": 95,
+            "total_patients": 1200
+          },
+          {
+            "label": "Cardiomegaly",
+            "masked_only_patients": 100,
+            "negative_images": 1335,
+            "negative_patients": 903,
+            "positive_images": 202,
+            "positive_patients": 197,
+            "total_patients": 1200
+          },
+          {
+            "label": "Lung Opacity",
+            "masked_only_patients": 117,
+            "negative_images": 700,
+            "negative_patients": 379,
+            "positive_images": 844,
+            "positive_patients": 704,
+            "total_patients": 1200
+          },
+          {
+            "label": "Lung Lesion",
+            "masked_only_patients": 106,
+            "negative_images": 1492,
+            "negative_patients": 1044,
+            "positive_images": 51,
+            "positive_patients": 50,
+            "total_patients": 1200
+          },
+          {
+            "label": "Edema",
+            "masked_only_patients": 108,
+            "negative_images": 1211,
+            "negative_patients": 779,
+            "positive_images": 340,
+            "positive_patients": 313,
+            "total_patients": 1200
+          },
+          {
+            "label": "Consolidation",
+            "masked_only_patients": 109,
+            "negative_images": 1456,
+            "negative_patients": 988,
+            "positive_images": 104,
+            "positive_patients": 103,
+            "total_patients": 1200
+          },
+          {
+            "label": "Pneumonia",
+            "masked_only_patients": 125,
+            "negative_images": 1483,
+            "negative_patients": 1023,
+            "positive_images": 52,
+            "positive_patients": 52,
+            "total_patients": 1200
+          },
+          {
+            "label": "Atelectasis",
+            "masked_only_patients": 128,
+            "negative_images": 1081,
+            "negative_patients": 685,
+            "positive_images": 424,
+            "positive_patients": 387,
+            "total_patients": 1200
+          },
+          {
+            "label": "Pneumothorax",
+            "masked_only_patients": 116,
+            "negative_images": 1393,
+            "negative_patients": 931,
+            "positive_images": 157,
+            "positive_patients": 153,
+            "total_patients": 1200
+          },
+          {
+            "label": "Pleural Effusion",
+            "masked_only_patients": 117,
+            "negative_images": 797,
+            "negative_patients": 461,
+            "positive_images": 734,
+            "positive_patients": 622,
+            "total_patients": 1200
+          },
+          {
+            "label": "Pleural Other",
+            "masked_only_patients": 112,
+            "negative_images": 1523,
+            "negative_patients": 1055,
+            "positive_images": 33,
+            "positive_patients": 33,
+            "total_patients": 1200
+          },
+          {
+            "label": "Fracture",
+            "masked_only_patients": 92,
+            "negative_images": 1501,
+            "negative_patients": 1058,
+            "positive_images": 50,
+            "positive_patients": 50,
+            "total_patients": 1200
+          }
+        ]
+      },
+      "classifier_val": {
+        "failures": [
+          {
+            "label": "Enlarged Cardiomediastinum",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 332,
+            "positive_ok": false,
+            "positive_patients": 20
+          },
+          {
+            "label": "Lung Lesion",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 343,
+            "positive_ok": false,
+            "positive_patients": 18
+          },
+          {
+            "label": "Consolidation",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 323,
+            "positive_ok": false,
+            "positive_patients": 40
+          },
+          {
+            "label": "Pneumonia",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 348,
+            "positive_ok": false,
+            "positive_patients": 11
+          },
+          {
+            "label": "Pleural Other",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 348,
+            "positive_ok": false,
+            "positive_patients": 9
+          },
+          {
+            "label": "Fracture",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 355,
+            "positive_ok": false,
+            "positive_patients": 13
+          }
+        ],
+        "passed": false,
+        "per_label": [
+          {
+            "label": "Enlarged Cardiomediastinum",
+            "masked_only_patients": 48,
+            "negative_images": 483,
+            "negative_patients": 332,
+            "positive_images": 20,
+            "positive_patients": 20,
+            "total_patients": 400
+          },
+          {
+            "label": "Cardiomegaly",
+            "masked_only_patients": 41,
+            "negative_images": 444,
+            "negative_patients": 290,
+            "positive_images": 70,
+            "positive_patients": 69,
+            "total_patients": 400
+          },
+          {
+            "label": "Lung Opacity",
+            "masked_only_patients": 40,
+            "negative_images": 254,
+            "negative_patients": 137,
+            "positive_images": 274,
+            "positive_patients": 223,
+            "total_patients": 400
+          },
+          {
+            "label": "Lung Lesion",
+            "masked_only_patients": 39,
+            "negative_images": 509,
+            "negative_patients": 343,
+            "positive_images": 18,
+            "positive_patients": 18,
+            "total_patients": 400
+          },
+          {
+            "label": "Edema",
+            "masked_only_patients": 41,
+            "negative_images": 395,
+            "negative_patients": 247,
+            "positive_images": 119,
+            "positive_patients": 112,
+            "total_patients": 400
+          },
+          {
+            "label": "Consolidation",
+            "masked_only_patients": 37,
+            "negative_images": 482,
+            "negative_patients": 323,
+            "positive_images": 40,
+            "positive_patients": 40,
+            "total_patients": 400
+          },
+          {
+            "label": "Pneumonia",
+            "masked_only_patients": 41,
+            "negative_images": 512,
+            "negative_patients": 348,
+            "positive_images": 11,
+            "positive_patients": 11,
+            "total_patients": 400
+          },
+          {
+            "label": "Atelectasis",
+            "masked_only_patients": 38,
+            "negative_images": 386,
+            "negative_patients": 239,
+            "positive_images": 139,
+            "positive_patients": 123,
+            "total_patients": 400
+          },
+          {
+            "label": "Pneumothorax",
+            "masked_only_patients": 33,
+            "negative_images": 461,
+            "negative_patients": 311,
+            "positive_images": 59,
+            "positive_patients": 56,
+            "total_patients": 400
+          },
+          {
+            "label": "Pleural Effusion",
+            "masked_only_patients": 47,
+            "negative_images": 265,
+            "negative_patients": 144,
+            "positive_images": 246,
+            "positive_patients": 209,
+            "total_patients": 400
+          },
+          {
+            "label": "Pleural Other",
+            "masked_only_patients": 43,
+            "negative_images": 507,
+            "negative_patients": 348,
+            "positive_images": 9,
+            "positive_patients": 9,
+            "total_patients": 400
+          },
+          {
+            "label": "Fracture",
+            "masked_only_patients": 32,
+            "negative_images": 508,
+            "negative_patients": 355,
+            "positive_images": 13,
+            "positive_patients": 13,
+            "total_patients": 400
+          }
+        ]
+      },
+      "final_eval_heldout": {
+        "failures": [
+          {
+            "label": "Enlarged Cardiomediastinum",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 324,
+            "positive_ok": false,
+            "positive_patients": 40
+          },
+          {
+            "label": "Lung Lesion",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 343,
+            "positive_ok": false,
+            "positive_patients": 25
+          },
+          {
+            "label": "Consolidation",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 329,
+            "positive_ok": false,
+            "positive_patients": 38
+          },
+          {
+            "label": "Pneumonia",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 331,
+            "positive_ok": false,
+            "positive_patients": 27
+          },
+          {
+            "label": "Pleural Other",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 354,
+            "positive_ok": false,
+            "positive_patients": 11
+          },
+          {
+            "label": "Fracture",
+            "min_negative_patients": 50,
+            "min_positive_patients": 50,
+            "negative_ok": true,
+            "negative_patients": 349,
+            "positive_ok": false,
+            "positive_patients": 21
+          }
+        ],
+        "passed": false,
+        "per_label": [
+          {
+            "label": "Enlarged Cardiomediastinum",
+            "masked_only_patients": 36,
+            "negative_images": 497,
+            "negative_patients": 324,
+            "positive_images": 41,
+            "positive_patients": 40,
+            "total_patients": 400
+          },
+          {
+            "label": "Cardiomegaly",
+            "masked_only_patients": 45,
+            "negative_images": 440,
+            "negative_patients": 289,
+            "positive_images": 76,
+            "positive_patients": 66,
+            "total_patients": 400
+          },
+          {
+            "label": "Lung Opacity",
+            "masked_only_patients": 30,
+            "negative_images": 254,
+            "negative_patients": 136,
+            "positive_images": 292,
+            "positive_patients": 234,
+            "total_patients": 400
+          },
+          {
+            "label": "Lung Lesion",
+            "masked_only_patients": 32,
+            "negative_images": 523,
+            "negative_patients": 343,
+            "positive_images": 26,
+            "positive_patients": 25,
+            "total_patients": 400
+          },
+          {
+            "label": "Edema",
+            "masked_only_patients": 37,
+            "negative_images": 418,
+            "negative_patients": 264,
+            "positive_images": 110,
+            "positive_patients": 99,
+            "total_patients": 400
+          },
+          {
+            "label": "Consolidation",
+            "masked_only_patients": 33,
+            "negative_images": 497,
+            "negative_patients": 329,
+            "positive_images": 40,
+            "positive_patients": 38,
+            "total_patients": 400
+          },
+          {
+            "label": "Pneumonia",
+            "masked_only_patients": 42,
+            "negative_images": 502,
+            "negative_patients": 331,
+            "positive_images": 27,
+            "positive_patients": 27,
+            "total_patients": 400
+          },
+          {
+            "label": "Atelectasis",
+            "masked_only_patients": 32,
+            "negative_images": 369,
+            "negative_patients": 231,
+            "positive_images": 155,
+            "positive_patients": 137,
+            "total_patients": 400
+          },
+          {
+            "label": "Pneumothorax",
+            "masked_only_patients": 35,
+            "negative_images": 488,
+            "negative_patients": 315,
+            "positive_images": 52,
+            "positive_patients": 50,
+            "total_patients": 400
+          },
+          {
+            "label": "Pleural Effusion",
+            "masked_only_patients": 31,
+            "negative_images": 288,
+            "negative_patients": 154,
+            "positive_images": 255,
+            "positive_patients": 215,
+            "total_patients": 400
+          },
+          {
+            "label": "Pleural Other",
+            "masked_only_patients": 35,
+            "negative_images": 527,
+            "negative_patients": 354,
+            "positive_images": 11,
+            "positive_patients": 11,
+            "total_patients": 400
+          },
+          {
+            "label": "Fracture",
+            "masked_only_patients": 30,
+            "negative_images": 519,
+            "negative_patients": 349,
+            "positive_images": 22,
+            "positive_patients": 21,
+            "total_patients": 400
+          }
+        ]
+      }
+    },
+    "rule": {
+      "labels": [
+        "Enlarged Cardiomediastinum",
+        "Cardiomegaly",
+        "Lung Opacity",
+        "Lung Lesion",
+        "Edema",
+        "Consolidation",
+        "Pneumonia",
+        "Atelectasis",
+        "Pneumothorax",
+        "Pleural Effusion",
+        "Pleural Other",
+        "Fracture"
+      ],
+      "min_negative_patients": 50,
+      "min_positive_patients": 50,
+      "unit": "patients (image counts are supplementary only)"
+    }
+  }
+}
