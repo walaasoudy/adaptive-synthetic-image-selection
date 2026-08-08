@@ -19,6 +19,7 @@ tensorboard==2.18.0
 wandb==0.19.6
 pyarrow==19.0.0
 huggingface_hub==0.28.1
+hf-transfer==0.1.9
 kagglehub==0.3.8
 tqdm==4.67.1
 python-dotenv==1.0.1

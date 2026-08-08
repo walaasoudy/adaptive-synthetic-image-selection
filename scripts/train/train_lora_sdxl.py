@@ -246,8 +246,15 @@ def build_or_load_cache(cfg, models, split_name: str, device: torch.device, max_
         print(f"[{split_name}] using existing latent cache: {latent_cache_path}")
 
     if not prompt_cache_path.exists():
-        text_encoder_one = models["text_encoder_one"].to(device).eval()
-        text_encoder_two = models["text_encoder_two"].to(device).eval()
+        text_dtype = {
+            "fp32": torch.float32,
+            "fp16": torch.float16,
+            "bf16": torch.bfloat16,
+        }[str(cfg.training.precision).lower()]
+        # Some SDXL checkpoints contain mixed stored dtypes (notably text_projection).  Cast the
+        # complete frozen encoders explicitly so their hidden states and projection weights agree.
+        text_encoder_one = models["text_encoder_one"].to(device=device, dtype=text_dtype).eval()
+        text_encoder_two = models["text_encoder_two"].to(device=device, dtype=text_dtype).eval()
         tokenizer_one, tokenizer_two = models["tokenizer_one"], models["tokenizer_two"]
 
         unique_captions = sorted({c for r in records for c in r["caption_variants"]})
