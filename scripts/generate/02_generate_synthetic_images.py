@@ -181,7 +181,10 @@ def build_pipeline(config, stage1_cfg):
             "  pip install -r environment/requirements.txt"
         ) from exc
 
-    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    # Keep every SDXL component and the injected LoRA adapter in the same dtype.
+    # The pinned SDXL checkpoint/LoRA path is float16-compatible; forcing bfloat16 here can
+    # leave projection weights in fp16 and fail at inference with Half != BFloat16.
+    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     pipeline = StableDiffusionXLPipeline.from_pretrained(
         config.checkpoint.base_model_id,
         revision=config.checkpoint.revision,
@@ -191,7 +194,7 @@ def build_pipeline(config, stage1_cfg):
     pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
     pipeline.load_lora_weights(str(lora_path))
     if torch.cuda.is_available():
-        pipeline = pipeline.to("cuda")
+        pipeline = pipeline.to(device="cuda", dtype=dtype)
     pipeline.set_progress_bar_config(disable=True)
     return pipeline
 
