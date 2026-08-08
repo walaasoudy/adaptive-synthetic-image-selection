@@ -175,6 +175,30 @@ def test_score_sidecar_gonogo_and_tuning_roundtrip():
             raise AssertionError("tuning accepted stale score provenance")
 
 
+def test_gonogo_reproducibility_accepts_score_sidecar_contract():
+    gonogo = load_script("scripts/asism/02_gonogo.py", "gonogo_reproducibility_contract")
+    with fixture_workspace("gonogo-reproducibility") as workspace:
+        sidecar = workspace / "iqa_scores.provenance.json"
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "signal": "iqa",
+                    "n_rows": 4,
+                    "asism_config_sha256": "a" * 64,
+                    "git_commit_hash": "deadbeef",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = gonogo.check_reproducibility(workspace, "iqa", object())
+
+        assert result["passed"] is True
+        assert result["missing_provenance_fields"] == []
+        assert result["asism_config_sha256"] == "a" * 64
+
+
 def test_stage5_registration_resume_and_second_run_refusal():
     module = load_script("scripts/eval/stage5_evaluate.py", "stage5_registration_roundtrip")
     with fixture_workspace("stage5-registration") as workspace:
