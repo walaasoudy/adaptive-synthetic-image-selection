@@ -45,11 +45,13 @@ from fixture_workspace import fixture_workspace
 
 def test_primary_endpoint_excludes_no_finding_and_support_devices():
     assert len(CLASSIFIER_TARGET_LABELS) == 14
-    assert len(PRIMARY_ENDPOINT_LABELS) == 12
+    assert len(PRIMARY_ENDPOINT_LABELS) == 11
     assert "No Finding" not in PRIMARY_ENDPOINT_LABELS
     assert "Support Devices" not in PRIMARY_ENDPOINT_LABELS
+    assert "Pleural Other" not in PRIMARY_ENDPOINT_LABELS
     assert "No Finding" in CLASSIFIER_TARGET_LABELS
     assert "Support Devices" in CLASSIFIER_TARGET_LABELS
+    assert "Pleural Other" in CLASSIFIER_TARGET_LABELS
 
 
 def test_uncertain_and_blank_are_masked_never_converted():
@@ -252,8 +254,8 @@ def test_stage5_analysis_layer_on_fixtures():
 
     suite = full_metric_suite(strong, targets, masks)
     assert suite["macro_auroc_primary"] > 0.7
-    assert len(suite["primary_labels"]) == 12
-    assert set(suite["secondary_labels"]) == {"No Finding", "Support Devices"}
+    assert len(suite["primary_labels"]) == 11
+    assert set(suite["secondary_labels"]) == {"No Finding", "Support Devices", "Pleural Other"}
     for label, entry in suite["per_label"].items():
         assert "effective_n" in entry, f"{label} must report effective N"
 

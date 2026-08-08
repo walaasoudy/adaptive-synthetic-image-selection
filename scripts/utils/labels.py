@@ -5,12 +5,19 @@ Two distinct label sets, deliberately not interchangeable:
 
   CLASSIFIER_TARGET_LABELS (14)  - the classifier's output space. Everything is predicted and
                                    reported.
-  PRIMARY_ENDPOINT_LABELS  (12)  - the disease labels the PRIMARY endpoint (macro-AUROC) is
+  PRIMARY_ENDPOINT_LABELS  (11)  - the disease labels the PRIMARY endpoint (macro-AUROC) is
                                    computed over. Excludes "No Finding" (an absence-of-disease
                                    meta-label, not a pathology) and "Support Devices" (a device
                                    label, and the highest-prevalence/easiest column in CheXpert —
                                    including it would flatter the macro-average without measuring
-                                   diagnostic performance). Both remain secondary outcomes.
+                                   diagnostic performance). Also excludes "Pleural Other"
+                                   (docs/stages2_to_5_plan.md §5.2 revision note): on the full
+                                   production cohort only ~100 patients dataset-wide carry a
+                                   confident negative label for it, so no split-fraction choice can
+                                   give every decision-bearing split the frozen ≥50-negative-patient
+                                   support rule (§1.3) — unlike "Lung Lesion"/"Atelectasis", which
+                                   were fixed by revising configs/splits.yaml fractions instead. All
+                                   three remain secondary outcomes.
 
 Uncertainty policy (plan §6): raw labels are preserved; -1 and blank are MASKED out of loss and
 metrics, never silently mapped to 0 or 1. Three quantities are always kept separate:
@@ -34,15 +41,21 @@ from scripts.utils.caption_builder import (
 # The classifier's full output space: all 14 CheXpert observations, canonical order.
 CLASSIFIER_TARGET_LABELS: list[str] = list(PATHOLOGY_COLUMNS)
 
-# The 12 disease labels the primary endpoint is computed over (plan §5.2).
+# Excluded from the primary endpoint due to insufficient patient-level negative support under the
+# frozen §1.3 support rule (measured on the full production cohort: see module docstring). Reported
+# as a secondary outcome with its support counts (plan §5.3), same treatment as No Finding /
+# Support Devices.
+INSUFFICIENT_SUPPORT_LABELS: list[str] = ["Pleural Other"]
+
+# The 11 disease labels the primary endpoint is computed over (plan §5.2).
 PRIMARY_ENDPOINT_LABELS: list[str] = [
     column
     for column in CLASSIFIER_TARGET_LABELS
-    if column not in (NO_FINDING_COLUMN, DEVICE_COLUMN)
+    if column not in (NO_FINDING_COLUMN, DEVICE_COLUMN, *INSUFFICIENT_SUPPORT_LABELS)
 ]
 
 # Reported, but never part of the primary macro-average.
-SECONDARY_LABELS: list[str] = [NO_FINDING_COLUMN, DEVICE_COLUMN]
+SECONDARY_LABELS: list[str] = [NO_FINDING_COLUMN, DEVICE_COLUMN, *INSUFFICIENT_SUPPORT_LABELS]
 
 # Sentinel used in integer label arrays for "uncertain or not mentioned" (i.e. masked).
 MASKED = -1
@@ -215,7 +228,7 @@ def check_support_rule(
 def intended_vector_to_labels(intended: dict[str, int]) -> list[str]:
     """The primary disease labels a Stage 2 recipe intends to be positive.
 
-    A `No Finding` recipe is the all-zero intended vector over the 12 primary labels (plan §3), so
+    A `No Finding` recipe is the all-zero intended vector over the 11 primary labels (plan §3), so
     this correctly returns an empty list for it — agreement (§4.5) then scores it as "all 12
     predicted probabilities should be low."
     """

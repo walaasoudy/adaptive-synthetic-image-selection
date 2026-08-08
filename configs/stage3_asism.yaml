@@ -50,7 +50,7 @@ signals:
 
   uncertainty:
     mc_dropout_passes: 20
-    # Band edges on predictive std over the 12 primary labels (§4.3). Moderate uncertainty is NOT
+    # Band edges on predictive std over the 11 primary labels (§4.3). Moderate uncertainty is NOT
     # penalized: it may be the informative band (TSynD's premise).
     low_band_max: 0.05
     moderate_band_max: 0.15

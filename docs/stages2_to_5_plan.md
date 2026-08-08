@@ -33,18 +33,29 @@ deterministic patient list with one recorded seed. **No split is derived from an
 | Reuse `gen_val` as `classifier_val` | `gen_val` is the generator's monitoring split; same contamination argument. |
 | Keep v1 and forgo a classifier development split | Forces A–E model selection onto training data (invalid) or a heldout split (leakage). |
 
-### 1.2 Frozen v1 allocation
+### 1.2 Frozen v2 allocation
 
 | Split | Fraction | Role |
 |---|---|---|
-| `gen_train` | **0.60** | Stage 1 LoRA training; Stage 3 real-reference pool (§4.1); auxiliary classifier training (§2) |
+| `gen_train` | **0.48** | Stage 1 LoRA training; Stage 3 real-reference pool (§4.1); auxiliary classifier training (§2) |
 | `gen_val` | **0.10** | Stage 1 monitoring; auxiliary classifier validation (§2) |
 | `classifier_train` | **0.15** | Real component of A–E training (§7); real component of ASISM proxy training (§4.7) |
-| `classifier_val` | **0.05** | A–E early stopping, checkpoint selection, threshold selection, hyperparameter/model selection — identical rules across all conditions |
-| `asism_tuning_heldout` | **0.05** | ASISM Go/No-Go evidence (§4.6) and proxy-search evaluation (§4.7) |
-| `final_eval_heldout` | **0.05** | Stage 5 final evaluation only (§8) |
+| `classifier_val` | **0.09** | A–E early stopping, checkpoint selection, threshold selection, hyperparameter/model selection — identical rules across all conditions |
+| `asism_tuning_heldout` | **0.09** | ASISM Go/No-Go evidence (§4.6) and proxy-search evaluation (§4.7) |
+| `final_eval_heldout` | **0.09** | Stage 5 final evaluation only (§8) |
 
 Config: `configs/splits.yaml` → `fractions.*`. Sum asserted == 1.0 at build time.
+
+**v2 revision note (production run against the full CheXpert-v1.0-small cohort, 2026-08-08):**
+the original v1 allocation (60/10/15/5/5/5) failed the §1.3 support-feasibility rule for
+`Lung Lesion` and `Atelectasis` — their confident-negative patient population is real but thin
+enough (≈660 and ≈580 patients dataset-wide, respectively) that a 5% decision-bearing split fell
+short of the required 50. Raising `classifier_val`/`asism_tuning_heldout`/`final_eval_heldout` from
+5% to 9% each (funded by lowering `gen_train` from 60% to 48%) clears both with margin. A third
+failing label, `Pleural Other`, could not be fixed this way — its dataset-wide confident-negative
+population is only ≈100 patients, so no split-fraction choice gives four disjoint decision-bearing
+splits 50 each. `Pleural Other` is excluded from `primary_endpoint_label_set` instead (§5.2) rather
+than distorting the split policy further for a label no fraction choice can support.
 
 ### 1.3 Support-feasibility rule — FROZEN
 
@@ -132,7 +143,7 @@ measures intent-vs-content agreement; it does not establish clinical truth.
 1. **Empirical co-occurrence** from `gen_train` at or above `min_support_patients`.
 2. **Medical-rule overrides**, both directions: an allow-list for clinically plausible combinations
    rare in the data, and a block-list for combinations judged likely CheXpert NLP-extraction noise.
-3. **`No Finding` recipes are the all-zero intended vector over the 12 primary disease labels**, and
+3. **`No Finding` recipes are the all-zero intended vector over the 11 primary disease labels**, and
    are mutually exclusive with any positive pathology.
 4. **`Support Devices`** may be carried as a conditioning/context attribute. It does **not** affect
    the primary disease-agreement score (§7) unless `secondary_agreement.enabled` is turned on.
@@ -193,7 +204,7 @@ agreement = mean P(intended positive disease labels)
           − penalty × mean P(confidently predicted unintended disease labels)
 ```
 For a **`No Finding` recipe**, agreement is high when predicted probability is low across all 12
-primary disease labels. Computed over the 12 primary labels only; `Support Devices` is excluded
+primary disease labels. Computed over the 11 primary labels only; `Support Devices` is excluded
 unless `secondary_agreement.enabled`. Kept **separate** from uncertainty, similarity, IQA, and
 explainability — a confident correct reading and an uncertain correct reading are different facts.
 
@@ -255,18 +266,22 @@ All **14** CheXpert observations. This is the classifier's output space; all 14 
 reported.
 
 ### 5.2 `primary_endpoint_label_set`
-The **12** disease labels: the 14 minus `No Finding` and minus `Support Devices`.
+The **11** disease labels: the 14 minus `No Finding`, `Support Devices`, and `Pleural Other`.
 
 `Enlarged Cardiomediastinum`, `Cardiomegaly`, `Lung Opacity`, `Lung Lesion`, `Edema`,
-`Consolidation`, `Pneumonia`, `Atelectasis`, `Pneumothorax`, `Pleural Effusion`, `Pleural Other`,
-`Fracture`.
+`Consolidation`, `Pneumonia`, `Atelectasis`, `Pneumothorax`, `Pleural Effusion`, `Fracture`.
 
 - **`No Finding`** — an absence-of-disease meta-label, not a pathology. Secondary outcome only.
 - **`Support Devices`** — a device-presence label, not a disease, and the highest-prevalence, easiest
   label in CheXpert; including it would flatter the macro-average without measuring diagnostic
   performance. Secondary outcome only.
+- **`Pleural Other`** — **v2 revision note (2026-08-08):** excluded for insufficient support, not for
+  a clinical-relevance reason like the two above. On the full production CheXpert cohort only ≈100
+  patients dataset-wide carry a confident negative label for it, so no §1.2 fraction choice can give
+  every decision-bearing split the §1.3 minimum of 50 negative patients. Reported as a secondary
+  outcome with its support counts, per §5.3.
 
-Both remain in the output space; both are excluded from the **primary endpoint**.
+All three remain in the output space; all three are excluded from the **primary endpoint**.
 
 ### 5.3 Minimum support for reporting
 The §1.3 rule (≥50 positive and ≥50 negative **patients**) also governs metric eligibility. A label

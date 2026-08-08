@@ -8,7 +8,7 @@ ASISM's agreement signal (§4.5).
 Recipe validity is an auditable procedure, not an assertion (§3):
   1. empirical co-occurrence mined from gen_train at >= min_support_patients;
   2. medical-rule overrides, both directions (allow-list and block-list);
-  3. No Finding recipes are the ALL-ZERO vector over the 12 primary disease labels, mutually
+  3. No Finding recipes are the ALL-ZERO vector over the 11 primary disease labels, mutually
      exclusive with any positive pathology;
   4. Support Devices is a context attribute only — it never enters the primary disease vector;
   5. no -1 (uncertain) intent is ever encoded;

@@ -483,7 +483,7 @@ def main() -> int:
         },
         "uncertainty_policy": "raw preserved; -1 and blank masked in loss and metrics",
         "fairness_protocol": "equal optimizer steps across A-E and all D draws",
-        "primary_endpoint": "macro-AUROC over the 12 primary labels on final_eval_heldout",
+        "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary labels on final_eval_heldout",
         "primary_comparison": "C vs D",
         "multiplicity": {"confirmatory": "holm_bonferroni", "exploratory": "benjamini_hochberg"},
         "run_plan": plan,

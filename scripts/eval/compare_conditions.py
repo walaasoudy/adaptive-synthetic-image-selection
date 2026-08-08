@@ -121,7 +121,7 @@ def build_truth(run_dir: Path, reference: pd.DataFrame) -> tuple[np.ndarray, np.
 
 def macro_auroc_for(probabilities: np.ndarray, targets: np.ndarray, masks: np.ndarray,
                     rows: np.ndarray) -> float:
-    """Masked macro-AUROC over the 12 primary labels for a subset of rows."""
+    """Masked macro-AUROC over the 11 primary labels for a subset of rows."""
     values = []
     for label in PRIMARY_ENDPOINT_LABELS:
         index = CLASSIFIER_TARGET_LABELS.index(label)
@@ -255,7 +255,7 @@ def main() -> int:
 
     report = {
         "run_dir": str(run_dir),
-        "primary_endpoint": "macro-AUROC over the 12 primary disease labels",
+        "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary disease labels",
         "primary_comparison": "C vs D",
         "n_eval_rows": len(reference),
         "n_eval_patients": int(pd.Series(patient_ids).nunique()),
@@ -333,7 +333,10 @@ def main() -> int:
     comparison_table = pd.DataFrame(comparison_rows)
     comparison_table.to_csv(run_dir / "table_comparisons.csv", index=False)
 
-    print("\nCondition summary (primary endpoint: macro-AUROC over 12 disease labels)", flush=True)
+    print(
+        f"\nCondition summary (primary endpoint: macro-AUROC over {len(PRIMARY_ENDPOINT_LABELS)} disease labels)",
+        flush=True,
+    )
     print(condition_table.to_string(index=False), flush=True)
     print("\nComparisons", flush=True)
     print(comparison_table.to_string(index=False), flush=True)
