@@ -27,6 +27,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
@@ -40,6 +41,27 @@ from scripts.utils.seed import set_seed  # noqa: E402
 # --------------------------------------------------------------------------------------
 # Model / cache construction
 # --------------------------------------------------------------------------------------
+
+def tracker_hparams(cfg) -> dict[str, int | float | str | bool]:
+    """Flatten a resolved OmegaConf config into TensorBoard-safe scalar hparams."""
+    resolved = OmegaConf.to_container(cfg, resolve=True)
+    flattened: dict[str, int | float | str | bool] = {}
+
+    def visit(prefix: str, value) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                visit(f"{prefix}.{key}" if prefix else str(key), child)
+        elif isinstance(value, (list, tuple)):
+            flattened[prefix] = json.dumps(value, sort_keys=True)
+        elif value is None:
+            flattened[prefix] = "null"
+        elif isinstance(value, (int, float, str, bool)):
+            flattened[prefix] = value
+        else:
+            flattened[prefix] = str(value)
+
+    visit("", resolved)
+    return flattened
 
 def build_models(cfg, device_dtype: torch.dtype):
     from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
@@ -224,8 +246,15 @@ def build_or_load_cache(cfg, models, split_name: str, device: torch.device, max_
         print(f"[{split_name}] using existing latent cache: {latent_cache_path}")
 
     if not prompt_cache_path.exists():
-        text_encoder_one = models["text_encoder_one"].to(device).eval()
-        text_encoder_two = models["text_encoder_two"].to(device).eval()
+        text_dtype = {
+            "fp32": torch.float32,
+            "fp16": torch.float16,
+            "bf16": torch.bfloat16,
+        }[str(cfg.training.precision).lower()]
+        # Some SDXL checkpoints contain mixed stored dtypes (notably text_projection).  Cast the
+        # complete frozen encoders explicitly so their hidden states and projection weights agree.
+        text_encoder_one = models["text_encoder_one"].to(device=device, dtype=text_dtype).eval()
+        text_encoder_two = models["text_encoder_two"].to(device=device, dtype=text_dtype).eval()
         tokenizer_one, tokenizer_two = models["tokenizer_one"], models["tokenizer_two"]
 
         unique_captions = sorted({c for r in records for c in r["caption_variants"]})
@@ -448,16 +477,28 @@ def main() -> int:
     if cfg.logging.wandb.enabled:
         trackers.append("wandb")
 
+    precision = str(cfg.training.precision).lower()
+    accelerate_precision = "no" if precision == "fp32" else precision
+    if accelerate_precision not in {"no", "fp16", "bf16"}:
+        raise ValueError(
+            f"Unsupported training.precision={cfg.training.precision!r}; "
+            "expected one of: fp32, fp16, bf16"
+        )
+
     accelerator = Accelerator(
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
-        mixed_precision=cfg.training.precision,
+        mixed_precision=accelerate_precision,
         log_with=trackers or None,
         project_config=ProjectConfiguration(project_dir=str(run_dir), logging_dir=str(log_dir)),
     )
     if trackers:
-        accelerator.init_trackers("stage1_lora_sdxl", config=dict(cfg))
+        accelerator.init_trackers("stage1_lora_sdxl", config=tracker_hparams(cfg))
 
-    weight_dtype = torch.bfloat16 if cfg.training.precision == "bf16" else torch.float16
+    weight_dtype = {
+        "fp32": torch.float32,
+        "fp16": torch.float16,
+        "bf16": torch.bfloat16,
+    }[precision]
     models = build_models(cfg, weight_dtype)
 
     train_latent_cache, train_prompt_cache, train_records = build_or_load_cache(cfg, models, "gen_train", accelerator.device, args.max_samples_per_split)
