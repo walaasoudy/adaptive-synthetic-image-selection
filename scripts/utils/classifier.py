@@ -301,10 +301,15 @@ def train_classifier(
         best_checkpoint_identity = payload.get("best_checkpoint_identity")
         random.setstate(payload["rng_states"]["python"])
         np.random.set_state(payload["rng_states"]["numpy"])
-        torch.set_rng_state(payload["rng_states"]["torch_cpu"])
+        # ``map_location=device`` also moves the saved CPU RNG tensor to CUDA on GPU runs.
+        # PyTorch requires a CPU ByteTensor when restoring the default CPU generator.
+        torch_cpu_rng = payload["rng_states"]["torch_cpu"].detach().cpu()
+        torch.set_rng_state(torch_cpu_rng)
         if torch.cuda.is_available() and payload["rng_states"].get("torch_cuda"):
-            torch.cuda.set_rng_state_all(payload["rng_states"]["torch_cuda"])
-        sampler_generator.set_state(payload["sampler_state"])
+            torch.cuda.set_rng_state_all(
+                [state.detach().cpu() for state in payload["rng_states"]["torch_cuda"]]
+            )
+        sampler_generator.set_state(payload["sampler_state"].detach().cpu())
 
     def save_resumable() -> None:
         nonlocal best_checkpoint_identity
