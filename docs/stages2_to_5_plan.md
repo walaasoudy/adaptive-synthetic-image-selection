@@ -143,7 +143,7 @@ measures intent-vs-content agreement; it does not establish clinical truth.
 1. **Empirical co-occurrence** from `gen_train` at or above `min_support_patients`.
 2. **Medical-rule overrides**, both directions: an allow-list for clinically plausible combinations
    rare in the data, and a block-list for combinations judged likely CheXpert NLP-extraction noise.
-3. **`No Finding` recipes are the all-zero intended vector over the 11 primary disease labels**, and
+3. **`No Finding` recipes are the all-zero intended vector over `GENERATION_TARGET_LABELS`**, and
    are mutually exclusive with any positive pathology.
 4. **`Support Devices`** may be carried as a conditioning/context attribute. It does **not** affect
    the primary disease-agreement score (§7) unless `secondary_agreement.enabled` is turned on.
@@ -151,6 +151,14 @@ measures intent-vs-content agreement; it does not establish clinical truth.
 6. Frontal-only, matching Stage 1's `view_filter`.
 7. Age/sex coverage and per-recipe quotas are config-driven, oversampling rare classes subject to
    the support rule.
+
+**v3 revision note (2026-08-08):** recipe eligibility (co-occurrence mining, quotas, the
+single-label guarantee, and the caption row) is keyed to `GENERATION_TARGET_LABELS`
+(`scripts/utils/labels.py`) — `PRIMARY_ENDPOINT_LABELS` plus `INSUFFICIENT_SUPPORT_LABELS` — not
+`PRIMARY_ENDPOINT_LABELS` alone. `Pleural Other`'s exclusion from the primary endpoint (§5.2)
+reflects real-cohort support scarcity for *evaluation*; it is not a reason to also stop generating
+or training on synthetic examples of it. §4.5 agreement scoring and Stage 4 condition D's
+marginal-matching (§7) remain scoped to `PRIMARY_ENDPOINT_LABELS` only, unchanged.
 
 **Pilot gate — FROZEN:** full production generation **refuses to start** unless a versioned
 `pilot_approval_manifest.json` exists, records a completed pilot, records passing automatic artifact
@@ -203,7 +211,7 @@ correctness** — stated wherever the score is reported.
 agreement = mean P(intended positive disease labels)
           − penalty × mean P(confidently predicted unintended disease labels)
 ```
-For a **`No Finding` recipe**, agreement is high when predicted probability is low across all 12
+For a **`No Finding` recipe**, agreement is high when predicted probability is low across all 11
 primary disease labels. Computed over the 11 primary labels only; `Support Devices` is excluded
 unless `secondary_agreement.enabled`. Kept **separate** from uncertainty, similarity, IQA, and
 explainability — a confident correct reading and an uncertain correct reading are different facts.

@@ -1,7 +1,7 @@
 """Frozen CheXpert label policy, shared by every Stage 2-5 script
 (docs/stages2_to_5_plan.md §5 and §6).
 
-Two distinct label sets, deliberately not interchangeable:
+Three label sets, deliberately not interchangeable:
 
   CLASSIFIER_TARGET_LABELS (14)  - the classifier's output space. Everything is predicted and
                                    reported.
@@ -18,6 +18,15 @@ Two distinct label sets, deliberately not interchangeable:
                                    support rule (§1.3) — unlike "Lung Lesion"/"Atelectasis", which
                                    were fixed by revising configs/splits.yaml fractions instead. All
                                    three remain secondary outcomes.
+  GENERATION_TARGET_LABELS (12)  - PRIMARY_ENDPOINT_LABELS plus INSUFFICIENT_SUPPORT_LABELS
+                                   (docs/stages2_to_5_plan.md §3 revision note). Real-data support
+                                   scarcity is a property of what can be reliably EVALUATED on the
+                                   real cohort; it is not a reason to also stop generating or
+                                   training on synthetic examples of the condition. Stage 2 recipe
+                                   eligibility (co-occurrence mining, quotas, captions) keys off
+                                   this list, not PRIMARY_ENDPOINT_LABELS. ASISM's agreement
+                                   scoring (§4.5) and Stage 4 condition D's marginal matching (§7)
+                                   deliberately stay scoped to PRIMARY_ENDPOINT_LABELS only.
 
 Uncertainty policy (plan §6): raw labels are preserved; -1 and blank are MASKED out of loss and
 metrics, never silently mapped to 0 or 1. Three quantities are always kept separate:
@@ -56,6 +65,10 @@ PRIMARY_ENDPOINT_LABELS: list[str] = [
 
 # Reported, but never part of the primary macro-average.
 SECONDARY_LABELS: list[str] = [NO_FINDING_COLUMN, DEVICE_COLUMN, *INSUFFICIENT_SUPPORT_LABELS]
+
+# Every disease label worth intentionally synthesizing in Stage 2, whether or not it currently has
+# enough REAL-data patient support to be scored as a primary endpoint (module docstring).
+GENERATION_TARGET_LABELS: list[str] = [*PRIMARY_ENDPOINT_LABELS, *INSUFFICIENT_SUPPORT_LABELS]
 
 # Sentinel used in integer label arrays for "uncertain or not mentioned" (i.e. masked).
 MASKED = -1

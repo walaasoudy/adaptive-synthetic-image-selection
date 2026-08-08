@@ -8,9 +8,10 @@ ASISM's agreement signal (§4.5).
 Recipe validity is an auditable procedure, not an assertion (§3):
   1. empirical co-occurrence mined from gen_train at >= min_support_patients;
   2. medical-rule overrides, both directions (allow-list and block-list);
-  3. No Finding recipes are the ALL-ZERO vector over the 11 primary disease labels, mutually
-     exclusive with any positive pathology;
-  4. Support Devices is a context attribute only — it never enters the primary disease vector;
+  3. No Finding recipes are the ALL-ZERO vector over GENERATION_TARGET_LABELS (the primary
+     disease labels plus any excluded-from-primary-for-support-only labels, plan §3 revision
+     note), mutually exclusive with any positive pathology;
+  4. Support Devices is a context attribute only — it never enters the disease vector;
   5. no -1 (uncertain) intent is ever encoded;
   6. frontal-only, matching Stage 1's view_filter;
   7. per-label quotas oversample rare classes subject to the support rule.
@@ -39,7 +40,7 @@ from omegaconf import OmegaConf
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import (  # noqa: E402
-    PRIMARY_ENDPOINT_LABELS,
+    GENERATION_TARGET_LABELS,
     normalize_label,
     patient_level_support,
 )
@@ -66,7 +67,7 @@ def mine_cooccurrence(frame: pd.DataFrame, min_support_patients: int) -> dict[fr
     for row in frame.to_dict("records"):
         positives = frozenset(
             label
-            for label in PRIMARY_ENDPOINT_LABELS
+            for label in GENERATION_TARGET_LABELS
             if normalize_label(row.get(label)) == 1
         )
         if not positives:
@@ -124,7 +125,7 @@ def build_recipes(
     recipe_cfg = config.recipes
     rng = random.Random(seed)
 
-    support = patient_level_support(frame, PRIMARY_ENDPOINT_LABELS)
+    support = patient_level_support(frame, GENERATION_TARGET_LABELS)
     quotas = compute_label_quotas(support, recipe_cfg)
     cooccurrence = mine_cooccurrence(frame, int(recipe_cfg.min_support_patients))
 
@@ -138,7 +139,7 @@ def build_recipes(
     for combo in cooccurrence:
         if len(combo) <= max_positive:
             candidates[combo] = "empirical_cooccurrence"
-    for label in PRIMARY_ENDPOINT_LABELS:
+    for label in GENERATION_TARGET_LABELS:
         candidates.setdefault(frozenset({label}), "single_label_guaranteed")
     for rule in allow_rules:
         if rule:
@@ -219,7 +220,7 @@ def build_recipes(
         age = rng.choice(age_buckets)
         sex = rng.choice(sexes)
         has_device = rng.random() < device_rate
-        intended = {label: (1 if label in combo else 0) for label in PRIMARY_ENDPOINT_LABELS}
+        intended = {label: (1 if label in combo else 0) for label in GENERATION_TARGET_LABELS}
         recipe_id = f"recipe_{index:07d}"
         recipes.append(
             {
@@ -272,7 +273,7 @@ def build_recipes(
                 for r in recipes
                 if json.loads(r["intended_label_vector"]).get(label) == 1
             )
-            for label in PRIMARY_ENDPOINT_LABELS
+            for label in GENERATION_TARGET_LABELS
         },
         "single_vs_multi": dict(
             Counter("single" if r["num_positive_labels"] == 1 else
@@ -339,7 +340,7 @@ def main() -> int:
             label: sum(
                 1 for r in recipes if json.loads(r["intended_label_vector"]).get(label) == 1
             )
-            for label in PRIMARY_ENDPOINT_LABELS
+            for label in GENERATION_TARGET_LABELS
         }
         stats["single_vs_multi"] = dict(
             Counter(

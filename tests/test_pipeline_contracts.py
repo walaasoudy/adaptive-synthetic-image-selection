@@ -27,6 +27,8 @@ sys.path.insert(0, str(REPO))
 
 from scripts.utils.labels import (  # noqa: E402
     CLASSIFIER_TARGET_LABELS,
+    GENERATION_TARGET_LABELS,
+    INSUFFICIENT_SUPPORT_LABELS,
     PRIMARY_ENDPOINT_LABELS,
     build_label_arrays,
     check_support_rule,
@@ -52,6 +54,14 @@ def test_primary_endpoint_excludes_no_finding_and_support_devices():
     assert "No Finding" in CLASSIFIER_TARGET_LABELS
     assert "Support Devices" in CLASSIFIER_TARGET_LABELS
     assert "Pleural Other" in CLASSIFIER_TARGET_LABELS
+
+
+def test_generation_target_labels_restores_insufficient_support_labels():
+    assert len(GENERATION_TARGET_LABELS) == 12
+    assert "Pleural Other" in GENERATION_TARGET_LABELS
+    assert set(GENERATION_TARGET_LABELS) == set(PRIMARY_ENDPOINT_LABELS) | set(INSUFFICIENT_SUPPORT_LABELS)
+    assert "No Finding" not in GENERATION_TARGET_LABELS
+    assert "Support Devices" not in GENERATION_TARGET_LABELS
 
 
 def test_uncertain_and_blank_are_masked_never_converted():
