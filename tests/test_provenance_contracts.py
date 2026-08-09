@@ -119,11 +119,15 @@ def test_real_data_smoke_stage5_marker_is_bound_to_dev_namespace_and_split():
             "namespace": "dev-real-smoke-v2",
             "split_manifest_hash": "split-hash",
             "not_scientific_evidence": True,
+            "upstream_code_identity_sha256": "a" * 64,
         }
         (workspace / "REAL_DATA_SMOKE_ONLY.json").write_text(json.dumps(marker), encoding="utf-8")
-        assert module.require_smoke_final_eval_authorization(
+        authorization = module.require_smoke_final_eval_authorization(
             "dev-real-smoke-v2", manifest, workspace
-        ) == "real_data"
+        )
+        assert authorization == {
+            "kind": "real_data", "upstream_code_identity_sha256": "a" * 64
+        }
 
         marker["split_manifest_hash"] = "different-split"
         (workspace / "REAL_DATA_SMOKE_ONLY.json").write_text(json.dumps(marker), encoding="utf-8")

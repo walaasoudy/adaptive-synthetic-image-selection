@@ -60,7 +60,7 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()[:16]
 
 
-def require_smoke_final_eval_authorization(namespace: str, manifest: dict, project_root: Path) -> str:
+def require_smoke_final_eval_authorization(namespace: str, manifest: dict, project_root: Path) -> dict:
     """Authorize fixture or real-data engineering smoke without weakening production guards.
 
     The historical fixture smoke keeps its existing marker.  A real-data smoke requires a
@@ -71,7 +71,7 @@ def require_smoke_final_eval_authorization(namespace: str, manifest: dict, proje
         raise SystemExit("Smoke Stage 5 requires a dev-class split")
 
     if namespace == "dev-smoke-v1" and (project_root / "SMOKE_ONLY.json").is_file():
-        return "fixture"
+        return {"kind": "fixture", "upstream_code_identity_sha256": current_code_identity_hash()}
 
     marker_path = project_root / "REAL_DATA_SMOKE_ONLY.json"
     if not marker_path.is_file():
@@ -93,7 +93,13 @@ def require_smoke_final_eval_authorization(namespace: str, manifest: dict, proje
     }
     if mismatches:
         raise SystemExit(f"Real-data smoke authorization marker mismatch: {mismatches}")
-    return "real_data"
+    upstream_identity = marker.get("upstream_code_identity_sha256")
+    if not isinstance(upstream_identity, str) or len(upstream_identity) != 64:
+        raise SystemExit(
+            "Real-data smoke authorization marker requires a 64-character "
+            "upstream_code_identity_sha256"
+        )
+    return {"kind": "real_data", "upstream_code_identity_sha256": upstream_identity}
 
 
 def enforce_preconditions(namespace: str, run_id: str) -> dict:
@@ -109,11 +115,14 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
         smoke_mode = os.environ.get("THESIS_SMOKE_MODE") == "1"
         if smoke_mode:
             manifest = read_split_manifest(namespace)
-            smoke_kind = require_smoke_final_eval_authorization(
+            smoke_authorization = require_smoke_final_eval_authorization(
                 namespace, manifest, Path(os.environ.get("PROJECT_ROOT", "."))
             )
             evidence["smoke_only_not_scientific_evidence"] = True
-            evidence["smoke_kind"] = smoke_kind
+            evidence["smoke_kind"] = smoke_authorization["kind"]
+            evidence["upstream_code_identity_sha256"] = smoke_authorization[
+                "upstream_code_identity_sha256"
+            ]
         else:
             manifest = require_frozen_production_split_run(namespace)
         evidence["split_manifest_hash"] = manifest.get("manifest_hash")
@@ -121,6 +130,10 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
         evidence["split_frozen"] = manifest.get("frozen")
     except SystemExit as exc:
         failures.append(f"split manifest: {exc}")
+
+    expected_code_identity = evidence.get(
+        "upstream_code_identity_sha256", current_code_identity_hash()
+    )
 
     stage4_cfg = load_named_config("stage4_classifier.yaml", "stage4")
     stage3_cfg = load_named_config("stage3_asism.yaml", "stage3")
@@ -141,7 +154,7 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
         evidence["protocol_manifest_hash"] = sha256_file(protocol_path)
         if protocol.get("split_provenance", {}).get("split_manifest_hash") != evidence.get("split_manifest_hash"):
             failures.append("experiment protocol split hash differs from the requested frozen split")
-        if protocol.get("code_identity_sha256") != current_code_identity_hash():
+        if protocol.get("code_identity_sha256") != expected_code_identity:
             failures.append("experiment protocol code identity differs from the current source tree")
         # 6. Threshold policy frozen.
         if not protocol.get("threshold_policy"):
@@ -171,7 +184,7 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
         evidence["asism_manifest_hash"] = sha256_file(asism_path)
         if asism.get("split_manifest_hash") != evidence.get("split_manifest_hash"):
             failures.append("ASISM frozen manifest split hash differs from final split")
-        if asism.get("code_identity_sha256") != current_code_identity_hash():
+        if asism.get("code_identity_sha256") != expected_code_identity:
             failures.append("ASISM frozen manifest code identity differs from current source tree")
         evidence["asism_surviving_signals"] = asism.get("surviving_signals")
 
@@ -194,7 +207,7 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
                     failures.append(f"checkpoint is not a persisted best-validation model: {entry['tag']}")
                 if provenance.get("split_manifest_hash") != evidence.get("split_manifest_hash"):
                     failures.append(f"checkpoint split provenance mismatch: {entry['tag']}")
-                if provenance.get("code_identity_sha256") != current_code_identity_hash():
+                if provenance.get("code_identity_sha256") != expected_code_identity:
                     failures.append(f"checkpoint code identity mismatch: {entry['tag']}")
             else:
                 missing.append(entry["tag"])
