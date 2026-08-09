@@ -60,6 +60,42 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()[:16]
 
 
+def require_smoke_final_eval_authorization(namespace: str, manifest: dict, project_root: Path) -> str:
+    """Authorize fixture or real-data engineering smoke without weakening production guards.
+
+    The historical fixture smoke keeps its existing marker.  A real-data smoke requires a
+    namespace- and split-hash-bound marker, so a marker created for one development split cannot
+    unlock another split (and a production-class namespace is always refused).
+    """
+    if manifest.get("namespace_class") != "dev":
+        raise SystemExit("Smoke Stage 5 requires a dev-class split")
+
+    if namespace == "dev-smoke-v1" and (project_root / "SMOKE_ONLY.json").is_file():
+        return "fixture"
+
+    marker_path = project_root / "REAL_DATA_SMOKE_ONLY.json"
+    if not marker_path.is_file():
+        raise SystemExit(
+            "Real-data smoke Stage 5 requires REAL_DATA_SMOKE_ONLY.json in PROJECT_ROOT"
+        )
+    marker = read_json(marker_path)
+    expected = {
+        "schema_version": 1,
+        "purpose": "real-data-engineering-smoke-only",
+        "namespace": namespace,
+        "split_manifest_hash": manifest.get("manifest_hash"),
+        "not_scientific_evidence": True,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": marker.get(key)}
+        for key, value in expected.items()
+        if marker.get(key) != value
+    }
+    if mismatches:
+        raise SystemExit(f"Real-data smoke authorization marker mismatch: {mismatches}")
+    return "real_data"
+
+
 def enforce_preconditions(namespace: str, run_id: str) -> dict:
     """All of §8's execution guards. Any failure aborts before final_eval_heldout is opened."""
     failures: list[str] = []
@@ -72,12 +108,12 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
     try:
         smoke_mode = os.environ.get("THESIS_SMOKE_MODE") == "1"
         if smoke_mode:
-            if namespace != "dev-smoke-v1" or not (Path(os.environ.get("PROJECT_ROOT", ".")) / "SMOKE_ONLY.json").is_file():
-                raise SystemExit("Smoke Stage 5 is restricted to an explicitly marked dev-smoke-v1 PROJECT_ROOT")
             manifest = read_split_manifest(namespace)
-            if manifest.get("namespace_class") != "dev":
-                raise SystemExit("Smoke Stage 5 requires a dev-class split")
+            smoke_kind = require_smoke_final_eval_authorization(
+                namespace, manifest, Path(os.environ.get("PROJECT_ROOT", "."))
+            )
             evidence["smoke_only_not_scientific_evidence"] = True
+            evidence["smoke_kind"] = smoke_kind
         else:
             manifest = require_frozen_production_split_run(namespace)
         evidence["split_manifest_hash"] = manifest.get("manifest_hash")
