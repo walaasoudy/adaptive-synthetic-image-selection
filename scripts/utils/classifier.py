@@ -103,8 +103,8 @@ class CXRRecordDataset:
     """Multi-label CXR dataset over an explicit record list.
 
     Each record is {"image_path": str, "labels": {label: raw_value}, "is_synthetic": bool}. Keeping
-    real and synthetic rows in one uniform record type is what lets conditions A-G differ only by
-    which records they are handed, rather than by separate code paths per condition.
+    real and synthetic rows in one uniform record type is what lets the Stage 4 conditions differ
+    only by which records they are handed, rather than by separate code paths per condition.
     """
 
     def __init__(self, records: list[dict], resolution: int = 320, augment: bool = False):

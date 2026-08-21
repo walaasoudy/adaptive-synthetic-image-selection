@@ -15,8 +15,13 @@ Three phases, each independently invocable:
                      candidates. final_eval_heldout is never touched. Resumable at trial granularity.
 
   --phase select     Apply the frozen configuration: quality floor FIRST, then class quota. Writes
-                     selected_manifest.jsonl (condition C's data) and rejected_log.jsonl with a
-                     reason per rejected image.
+                     selected_manifest.jsonl and rejected_log.jsonl with a reason per rejected image.
+
+NOT PART OF THE THESIS PIPELINE (docs/stages2_to_5_plan.md §4.9 / §7 v3 revision notes). This is the
+weighted-score selector, which predates the learned ASISM components. The thesis defines ASISM as the
+full module including the Multi-Objective Ranking Network and Adaptive Threshold Learning, so there
+is no weighted-baseline Stage 4 condition and nothing consumes this script's selected_manifest.jsonl.
+Retained for reference and for the Stage 3 signal-merge helpers other code still imports.
 
 Usage:
     python scripts/asism/03_tune_freeze_select.py --phase estimate

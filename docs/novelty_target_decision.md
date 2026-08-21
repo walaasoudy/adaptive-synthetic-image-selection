@@ -26,8 +26,14 @@ document itself required. Before treating the learned selector (Stage 4 conditio
 more than a candidate method for the thesis, get explicit supervisor confirmation of: (a) Option 1
 as the accepted target/claim, (b) the compute budget actually spent (`configs/stage3_asism.yaml` →
 `compute_budget`, `verification_compute_budget`, `full_policy_verification.compute_budget`), and (c)
-whether condition F vs. C is a confirmatory or exploratory comparison in Stage 5 (§8, v2 revision
-note). This status update records what exists; it is not a substitute for that approval.
+whether to add the matched-random control described in `docs/stages2_to_5_plan.md` §7.1 — without
+it, an F-over-B result cannot separate ASISM's ranking quality from the effect of using fewer
+synthetic images. This status update records what exists; it is not a substitute for that approval.
+
+**v2 note (2026-08-21):** the weighted-score selector referred to below is no longer part of the
+thesis pipeline (§4.9 / §7 v3 revision notes) — the thesis defines ASISM as the full module
+including both learned components, so there is no weighted-baseline condition. The memo below is
+preserved as written for the historical record.
 
 The original decision memo is preserved below, unchanged.
 

@@ -157,8 +157,9 @@ single-label guarantee, and the caption row) is keyed to `GENERATION_TARGET_LABE
 (`scripts/utils/labels.py`) — `PRIMARY_ENDPOINT_LABELS` plus `INSUFFICIENT_SUPPORT_LABELS` — not
 `PRIMARY_ENDPOINT_LABELS` alone. `Pleural Other`'s exclusion from the primary endpoint (§5.2)
 reflects real-cohort support scarcity for *evaluation*; it is not a reason to also stop generating
-or training on synthetic examples of it. §4.5 agreement scoring and Stage 4 condition D's
-marginal-matching (§7) remain scoped to `PRIMARY_ENDPOINT_LABELS` only, unchanged.
+or training on synthetic examples of it. §4.5 agreement scoring remains scoped to
+`PRIMARY_ENDPOINT_LABELS` only, unchanged — as does the matched-random marginal-matching logic, if
+the §7.1 control is re-enabled.
 
 **Pilot gate — FROZEN:** full production generation **refuses to start** unless a versioned
 `pilot_approval_manifest.json` exists, records a completed pilot, records passing automatic artifact
@@ -267,10 +268,16 @@ quota, never whether the floor applies.
 
 ### 4.9 Learned ASISM extension (v4 revision note, 2026-08-21) — resolves `docs/novelty_target_decision.md`
 
-§4.7's `weighted_score_baseline` remains the frozen fallback. In addition, **Option 1** of
-`docs/novelty_target_decision.md` (pre-registered weakly supervised set-utility learning) is
-implemented as a second, separately-manifested selector — this is the thesis's literal
-"Multi-Objective Ranking Network (Novel)" / "Adaptive Threshold Learning (Novel)" components.
+**This is ASISM as the thesis defines it** — the four scoring signals (§4.1–§4.5) feeding the two
+novel learned components, "Multi-Objective Ranking Network (Novel)" and "Adaptive Threshold Learning
+(Novel)". It implements **Option 1** of `docs/novelty_target_decision.md` (pre-registered weakly
+supervised set-utility learning).
+
+**v3 revision note (2026-08-21):** §4.7's `weighted_score_baseline` is **no longer part of the
+thesis pipeline**. It predates the learned components and was never specified by the thesis, which
+defines ASISM as the full module including both learned networks. `03_tune_freeze_select.py` is
+retained for reference; no Stage 4 condition consumes its output, and the learned stages no longer
+import it (they load candidates via `scripts/asism/candidate_pool.py`).
 Pipeline (`scripts/asism/04` through `09`, config: `configs/stage3_asism.yaml` →
 `signals.ranking_network` / `signals.threshold_network`):
 
@@ -285,7 +292,9 @@ Pipeline (`scripts/asism/04` through `09`, config: `configs/stage3_asism.yaml` �
    (`MultiObjectiveRankingNetwork`, trained with a pairwise ranking loss against the distilled
    scores) — never by copying a subset's AUROC onto its member images. This is the mechanism that
    avoids the pseudo-replication problem `novelty_target_decision.md` raised.
-3. **`06_learn_thresholds_select.py`** — the fixed-ratio learned baseline (condition G).
+3. **`06_learn_thresholds_select.py`** — the fixed-ratio learned threshold. An intermediate stage of
+   the pipeline and an internal ablation reference; it is **not** a Stage 4 condition (the former
+   condition G was removed — §7 v3 revision note).
 4. **`07`/`07b`/`08`/`08b`** — builds bootstrap class contexts (honestly tagged
    `independent_clinical_sample: False` — they are resamples of one candidate pool, not new clinical
    evidence), a critic-guided hard-threshold grid search, proxy-verifies a diversified (not
@@ -301,10 +310,10 @@ Pipeline (`scripts/asism/04` through `09`, config: `configs/stage3_asism.yaml` �
 **Governance status:** implemented but **not yet supervisor-approved** — see the resolution note at
 the top of `docs/novelty_target_decision.md`. Not yet run on production data (§11).
 
-**Interaction with §7/§8:** produces the selection consumed by Stage 4 condition F
-(`adaptive_selected_manifest`); §6's fixed-ratio learned baseline feeds condition G
-(`learned_selected_manifest`). See §7's v2 revision note and §8's v2 revision note for the
-consequences for run count and the confirmatory comparison family.
+**Interaction with §7/§8:** `09`'s output (`adaptive_selected_manifest`) is the selection consumed by
+Stage 4 **condition F** — the thesis's "real + selected synthetic" arm, and the only synthetic-
+selection condition that survives the §7 v3 revision note. `06`'s `learned_selected_manifest` is
+retained on disk as an ablation reference but feeds no Stage 4 condition.
 
 ---
 
@@ -361,7 +370,7 @@ identically to training, validation, threshold selection, final evaluation, and 
 
 ---
 
-## 7. Stage 4 — conditions A–G — FROZEN (extended, v2 revision note 2026-08-21)
+## 7. Stage 4 — conditions A/B/F — FROZEN (v3 revision note 2026-08-21)
 
 Architecture, initialization, label policy (§5), uncertainty policy (§6), optimizer family, batch
 size, augmentation, checkpoint-selection rule, validation rule, and threshold-selection rule are
@@ -372,36 +381,49 @@ size, augmentation, checkpoint-selection rule, validation rule, and threshold-se
 |---|---|---|
 | **A** | `classifier_train` | none |
 | **B** | `classifier_train` | all Stage 2 images |
-| **C** | `classifier_train` | frozen ASISM selection (§4.7 `weighted_score_baseline`) |
-| **D** | `classifier_train` | **exactly 5** independent deterministic matched-random draws |
-| **E** | none | all Stage 2 images |
-| **F** | `classifier_train` | learned ASISM, adaptive selection (§4.9 `adaptive_selected_manifest`) |
-| **G** | `classifier_train` | learned ASISM, fixed-ratio baseline (§4.9 `learned_selected_manifest`) |
+| **F** | `classifier_train` | Learned ASISM selection (§4.9 `adaptive_selected_manifest`) |
 
-**v2 revision note (2026-08-21):** conditions F and G were added when §4.9's learned ASISM pipeline
-was implemented, so C's weighted-baseline selector and the learned selector (F) can be compared
-directly, with G isolating the effect of the learned *threshold* alone (F vs. G, both fed by the
-same ranking network) from the effect of switching to a learned selector at all (C vs. F/G). This
-addition has not yet received the supervisor sign-off `docs/novelty_target_decision.md` originally
-asked for — see that document's resolution note.
+**v3 revision note (2026-08-21) — supersedes the v2 note.** The condition set was reduced from A–G
+to **A/B/F** to match the three arms the thesis specifies for Stage 5 (real only / real + all
+synthetic / real + selected synthetic). Conditions removed and why:
 
-**Condition D matching (frozen):** every draw matches C on exact total synthetic sample count;
-per-label marginal positive counts within a frozen tolerance; single-label vs. multi-label
-proportion; and relevant sampling/interleaving constraints. Joint label-vector matching is attempted
-only where support permits and is never allowed to make matching infeasible. **Residual imbalance is
-recorded per draw.** D is matched against C only; it is not re-matched against F or G.
+| Removed | Was | Why removed |
+|---|---|---|
+| **C** | real + weighted-baseline ASISM | The thesis does not specify a weighted ASISM selector; ASISM's Stage-3 definition is the full module including the two learned components. C was an implementation-history artifact, not a thesis arm. |
+| **G** | real + fixed-ratio learned baseline | An internal ablation of F's threshold, not a thesis arm. |
+| **E** | synthetic only | Not among the thesis's three arms. |
+| **D** | matched-random control | Removed as a consequence of removing C (it was matched to C). **See the limitation below — this removal has a scientific cost the other three do not.** |
 
-**Seed policy (frozen for A–E; extended to F/G by the v2 revision note above):** A, B, C, E, F, G use
-**3 fixed model-training seeds** each (`configs/stage4_classifier.yaml` → `seeds`); **every** D draw
-uses the same 3 seeds. Total runs = (6 conditions × 3 seeds) + (5 draws × 3 seeds) = **33** — corrected
-from the original 27, which predates F/G. Run count and GPU cost are computed before production
-execution. Seeds and draws are never reduced after seeing results.
+`configs/stage4_classifier.yaml` → `conditions: [A, B, F]`. Total runs = 3 conditions × 3 seeds =
+**9** (superseding the 33 and, before it, 27 stated in earlier revisions).
 
-**Fairness protocol (frozen): equal optimizer steps** across A–E and all D draws — not equal epochs.
-At fixed epochs, a larger dataset receives more gradient updates, conflating "more data" with "more
-training." Equal steps isolates the data-composition effect that C vs. D exists to measure. Recorded
-per run: optimizer steps, epochs, effective dataset size, real sample exposures, synthetic sample
-exposures, interleaving/sampling policy, model seed, dataset/draw ID, config hash, checkpoint hash.
+### 7.1 Known limitation — no matched-random control
+
+**F is a strict subset of B.** An F-over-B improvement therefore admits two explanations this design
+cannot separate:
+
+1. **ASISM selected good images** — the thesis claim, and
+2. **using fewer synthetic images is simply better**, whichever ones they are, because unselected
+   synthetic data is noisy enough that dilution alone helps.
+
+Explanation 2 would produce an F-over-B win even with a *random* selector of the same size. F vs. B
+is therefore evidence that *selection helps*, but **not** evidence that *ASISM's ranking is good* —
+which is the actual novel contribution. The thesis's three-arm summary is the headline comparison,
+not a complete experimental design, and a committee is likely to raise exactly this point.
+
+**Resolving it** requires one added condition: matched-random draws of |F| images sharing F's
+per-label profile, trained under the identical protocol. The machinery already exists and is
+retained in working order (`01_train_conditions.py`: `build_matched_random_draw`, `profile_of`,
+`configs/stage4_classifier.yaml` → `condition_d.*`); it needs re-pointing from the deleted C to F,
+plus `n_draws × 3` additional runs (5 draws → 15 runs, total 24). **This is a supervisor decision
+and must be settled before Stage 4 executes**, not after results are seen.
+
+**Fairness protocol (frozen): equal optimizer steps** across every enabled condition — not equal
+epochs. At fixed epochs, a larger dataset silently receives more gradient updates, conflating "more
+data" with "more training." Equal steps isolates the data-composition effect that F vs. B exists to
+measure. Recorded per run: optimizer steps, epochs, effective dataset size, real sample exposures,
+synthetic sample exposures, interleaving/sampling policy, model seed, dataset ID, config hash,
+checkpoint hash.
 
 ---
 
@@ -409,30 +431,29 @@ exposures, interleaving/sampling policy, model seed, dataset/draw ID, config has
 
 **Primary endpoint:** macro-AUROC over `primary_endpoint_label_set` (§5.2) on `final_eval_heldout`.
 
-**Primary comparison — UNRESOLVED CONFLICT, must be settled before Stage 4 runs.** This section
-originally froze **C vs. D** as the primary comparison. The implemented analysis code
-(`scripts/eval/compare_conditions.py:51`, and its `primary_comparison` report field) instead declares:
+**Primary comparison: F vs. B** — Learned-ASISM-selected synthetic images vs. all synthetic images
+unselected. **Supporting comparisons:** A vs. B and A vs. F. Implemented in
+`scripts/eval/compare_conditions.py`:
 
 ```
-CONFIRMATORY_COMPARISONS = [("F", "C"), ("F", "G"), ("C", "D")]
-primary_comparison = "F vs C (learned vs weighted); C vs D is the matched-random control"
+CONFIRMATORY_COMPARISONS = [("F", "B")]
+SECONDARY_COMPARISONS    = [("A", "B"), ("A", "F")]
 ```
 
-so the code treats **F vs. C** as primary and C vs. D as a control, while this frozen document says
-C vs. D is primary. **The two disagree.** Whichever is chosen must be recorded here and in the code
-before any Stage 4 run, and never changed after Stage 5 results are seen.
+Document and code agree. With a single confirmatory comparison, Holm–Bonferroni reduces to the
+uncorrected p-value for F vs. B; the correction machinery stays in place so that adding a
+confirmatory comparison later (e.g. the matched-random control in §7.1) is a configuration change,
+not a reanalysis.
 
-**v2 revision note (2026-08-21), corrected 2026-08-21:** an earlier version of this note proposed a
-confirmatory family of {C vs. D, F vs. D, F vs. C, F vs. G}. That was wrong on one point: the
-implemented family deliberately omits **F vs. D**, and omitting it is correct. Condition D's draws
-are matched to **condition C's** selection profile and are drawn from the *complement* of C's
-selection (`01_train_conditions.py`, `target_profile_from_condition_C`). D is therefore not a valid
-matched control for F: if F's selection differs from C's in size or label mix, an F-vs-D difference
-is confounded by how much synthetic data each condition received, which is exactly the confound D
-exists to remove for C. **Consequence: condition F currently has no matched-random control of its
-own.** Either accept that F's claims rest on F vs. C and F vs. G (both same-selector-family
-comparisons), or add a second matched-draw condition matched to F — a protocol change requiring
-re-freezing, additional runs, and supervisor approval.
+**v3 revision note (2026-08-21) — supersedes the v2 note.** Earlier revisions of this section froze
+**C vs. D** as primary and then recorded a conflict with a code-side **F vs. C**. Both are obsolete:
+conditions C, D, E and G no longer exist (§7 v3 revision note), so neither comparison is defined.
+The conflict is resolved by deletion, not by adjudication.
+
+**What F vs. B can and cannot establish.** It tests whether selecting synthetic images beats using
+them all. It does **not** isolate the quality of ASISM's ranking from the effect of simply using
+fewer synthetic images — see §7.1. Any Stage 5 write-up must state this limitation explicitly
+alongside the F vs. B result, or add the matched-random control described there.
 
 Whether the learned selector (F) is accepted as a thesis method at all remains open in
 `docs/novelty_target_decision.md`; this correction family assumes it is.
@@ -445,7 +466,8 @@ correction configuration are frozen before Stage 4 and are not revised after see
 **Reporting:** per-label AUROC; macro-AUROC (primary); micro-AUROC; AUPRC; sensitivity/specificity;
 F1; calibration (Brier, ECE); patient-level bootstrap CIs; corrected paired comparisons with effect
 sizes; **effective patient N after masking for every metric**; `No Finding` and `Support Devices`
-reported separately; condition D's full across-draw distribution; leave-one-signal-out ASISM
+reported separately; the §7.1 limitation stated alongside the F vs. B result (or, if the
+matched-random control is enabled, its full across-draw distribution); leave-one-signal-out ASISM
 component-contribution analysis.
 
 **Execution guards (frozen).** Stage 5 refuses to run unless: the production split manifest is
@@ -474,13 +496,14 @@ a **new pre-specified evaluation run** — reported alongside the original, neve
 6. Auxiliary classifier (§2), on `gen_train`/`gen_val`.
 7. Compute the five ASISM signals (§4.1–§4.5).
 8. Go/No-Go gate (§4.6).
-9. Bounded proxy search (§4.7) on `classifier_train` + candidates, evaluated on
-   `asism_tuning_heldout`.
-10. Freeze ASISM configuration (§4.7 baseline; §4.9 learned selector, pending the supervisor sign-off
-    tracked in `docs/novelty_target_decision.md`).
-11. Freeze the experiment protocol (§5, §6, §7, §8), including §8's v2 revision note on the
-    confirmatory family.
-12. Train A–G (33 runs).
+9. Learned ASISM (§4.9): `04` subset design → `04b` measured subset utility → `05` set-utility and
+   ranking networks → `06`–`08b` threshold learning and proxy verification → `09` finalize. All
+   proxy evaluation is on `asism_tuning_heldout` only.
+10. Freeze ASISM configuration (§4.9 learned selector, pending the supervisor sign-off tracked in
+    `docs/novelty_target_decision.md`).
+11. Freeze the experiment protocol (§5, §6, §7, §8), including §7.1's matched-random-control
+    decision, which must be settled before any Stage 4 run.
+12. Train A/B/F (9 runs; 24 if the §7.1 matched-random control is added).
 13. Stage 5 evaluation on `final_eval_heldout`.
 14. Patient-level statistics, corrections, tables, figures.
 
