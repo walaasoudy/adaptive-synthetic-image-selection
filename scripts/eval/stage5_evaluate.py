@@ -5,8 +5,8 @@ Refuses to run unless every precondition in §8 holds:
   - the production split manifest exists AND is frozen AND passed its support check;
   - the recorded split hash matches the current manifest;
   - the frozen experiment-protocol manifest exists (Stage 4);
-  - the ASISM freeze manifest exists (Stage 3);
-  - the required A-E/D checkpoints exist, with their hashes recorded;
+  - the frozen Learned-ASISM selection manifest exists (Stage 3);
+  - the required A/B/F checkpoints exist, with their hashes recorded;
   - the classification-threshold policy is frozen;
   - an explicit --final-eval-run-id is supplied.
 
@@ -60,6 +60,48 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()[:16]
 
 
+def require_smoke_final_eval_authorization(namespace: str, manifest: dict, project_root: Path) -> dict:
+    """Authorize fixture or real-data engineering smoke without weakening production guards.
+
+    The historical fixture smoke keeps its existing marker.  A real-data smoke requires a
+    namespace- and split-hash-bound marker, so a marker created for one development split cannot
+    unlock another split (and a production-class namespace is always refused).
+    """
+    if manifest.get("namespace_class") != "dev":
+        raise SystemExit("Smoke Stage 5 requires a dev-class split")
+
+    if namespace == "dev-smoke-v1" and (project_root / "SMOKE_ONLY.json").is_file():
+        return {"kind": "fixture", "upstream_code_identity_sha256": current_code_identity_hash()}
+
+    marker_path = project_root / "REAL_DATA_SMOKE_ONLY.json"
+    if not marker_path.is_file():
+        raise SystemExit(
+            "Real-data smoke Stage 5 requires REAL_DATA_SMOKE_ONLY.json in PROJECT_ROOT"
+        )
+    marker = read_json(marker_path)
+    expected = {
+        "schema_version": 1,
+        "purpose": "real-data-engineering-smoke-only",
+        "namespace": namespace,
+        "split_manifest_hash": manifest.get("manifest_hash"),
+        "not_scientific_evidence": True,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": marker.get(key)}
+        for key, value in expected.items()
+        if marker.get(key) != value
+    }
+    if mismatches:
+        raise SystemExit(f"Real-data smoke authorization marker mismatch: {mismatches}")
+    upstream_identity = marker.get("upstream_code_identity_sha256")
+    if not isinstance(upstream_identity, str) or len(upstream_identity) != 64:
+        raise SystemExit(
+            "Real-data smoke authorization marker requires a 64-character "
+            "upstream_code_identity_sha256"
+        )
+    return {"kind": "real_data", "upstream_code_identity_sha256": upstream_identity}
+
+
 def enforce_preconditions(namespace: str, run_id: str) -> dict:
     """All of §8's execution guards. Any failure aborts before final_eval_heldout is opened."""
     failures: list[str] = []
@@ -72,12 +114,15 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
     try:
         smoke_mode = os.environ.get("THESIS_SMOKE_MODE") == "1"
         if smoke_mode:
-            if namespace != "dev-smoke-v1" or not (Path(os.environ.get("PROJECT_ROOT", ".")) / "SMOKE_ONLY.json").is_file():
-                raise SystemExit("Smoke Stage 5 is restricted to an explicitly marked dev-smoke-v1 PROJECT_ROOT")
             manifest = read_split_manifest(namespace)
-            if manifest.get("namespace_class") != "dev":
-                raise SystemExit("Smoke Stage 5 requires a dev-class split")
+            smoke_authorization = require_smoke_final_eval_authorization(
+                namespace, manifest, Path(os.environ.get("PROJECT_ROOT", "."))
+            )
             evidence["smoke_only_not_scientific_evidence"] = True
+            evidence["smoke_kind"] = smoke_authorization["kind"]
+            evidence["upstream_code_identity_sha256"] = smoke_authorization[
+                "upstream_code_identity_sha256"
+            ]
         else:
             manifest = require_frozen_production_split_run(namespace)
         evidence["split_manifest_hash"] = manifest.get("manifest_hash")
@@ -85,6 +130,10 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
         evidence["split_frozen"] = manifest.get("frozen")
     except SystemExit as exc:
         failures.append(f"split manifest: {exc}")
+
+    expected_code_identity = evidence.get(
+        "upstream_code_identity_sha256", current_code_identity_hash()
+    )
 
     stage4_cfg = load_named_config("stage4_classifier.yaml", "stage4")
     stage3_cfg = load_named_config("stage3_asism.yaml", "stage3")
@@ -105,7 +154,7 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
         evidence["protocol_manifest_hash"] = sha256_file(protocol_path)
         if protocol.get("split_provenance", {}).get("split_manifest_hash") != evidence.get("split_manifest_hash"):
             failures.append("experiment protocol split hash differs from the requested frozen split")
-        if protocol.get("code_identity_sha256") != current_code_identity_hash():
+        if protocol.get("code_identity_sha256") != expected_code_identity:
             failures.append("experiment protocol code identity differs from the current source tree")
         # 6. Threshold policy frozen.
         if not protocol.get("threshold_policy"):
@@ -124,20 +173,25 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
             frozen_component_hashes[key] = sha256_file(component_path)
         evidence["frozen_component_hashes"] = frozen_component_hashes
 
-    # 4. ASISM freeze manifest.
-    asism_path = Path(stage3_cfg.paths.frozen_manifest)
+    # 4. Learned-ASISM selection is the sole Stage-3 selector in this thesis protocol.
+    asism_path = Path(stage3_cfg.paths.adaptive_selection_manifest)
     if not asism_path.is_file():
         failures.append(f"ASISM freeze manifest missing: {asism_path}")
     else:
         asism = read_json(asism_path)
-        if not asism.get("frozen"):
-            failures.append("ASISM manifest exists but is not marked frozen")
-        evidence["asism_manifest_hash"] = sha256_file(asism_path)
-        if asism.get("split_manifest_hash") != evidence.get("split_manifest_hash"):
-            failures.append("ASISM frozen manifest split hash differs from final split")
-        if asism.get("code_identity_sha256") != current_code_identity_hash():
-            failures.append("ASISM frozen manifest code identity differs from current source tree")
-        evidence["asism_surviving_signals"] = asism.get("surviving_signals")
+        if not asism.get("frozen") or asism.get("method") != "class_aware_adaptive_threshold_v2":
+            failures.append("Learned ASISM selection manifest is not a compatible frozen artifact")
+        evidence["learned_asism_manifest_hash"] = sha256_file(asism_path)
+
+    # F is the finalized Learned-ASISM selector.
+    if "F" in list(stage4_cfg.get("conditions", [])):
+        learned_path = Path(stage3_cfg.paths.adaptive_selection_manifest)
+        if not learned_path.is_file():
+            failures.append(f"adaptive learned ASISM selection manifest missing: {learned_path}")
+        else:
+            learned = read_json(learned_path)
+            if not learned.get("frozen") or learned.get("method") != "class_aware_adaptive_threshold_v2":
+                failures.append("adaptive learned ASISM selection manifest is not a compatible frozen artifact")
 
     # 5. Required checkpoints.
     results_path = Path(stage4_cfg.paths.results_dir) / "stage4_training_results.json"
@@ -158,7 +212,7 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
                     failures.append(f"checkpoint is not a persisted best-validation model: {entry['tag']}")
                 if provenance.get("split_manifest_hash") != evidence.get("split_manifest_hash"):
                     failures.append(f"checkpoint split provenance mismatch: {entry['tag']}")
-                if provenance.get("code_identity_sha256") != current_code_identity_hash():
+                if provenance.get("code_identity_sha256") != expected_code_identity:
                     failures.append(f"checkpoint code identity mismatch: {entry['tag']}")
             else:
                 missing.append(entry["tag"])

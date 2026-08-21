@@ -105,7 +105,7 @@ stage3:
 
 stage4:
   split_namespace: dev-smoke-v1
-  conditions: [A, B, C]
+  conditions: [A, B]
   model:
     pretrained_source: random
     resolution: 64

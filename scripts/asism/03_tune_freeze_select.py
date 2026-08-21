@@ -15,8 +15,13 @@ Three phases, each independently invocable:
                      candidates. final_eval_heldout is never touched. Resumable at trial granularity.
 
   --phase select     Apply the frozen configuration: quality floor FIRST, then class quota. Writes
-                     selected_manifest.jsonl (condition C's data) and rejected_log.jsonl with a
-                     reason per rejected image.
+                     selected_manifest.jsonl and rejected_log.jsonl with a reason per rejected image.
+
+NOT PART OF THE THESIS PIPELINE (docs/stages2_to_5_plan.md §4.9 / §7 v3 revision notes). This is the
+weighted-score selector, which predates the learned ASISM components. The thesis defines ASISM as the
+full module including the Multi-Objective Ranking Network and Adaptive Threshold Learning, so there
+is no weighted-baseline Stage 4 condition and nothing consumes this script's selected_manifest.jsonl.
+Retained for reference and for the Stage 3 signal-merge helpers other code still imports.
 
 Usage:
     python scripts/asism/03_tune_freeze_select.py --phase estimate
@@ -492,9 +497,24 @@ def phase_tune(config, namespace: str) -> int:
 
     # Frozen selection rule: best mean; ties within the noise band resolve to the SIMPLER
     # configuration (fewer active signals, then smaller total weight).
-    best_score = max(item["mean_score"] for item in shortlist_results)
     band = float(tuning.tie_noise_band)
-    tied = [item for item in shortlist_results if best_score - item["mean_score"] <= band]
+    finite_results = [item for item in shortlist_results if np.isfinite(item["mean_score"])]
+    selection_fallback = None
+    if finite_results:
+        best_score = max(item["mean_score"] for item in finite_results)
+        tied = [item for item in finite_results if best_score - item["mean_score"] <= band]
+    elif os.environ.get("THESIS_SMOKE_MODE") == "1":
+        # A tiny fixture fold can contain only one class for every label, making macro-AUROC
+        # undefined. Keep the engineering smoke moving with the already-finite coarse result;
+        # production remains fail-closed below.
+        best_coarse = max(coarse_results, key=lambda item: item["score"])
+        tied = [{**shortlist_results[0], "mean_score": float(best_coarse["score"])}]
+        selection_fallback = "smoke_only_all_shortlist_aurocs_undefined_used_best_coarse_score"
+    else:
+        raise SystemExit(
+            "ASISM tuning produced no finite shortlist macro-AUROC values. Increase held-out "
+            "class support or revise the predeclared fold plan; no production winner was frozen."
+        )
     winner = min(
         tied,
         key=lambda item: (
@@ -515,6 +535,7 @@ def phase_tune(config, namespace: str) -> int:
         "tie_break_rule": "best mean proxy macro-AUROC; ties within noise band -> simpler config",
         "tie_noise_band": band,
         "n_tied_candidates": len(tied),
+        "selection_fallback": selection_fallback,
         "winner_mean_proxy_macro_auroc": winner["mean_score"],
         "shortlist_results": shortlist_results,
         "coarse_results": coarse_results,

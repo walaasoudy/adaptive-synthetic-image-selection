@@ -109,6 +109,47 @@ def test_full_sha256_is_not_truncated():
     assert len(sha256_file(REPO / "scripts/utils/classifier.py")) == 64
 
 
+def test_real_data_smoke_stage5_marker_is_bound_to_dev_namespace_and_split():
+    module = load_script("scripts/eval/stage5_evaluate.py", "stage5_real_smoke_authorization_test")
+    manifest = {"namespace_class": "dev", "manifest_hash": "split-hash"}
+    with fixture_workspace("real-smoke-stage5-marker") as workspace:
+        marker = {
+            "schema_version": 1,
+            "purpose": "real-data-engineering-smoke-only",
+            "namespace": "dev-real-smoke-v2",
+            "split_manifest_hash": "split-hash",
+            "not_scientific_evidence": True,
+            "upstream_code_identity_sha256": "a" * 64,
+        }
+        (workspace / "REAL_DATA_SMOKE_ONLY.json").write_text(json.dumps(marker), encoding="utf-8")
+        authorization = module.require_smoke_final_eval_authorization(
+            "dev-real-smoke-v2", manifest, workspace
+        )
+        assert authorization == {
+            "kind": "real_data", "upstream_code_identity_sha256": "a" * 64
+        }
+
+        marker["split_manifest_hash"] = "different-split"
+        (workspace / "REAL_DATA_SMOKE_ONLY.json").write_text(json.dumps(marker), encoding="utf-8")
+        try:
+            module.require_smoke_final_eval_authorization("dev-real-smoke-v2", manifest, workspace)
+        except SystemExit as exc:
+            assert "marker mismatch" in str(exc)
+        else:
+            raise AssertionError("real-data smoke marker was accepted for the wrong split")
+
+        try:
+            module.require_smoke_final_eval_authorization(
+                "production-thesis-v1",
+                {"namespace_class": "production", "manifest_hash": "split-hash"},
+                workspace,
+            )
+        except SystemExit as exc:
+            assert "dev-class" in str(exc)
+        else:
+            raise AssertionError("real-data smoke marker unlocked a production split")
+
+
 def test_multilabel_gradcam_aggregation_uses_every_positive():
     mean, minimum = aggregate_pathology_overlaps({"Edema": 0.9, "Pneumonia": 0.1})
     assert mean == 0.5 and minimum == 0.1

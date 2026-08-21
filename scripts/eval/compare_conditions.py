@@ -44,12 +44,12 @@ from scripts.utils.metrics import (  # noqa: E402
     patient_level_bootstrap,
 )
 
-TAG_PATTERN = re.compile(r"^(?P<condition>[A-E])(?:_draw(?P<draw>\d+))?_seed(?P<seed>\d+)$")
+TAG_PATTERN = re.compile(r"^(?P<condition>[A-G])(?:_draw(?P<draw>\d+))?_seed(?P<seed>\d+)$")
 
 # The CONFIRMATORY family, fixed before results are seen (§8.1/§8.2). Everything else is
 # exploratory and corrected with FDR.
-CONFIRMATORY_COMPARISONS = [("C", "D")]
-SECONDARY_COMPARISONS = [("A", "B"), ("A", "C"), ("A", "E"), ("B", "C")]
+CONFIRMATORY_COMPARISONS = [("F", "B")]
+SECONDARY_COMPARISONS = [("A", "B"), ("A", "F")]
 
 
 def parse_tag(tag: str) -> dict | None:
@@ -121,7 +121,7 @@ def build_truth(run_dir: Path, reference: pd.DataFrame) -> tuple[np.ndarray, np.
 
 def macro_auroc_for(probabilities: np.ndarray, targets: np.ndarray, masks: np.ndarray,
                     rows: np.ndarray) -> float:
-    """Masked macro-AUROC over the 12 primary labels for a subset of rows."""
+    """Masked macro-AUROC over the 11 primary labels for a subset of rows."""
     values = []
     for label in PRIMARY_ENDPOINT_LABELS:
         index = CLASSIFIER_TARGET_LABELS.index(label)
@@ -255,8 +255,8 @@ def main() -> int:
 
     report = {
         "run_dir": str(run_dir),
-        "primary_endpoint": "macro-AUROC over the 12 primary disease labels",
-        "primary_comparison": "C vs D",
+        "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary disease labels",
+        "primary_comparison": "F vs B (Learned ASISM-selected synthetic images vs all synthetic images)",
         "n_eval_rows": len(reference),
         "n_eval_patients": int(pd.Series(patient_ids).nunique()),
         "per_condition": per_condition_metrics,
@@ -333,7 +333,10 @@ def main() -> int:
     comparison_table = pd.DataFrame(comparison_rows)
     comparison_table.to_csv(run_dir / "table_comparisons.csv", index=False)
 
-    print("\nCondition summary (primary endpoint: macro-AUROC over 12 disease labels)", flush=True)
+    print(
+        f"\nCondition summary (primary endpoint: macro-AUROC over {len(PRIMARY_ENDPOINT_LABELS)} disease labels)",
+        flush=True,
+    )
     print(condition_table.to_string(index=False), flush=True)
     print("\nComparisons", flush=True)
     print(comparison_table.to_string(index=False), flush=True)

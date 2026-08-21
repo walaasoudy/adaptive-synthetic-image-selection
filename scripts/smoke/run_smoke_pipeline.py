@@ -106,13 +106,8 @@ def main() -> int:
         require(synthetic / "scores" / f"{signal}_scores.provenance.json", f"{signal} provenance")
     run([py, "scripts/asism/02_gonogo.py", "--namespace", NAMESPACE], env)
     require(synthetic / "asism/gonogo_report.json", "Go/No-Go report")
-    run([py, "scripts/asism/03_tune_freeze_select.py", "--phase", "estimate", "--namespace", NAMESPACE], env)
-    run([py, "scripts/asism/03_tune_freeze_select.py", "--phase", "tune", "--namespace", NAMESPACE], env)
-    run([py, "scripts/asism/03_tune_freeze_select.py", "--phase", "select", "--namespace", NAMESPACE], env)
-    require(synthetic / "asism/asism_frozen_manifest.json", "frozen ASISM baseline manifest")
-
     run([py, "scripts/classify/01_train_conditions.py", "--condition", "all", "--namespace", NAMESPACE], env)
-    require(workspace / "outputs/stage4" / NAMESPACE / "stage4_training_results.json", "Stage 4 A/B/C results")
+    require(workspace / "outputs/stage4" / NAMESPACE / "stage4_training_results.json", "Stage 4 A/B results")
     run([py, "scripts/eval/stage5_evaluate.py", "--final-eval-run-id", "smoke-final-v1", "--namespace", NAMESPACE,
          "--bootstrap-resamples", "20"], env)
     stage5 = workspace / "outputs/stage5" / NAMESPACE / "smoke-final-v1"

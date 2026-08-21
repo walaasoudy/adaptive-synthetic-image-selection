@@ -5,9 +5,41 @@ chest X-rays, generating synthetic data, and adaptively selecting/weighting it (
 classifier training and evaluation. See `docs/proposal.md` for the full 5-stage framework and
 `docs/literature_review.md` for the grounding literature.
 
-This repo currently implements **Stage 1 only** (generative model setup). See
-`docs/stage1_plan.md` for the full design rationale (SDXL variant, LoRA config, preprocessing,
-captioning, training/validation/checkpointing strategy, risks and alternatives).
+The repository contains executable code for Stages 1--5. Production thesis results still require
+the real CheXpert data, trained checkpoints, generated images, and GPU execution; committed smoke
+artifacts validate engineering connectivity only.
+
+Stage 5 compares three conditions on `final_eval_heldout` (`configs/stage4_classifier.yaml` →
+`conditions: [A, B, F]`): **A** real only, **B** real + all synthetic, **F** real + Learned-ASISM-
+selected synthetic. There is no separate weighted-baseline selector or condition — ASISM is the full
+module (`docs/stages2_to_5_plan.md` §4.9), including the Multi-Objective Ranking Network and
+Adaptive Threshold Learning below. Primary comparison: **F vs. B**. See
+`docs/stages2_to_5_plan.md` §7.1 for a known limitation of that comparison (no matched-random
+control) still pending a supervisor decision.
+
+Learned-ASISM order (after Stage 2, auxiliary classifier, signal computation, and Go/No-Go):
+
+```bash
+python scripts/asism/04_build_utility_subsets.py --phase feasibility
+python scripts/asism/04_build_utility_subsets.py --phase build
+python scripts/asism/04b_evaluate_utility_subsets.py --phase estimate
+python scripts/asism/04b_evaluate_utility_subsets.py --phase run
+python scripts/asism/05_train_learned_asism.py
+python scripts/asism/06_learn_thresholds_select.py
+# 06 is the fixed-ratio learned threshold — an intermediate/ablation artifact, not a Stage 4
+# condition. The adaptive path that feeds condition F continues with:
+python scripts/asism/07_build_threshold_contexts.py
+python scripts/asism/07b_verify_thresholds_proxy.py --phase estimate
+python scripts/asism/07b_verify_thresholds_proxy.py --phase run --i-understand-this-trains-real-models
+python scripts/asism/08_train_threshold_network.py
+python scripts/asism/08b_verify_full_policy_proxy.py --phase estimate
+python scripts/asism/08b_verify_full_policy_proxy.py --phase run --i-understand-this-trains-real-models
+python scripts/asism/09_finalize_learned_selection.py
+```
+
+`scripts/asism/03_tune_freeze_select.py` (the pre-learned weighted-score selector) is retained for
+its shared signal-merge helpers only. Nothing in the Stage 4/5 pipeline consumes its output — do not
+run it as a pipeline step.
 
 ## Environment
 

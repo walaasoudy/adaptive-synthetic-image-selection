@@ -154,7 +154,7 @@ def compute_agreement_scores(
                   - penalty_weight * mean P(confidently predicted UNintended labels)
 
     For a No Finding recipe the intended positive set is empty, so the first term is defined as
-    (1 - mean probability over all 12 primary labels): agreement is high exactly when the classifier
+    (1 - mean probability over all 11 primary labels): agreement is high exactly when the classifier
     sees no disease, which is what that recipe asked for.
 
     NOT clinical proof. The generator and the classifier can share a bias and agree while both are
@@ -211,7 +211,7 @@ def compute_uncertainty_scores(
     probability_mean: np.ndarray,
     config,
 ) -> pd.DataFrame:
-    """MC-Dropout predictive spread over the 12 primary labels, banded.
+    """MC-Dropout predictive spread over the 11 primary labels, banded.
 
     Bands are reported, NOT converted into a penalty here: moderate uncertainty may be the most
     informative band (TSynD's premise, §4.3), so whether a band is good or bad is a selection-policy
