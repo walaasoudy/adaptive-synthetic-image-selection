@@ -5,9 +5,28 @@ chest X-rays, generating synthetic data, and adaptively selecting/weighting it (
 classifier training and evaluation. See `docs/proposal.md` for the full 5-stage framework and
 `docs/literature_review.md` for the grounding literature.
 
-This repo currently implements **Stage 1 only** (generative model setup). See
-`docs/stage1_plan.md` for the full design rationale (SDXL variant, LoRA config, preprocessing,
-captioning, training/validation/checkpointing strategy, risks and alternatives).
+The repository contains executable code for Stages 1--5. Production thesis results still require
+the real CheXpert data, trained checkpoints, generated images, and GPU execution; committed smoke
+artifacts validate engineering connectivity only.
+
+Stage 3 preserves two separate selectors: the original proxy-tuned weighted baseline and the
+learned ASISM proposal (set-utility model, marginal-utility image ranker, and class-aware adaptive
+threshold network). They intentionally write separate manifests so Stage 4 can compare them.
+
+Learned-ASISM order (after Stage 2 and signal computation):
+
+```bash
+python scripts/asism/04_build_utility_subsets.py
+python scripts/asism/04b_evaluate_utility_subsets.py
+python scripts/asism/05_train_learned_asism.py
+python scripts/asism/06_learn_thresholds_select.py
+# 06 is the frozen fixed-ratio learned baseline. The adaptive path continues with:
+python scripts/asism/07_build_threshold_contexts.py
+python scripts/asism/07b_verify_thresholds_proxy.py --phase estimate
+python scripts/asism/08_train_threshold_network.py
+python scripts/asism/08b_verify_full_policy_proxy.py --phase estimate
+python scripts/asism/09_finalize_learned_selection.py
+```
 
 ## Environment
 

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Stage 4 — train conditions A-E (docs/stages2_to_5_plan.md §7).
+"""Stage 4 — train conditions A-G (docs/stages2_to_5_plan.md §7).
 
     A  real only                    classifier_train
     B  real + ALL synthetic         classifier_train + every Stage 2 image
     C  real + ASISM-selected        classifier_train + the frozen ASISM selection
     D  real + matched-random        classifier_train + FIVE independent matched draws
     E  synthetic only               every Stage 2 image
+    F  real + adaptive learned-ASISM classifier_train + finalized adaptive selection
+    G  real + fixed-ratio learned baseline classifier_train + 06 baseline selection
 
 Condition D is the primary control: each of its five draws matches C on total synthetic count,
 per-label marginal positive counts (within a frozen tolerance), and single-vs-multi-label
@@ -45,7 +47,7 @@ from scripts.utils.artifact_contracts import (  # noqa: E402
     require_manifest_fields, stage2_paths, stage3_paths, stage4_paths,
 )
 
-CONDITIONS = ["A", "B", "C", "D", "E"]
+CONDITIONS = ["A", "B", "C", "D", "E", "F", "G"]
 
 
 def load_configs():
@@ -68,12 +70,19 @@ def load_all_synthetic_ids(stage2_cfg) -> list[str]:
     return ids
 
 
-def load_selected_ids(stage3_cfg) -> list[str]:
-    path = Path(stage3_cfg.paths.selected_manifest)
+def load_selected_ids(stage3_cfg, selector: str = "weighted") -> list[str]:
+    paths = {
+        "weighted": stage3_cfg.paths.selected_manifest,
+        "adaptive": stage3_cfg.paths.adaptive_selected_manifest,
+        "fixed_ratio": stage3_cfg.paths.learned_selected_manifest,
+    }
+    if selector not in paths:
+        raise ValueError(f"unknown selector {selector}")
+    path = Path(paths[selector])
     if not path.is_file():
         raise SystemExit(
             f"UPSTREAM GATE: ASISM selection not found at {path}\n"
-            "Run: python scripts/asism/03_tune_freeze_select.py --phase select"
+            "Run the weighted selector or the learned-ASISM selection pipeline, as applicable."
         )
     ids = []
     with open(path, encoding="utf-8") as handle:
@@ -293,7 +302,7 @@ def training_plan(stage4_cfg) -> dict:
     n_draws = int(stage4_cfg.condition_d.n_draws)
     all_runs = {
         "A": len(seeds), "B": len(seeds), "C": len(seeds),
-        "D": n_draws * len(seeds), "E": len(seeds),
+        "D": n_draws * len(seeds), "E": len(seeds), "F": len(seeds), "G": len(seeds),
     }
     enabled = list(stage4_cfg.get("conditions", CONDITIONS))
     runs = {condition: all_runs[condition] for condition in enabled}
@@ -335,6 +344,10 @@ def build_records(condition: str, draw_ids: list[str] | None, cfgs, namespace: s
         synthetic_ids = load_selected_ids(stage3_cfg)
     elif condition == "D":
         synthetic_ids = draw_ids
+    elif condition == "F":
+        synthetic_ids = load_selected_ids(stage3_cfg, selector="adaptive")
+    elif condition == "G":
+        synthetic_ids = load_selected_ids(stage3_cfg, selector="fixed_ratio")
 
     synthetic_records = []
     if condition != "A":
@@ -482,9 +495,9 @@ def main() -> int:
             "support_devices_in_primary": False,
         },
         "uncertainty_policy": "raw preserved; -1 and blank masked in loss and metrics",
-        "fairness_protocol": "equal optimizer steps across A-E and all D draws",
+        "fairness_protocol": "equal optimizer steps across A-G and all D draws",
         "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary labels on final_eval_heldout",
-        "primary_comparison": "C vs D",
+        "primary_comparison": "F vs C (learned vs weighted); C vs D remains the matched-random control",
         "multiplicity": {"confirmatory": "holm_bonferroni", "exploratory": "benjamini_hochberg"},
         "run_plan": plan,
         "git_commit_hash": get_git_commit_hash(),
@@ -520,6 +533,18 @@ def main() -> int:
     if args.condition != "all" and args.condition not in enabled_conditions:
         raise SystemExit(f"Condition {args.condition} is disabled by this explicit configuration: {enabled_conditions}")
     conditions = enabled_conditions if args.condition == "all" else [args.condition]
+    if "F" in conditions:
+        require_manifest_fields(
+            Path(stage3_cfg.paths.adaptive_selection_manifest),
+            {"frozen": True, "method": "class_aware_adaptive_threshold_v2"},
+            "adaptive learned ASISM selection",
+        )
+    if "G" in conditions:
+        require_manifest_fields(
+            Path(stage3_cfg.paths.learned_dir) / "learned_selection_manifest.json",
+            {"frozen": True, "method": "fixed_target_ratio_threshold_distillation_baseline_v1"},
+            "fixed-ratio learned ASISM baseline",
+        )
     seeds = list(stage4_cfg.seeds)
     all_results = []
     completed_dir = results_dir / "completed_runs"

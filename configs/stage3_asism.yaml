@@ -16,6 +16,30 @@ paths:
   fold_manifest: ${paths.synthetic_root}/asism/asism_patient_folds.json
   selected_manifest: ${paths.synthetic_root}/asism/selected_manifest.jsonl
   rejected_log: ${paths.synthetic_root}/asism/rejected_log.jsonl
+  learned_dir: ${paths.synthetic_root}/asism/learned
+  subset_design_report: ${paths.synthetic_root}/asism/learned/subset_design_report.json
+  utility_subsets: ${paths.synthetic_root}/asism/learned/utility_subsets.jsonl
+  utility_results: ${paths.synthetic_root}/asism/learned/utility_results.jsonl
+  learned_selected_manifest: ${paths.synthetic_root}/asism/learned/selected_manifest.jsonl
+  adaptive_selected_manifest: ${paths.synthetic_root}/asism/learned/adaptive_selected_manifest.jsonl
+  adaptive_selection_manifest: ${paths.synthetic_root}/asism/learned/adaptive_selection_manifest.json
+  learned_rejected_log: ${paths.synthetic_root}/asism/learned/rejected_log.jsonl
+  threshold_contexts: ${paths.synthetic_root}/asism/learned/threshold_contexts.jsonl
+  threshold_candidate_evaluations: ${paths.synthetic_root}/asism/learned/threshold_candidate_evaluations.jsonl
+  proxy_verification_plan: ${paths.synthetic_root}/asism/learned/proxy_verification_plan.json
+  # Written ONLY by 07b, NEVER by 07 — critic-only evaluations and proxy measurements are separate,
+  # immutable files.
+  threshold_proxy_measurements: ${paths.synthetic_root}/asism/learned/threshold_proxy_measurements.jsonl
+  # Verified (official) and exploratory training targets are SEPARATE files, not one file with a
+  # "path" column — a loader that opens the wrong file entirely fails on a missing path, rather than
+  # a loader that reads the right file but forgets to filter by "path" silently mixing them.
+  threshold_training_targets_verified: ${paths.synthetic_root}/asism/learned/threshold_training_targets_verified.jsonl
+  threshold_training_targets_exploratory: ${paths.synthetic_root}/asism/learned/threshold_training_targets_exploratory.jsonl
+  official_threshold_checkpoint: ${paths.synthetic_root}/asism/learned/official_threshold_model.pt
+  exploratory_threshold_checkpoint: ${paths.synthetic_root}/asism/learned/exploratory_threshold_model.pt
+  adaptive_threshold_manifest: ${paths.synthetic_root}/asism/learned/adaptive_threshold_manifest.json
+  full_policy_verification_plan: ${paths.synthetic_root}/asism/learned/full_policy_verification_plan.json
+  full_policy_verification_results: ${paths.synthetic_root}/asism/learned/full_policy_verification_results.jsonl
 
 split_namespace: "dev-smoke-v1"
 
@@ -128,3 +152,131 @@ selection:
   min_accepted_per_label: 50
   max_accepted_per_label: 2000
   uncertainty_band_preference: "moderate"   # "any" | "low" | "moderate"
+
+# Learned ASISM is an additional proposed method. It does not replace the weighted baseline above.
+learned_asism:
+  enabled: true
+  feature_columns:
+    - similarity_knn_mean
+    - similarity_top1
+    - similarity_topk_spread
+    - iqa_composite
+    - iqa_sharpness
+    - iqa_contrast_std
+    - uncertainty_mean_std
+    - explainability_region_overlap
+    - agreement_score
+  subset_design:
+    subset_sizes: [250, 500, 1000]
+    total_subsets: 120
+    random_fraction: 0.20
+    single_signal_fraction: 0.30
+    mixed_fraction: 0.50
+    quantile_bins: 3
+    minimum_image_exposures: 3
+    seed: 42
+    # val_pool_fraction_status = provisional_default (see pool_feasibility_report's own field of the
+    # same name, which is what --phase build actually checks). This YAML value is only a starting
+    # point for --phase feasibility; the number that governs --phase build is whatever the
+    # feasibility report most recently computed against the REAL candidate pool. Never edited to
+    # "make the gate pass" after seeing a failing report — the report drives the number, not the
+    # other way around.
+    val_pool_fraction: 0.20
+    # --phase build refuses to run unless the most recent --phase feasibility report (a) matches
+    # this config (config_hash check) and (b) shows zero failures against these thresholds. No
+    # ratio or size is ever adjusted automatically/silently to make a failing report pass.
+    feasibility_thresholds:
+      min_candidates_per_class: 20
+      min_candidates_per_quantile_band: 20
+      min_val_subsets: 10
+  set_utility_network:
+    image_hidden_dims: [128, 64]
+    utility_hidden_dims: [32]
+    pooling: "mean"
+    epochs: 100
+    batch_size: 8
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-5
+    utility_mse_weight: 1.0
+    pairwise_ranking_weight: 0.5
+    early_stopping_patience: 12
+  ranking_network:
+    hidden_dims: [128, 64, 32]
+    dropout: 0.20
+    epochs: 100
+    batch_size: 128
+    learning_rate: 1.0e-4
+    pairwise_ranking_weight: 0.5
+  threshold_network:
+    # Architecture (AdaptiveThresholdNetwork, trained via supervised distillation in
+    # 08_train_threshold_network.py — NOT the soft-gate end-to-end design; that path was rejected
+    # after review, so no temperature-annealing knobs remain here).
+    class_embedding_dim: 16
+    hidden_dims: [64, 32]
+    dropout: 0.10
+    epochs: 80
+    learning_rate: 1.0e-4
+    # Hard grid search objective (07_build_threshold_contexts.py): objective(t) =
+    # critic_predicted_utility(t) - budget_weight * (selected_count / candidate_count).
+    budget_weight: 0.25
+    min_selected_per_label: 50
+    max_selected_per_label: 2000
+    target_synthetic_to_real_ratio: 1.0
+    # Context generation (07): bootstrap resamples per class, honestly tagged as NOT independent
+    # clinical samples — see bootstrap_class_contexts's docstring.
+    n_bootstrap_contexts_per_class: 25
+    bootstrap_min_fraction: 0.30
+    bootstrap_max_fraction: 1.00
+    t_grid_step: 0.01
+    # Proxy verification candidates (07 plans, 07b executes — NOT run in this pass): critic top-K is
+    # NEVER the only source, or verification would be circular (only ever checking where the critic
+    # already thinks is good). diversify_verification_candidates also adds quantile-spaced
+    # selection-count targets, the two boundary (smallest/largest) candidates, and the OLD
+    # baseline's own ~50%-of-pool operating point.
+    top_k_per_context: 2
+    verification_quantile_fractions: [0.10, 0.30, 0.50, 0.70, 0.90]
+    verification_compute_budget:
+      max_gpu_hours: 20.0
+      hours_per_proxy_run_estimate: 0.15
+    # Full-policy verification (08's plan_full_policy_verification): PLAN ONLY. Trains the ACTUAL
+    # final multi-label selected_manifest for each candidate policy (fixed-ratio-baseline,
+    # hard-proxy-best, network-where-eligible, ...) — its OWN independent GPU budget, separate from
+    # verification_compute_budget above, because it is a distinct, separately-approved production
+    # execution step (08b_verify_full_policy_proxy.py --phase run, not run in this pass).
+    # n_variants/n_seeds are provisional until 08 has run and the real number of policy variants is
+    # known.
+    full_policy_verification:
+      n_variants: 5
+      n_seeds: 3
+      compute_budget:
+        max_gpu_hours: 10.0
+        hours_per_proxy_run_estimate: 0.15
+      finalization:
+        tie_noise_band: 0.002
+        simplicity_order:
+          - fixed_target_ratio_threshold_distillation_baseline_v1
+          - hard_proxy_best_among_verified
+          - adaptive_threshold_network
+          - literal_top_50_percent
+    # Governance (08) — three-way, no other outcome possible:
+    #   ZERO verified TRAIN contexts (regardless of held-out)           -> fixed-ratio baseline
+    #   verified train contexts, but below this minimum on either side  -> hard_proxy_best_among_verified
+    #     (train or image-disjoint held-out)
+    #   >= this minimum on BOTH sides AND acceptance_criteria pass      -> adaptive_threshold_network
+    min_verified_contexts_per_class: 3
+    # Frozen BEFORE any held-out evaluation is run (08's freeze_acceptance_criteria) — tagged
+    # provisional_pre_registered_defaults and NEVER adjusted after seeing results. Units/definitions
+    # for each key are in scripts/asism/learned.py's CRITERIA_DEFINITIONS.
+    acceptance_criteria:
+      critic_proxy_median_spearman_min: 0.30
+      median_critic_predicted_utility_regret_max: 0.01
+      threshold_stability_std_max: 0.05
+  safety:
+    reject_invalid_iqa: true
+    reject_near_duplicates: true
+  # Compute-budget gate for 04b_evaluate_utility_subsets.py, mirroring tuning.compute_budget above
+  # but scoped independently: this search evaluates subset_design.total_subsets recipes, not the
+  # weighted baseline's coarse/shortlist trial count.
+  compute_budget:
+    max_gpu_hours: 20.0
+    hours_per_proxy_run_estimate: 0.15

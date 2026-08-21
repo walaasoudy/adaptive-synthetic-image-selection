@@ -44,12 +44,15 @@ from scripts.utils.metrics import (  # noqa: E402
     patient_level_bootstrap,
 )
 
-TAG_PATTERN = re.compile(r"^(?P<condition>[A-E])(?:_draw(?P<draw>\d+))?_seed(?P<seed>\d+)$")
+TAG_PATTERN = re.compile(r"^(?P<condition>[A-G])(?:_draw(?P<draw>\d+))?_seed(?P<seed>\d+)$")
 
 # The CONFIRMATORY family, fixed before results are seen (§8.1/§8.2). Everything else is
 # exploratory and corrected with FDR.
-CONFIRMATORY_COMPARISONS = [("C", "D")]
-SECONDARY_COMPARISONS = [("A", "B"), ("A", "C"), ("A", "E"), ("B", "C")]
+CONFIRMATORY_COMPARISONS = [("F", "C"), ("F", "G"), ("C", "D")]
+SECONDARY_COMPARISONS = [
+    ("A", "B"), ("A", "C"), ("A", "F"), ("A", "G"), ("A", "E"),
+    ("B", "C"), ("B", "F"), ("B", "G")
+]
 
 
 def parse_tag(tag: str) -> dict | None:
@@ -256,7 +259,7 @@ def main() -> int:
     report = {
         "run_dir": str(run_dir),
         "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary disease labels",
-        "primary_comparison": "C vs D",
+        "primary_comparison": "F vs C (learned vs weighted); C vs D is the matched-random control",
         "n_eval_rows": len(reference),
         "n_eval_patients": int(pd.Series(patient_ids).nunique()),
         "per_condition": per_condition_metrics,

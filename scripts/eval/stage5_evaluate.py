@@ -6,7 +6,7 @@ Refuses to run unless every precondition in §8 holds:
   - the recorded split hash matches the current manifest;
   - the frozen experiment-protocol manifest exists (Stage 4);
   - the ASISM freeze manifest exists (Stage 3);
-  - the required A-E/D checkpoints exist, with their hashes recorded;
+  - the required A-G/D checkpoints exist, with their hashes recorded;
   - the classification-threshold policy is frozen;
   - an explicit --final-eval-run-id is supplied.
 
@@ -187,6 +187,26 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
         if asism.get("code_identity_sha256") != expected_code_identity:
             failures.append("ASISM frozen manifest code identity differs from current source tree")
         evidence["asism_surviving_signals"] = asism.get("surviving_signals")
+
+    # F is the finalized adaptive selector; G preserves the fixed-ratio learned baseline.
+    if "F" in list(stage4_cfg.get("conditions", [])):
+        learned_path = Path(stage3_cfg.paths.adaptive_selection_manifest)
+        if not learned_path.is_file():
+            failures.append(f"adaptive learned ASISM selection manifest missing: {learned_path}")
+        else:
+            learned = read_json(learned_path)
+            if not learned.get("frozen") or learned.get("method") != "class_aware_adaptive_threshold_v2":
+                failures.append("adaptive learned ASISM selection manifest is not a compatible frozen artifact")
+            evidence["learned_asism_manifest_hash"] = sha256_file(learned_path)
+    if "G" in list(stage4_cfg.get("conditions", [])):
+        baseline_path = Path(stage3_cfg.paths.learned_dir) / "learned_selection_manifest.json"
+        if not baseline_path.is_file():
+            failures.append(f"fixed-ratio learned baseline manifest missing: {baseline_path}")
+        else:
+            baseline = read_json(baseline_path)
+            if not baseline.get("frozen") or baseline.get("method") != "fixed_target_ratio_threshold_distillation_baseline_v1":
+                failures.append("fixed-ratio learned baseline manifest is incompatible")
+            evidence["fixed_ratio_learned_manifest_hash"] = sha256_file(baseline_path)
 
     # 5. Required checkpoints.
     results_path = Path(stage4_cfg.paths.results_dir) / "stage4_training_results.json"
