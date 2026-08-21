@@ -21,7 +21,6 @@ Two phases:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -30,8 +29,9 @@ from omegaconf import OmegaConf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.asism.learned import (  # noqa: E402
-    build_role_conditioned_subsets, pool_feasibility_report, split_image_pool, verify_built_subsets,
+    active_feature_columns, build_role_conditioned_subsets, pool_feasibility_report, split_image_pool, verify_built_subsets,
 )
+from scripts.asism.candidate_pool import load_candidate_pool  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.artifact_contracts import stage2_paths, stage3_paths  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
@@ -78,22 +78,6 @@ def preflight_check_candidate_pool_inputs(cfg) -> None:
         )
 
 
-def load_candidate_pool(cfg):
-    """Reuse the strict signal merge/provenance gates from the weighted baseline (03)."""
-    script = Path(__file__).with_name("03_tune_freeze_select.py")
-    spec = importlib.util.spec_from_file_location("baseline_asism", script)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    gonogo = module.read_json(Path(cfg.paths.gonogo_report))
-    merged = module.load_merged_scores(cfg, list(gonogo["surviving_signals"]))
-    intended = module.build_intended_lookup(cfg)
-    merged["__stratum"] = [
-        "|".join(sorted(label for label, value in intended.get(str(image_id), {}).items() if int(value) == 1))
-        or "__no_finding__" for image_id in merged["image_id"]
-    ]
-    return merged, intended
-
-
 def subset_design_config_hash(design) -> str:
     """Hashes only the fields that determine feasibility, so an unrelated config edit elsewhere in
     the file doesn't spuriously invalidate a still-valid feasibility report."""
@@ -131,10 +115,11 @@ def main() -> int:
     preflight_check_candidate_pool_inputs(cfg)
 
     if args.phase == "feasibility":
-        merged, intended = load_candidate_pool(cfg)
+        merged, intended, surviving = load_candidate_pool(cfg)
+        columns = active_feature_columns(list(learned.feature_columns), surviving)
         thresholds = OmegaConf.to_container(design.feasibility_thresholds, resolve=True)
         report = pool_feasibility_report(
-            merged, list(learned.feature_columns), intended, list(PRIMARY_ENDPOINT_LABELS),
+            merged, columns, intended, list(PRIMARY_ENDPOINT_LABELS),
             list(design.subset_sizes), int(design.quantile_bins), val_fraction, int(design.seed),
             int(design.total_subsets), thresholds,
         )
@@ -151,6 +136,8 @@ def main() -> int:
             report["passed"] = False
         report["compute_budget_estimate"] = budget_estimate
         report["config_hash"] = config_hash
+        report["surviving_signals"] = sorted(surviving)
+        report["active_feature_columns"] = columns
         report["git_commit_hash"] = get_git_commit_hash()
 
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,12 +174,18 @@ def main() -> int:
               "and --phase feasibility re-run BEFORE --phase build. No automatic adjustment."
         )
 
-    merged, _ = load_candidate_pool(cfg)
+    merged, _, surviving = load_candidate_pool(cfg)
+    columns = active_feature_columns(list(learned.feature_columns), surviving)
+    if report.get("surviving_signals") != sorted(surviving) or report.get("active_feature_columns") != columns:
+        raise SystemExit(
+            "STALE FEASIBILITY REPORT: Go/No-Go admitted signals changed since feasibility was measured.\n"
+            "Re-run: python scripts/asism/04_build_utility_subsets.py --phase feasibility"
+        )
     train_frame, val_frame = split_image_pool(merged, val_fraction, int(design.seed))
     train_total = round(int(design.total_subsets) * (1 - val_fraction))
     val_total = int(design.total_subsets) - train_total
     records = build_role_conditioned_subsets(
-        train_frame, val_frame, list(learned.feature_columns), train_total, val_total,
+        train_frame, val_frame, columns, train_total, val_total,
         list(design.subset_sizes), float(design.random_fraction),
         float(design.single_signal_fraction), float(design.mixed_fraction),
         int(design.seed), quantile_bins=int(design.quantile_bins),
@@ -212,6 +205,7 @@ def main() -> int:
 
 
 def _load_04b():
+    import importlib.util
     script = Path(__file__).with_name("04b_evaluate_utility_subsets.py")
     spec = importlib.util.spec_from_file_location("utility_subsets_04b", script)
     module = importlib.util.module_from_spec(spec)

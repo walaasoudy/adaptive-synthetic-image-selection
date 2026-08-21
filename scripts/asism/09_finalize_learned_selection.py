@@ -64,8 +64,8 @@ def main() -> int:
     context_builder = _load_neighbor("07_build_threshold_contexts.py", "threshold_context_builder_07")
     verifier = _load_neighbor("08b_verify_full_policy_proxy.py", "full_policy_verifier_08b")
     context_builder.preflight_check_phase1_outputs(cfg)
-    merged, intended = context_builder.load_candidate_pool(cfg)
-    columns = list(cfg.learned_asism.feature_columns)
+    merged, intended, _ = context_builder.load_candidate_pool(cfg)
+    columns = list(read_json(Path(cfg.paths.learned_dir) / "learned_training_manifest.json")["feature_columns"])
     _, ranker, training_manifest = context_builder.load_frozen_models(cfg, columns)
     normalized = context_builder.apply_feature_frame(merged, columns, training_manifest["normalization"])
     with torch.no_grad():

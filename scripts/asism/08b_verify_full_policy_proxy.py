@@ -187,8 +187,8 @@ def main() -> int:
     context_builder = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(context_builder)
     context_builder.preflight_check_phase1_outputs(cfg)
-    merged, intended = context_builder.load_candidate_pool(cfg)
-    columns = list(cfg.learned_asism.feature_columns)
+    merged, intended, _ = context_builder.load_candidate_pool(cfg)
+    columns = list(read_json(Path(cfg.paths.learned_dir) / "learned_training_manifest.json")["feature_columns"])
     _, ranker, training_manifest = context_builder.load_frozen_models(cfg, columns)
     normalized = context_builder.apply_feature_frame(merged, columns, training_manifest["normalization"])
     with torch.no_grad():

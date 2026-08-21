@@ -9,6 +9,7 @@ import torch
 from omegaconf import OmegaConf
 
 from scripts.asism.learned import (
+    active_feature_columns,
     aggregate_hard_proxy_best_threshold,
     apply_feature_frame,
     bootstrap_class_contexts,
@@ -60,6 +61,18 @@ def test_set_utility_is_permutation_invariant():
     model.eval()
     x = torch.randn(1, 5, 3); mask = torch.ones(1, 5, dtype=torch.bool)
     assert torch.allclose(model(x, mask), model(x[:, [3, 1, 4, 0, 2]], mask), atol=1e-6)
+
+
+def test_active_feature_columns_excludes_gonogo_rejected_and_ablation_only_signals():
+    configured = [
+        "similarity_knn_mean", "iqa_composite", "uncertainty_mean_std",
+        "explainability_region_overlap", "agreement_score",
+    ]
+    # Explainability is excluded and uncertainty is ablation-only, so neither
+    # may be required by the primary learned selector's merged feature frame.
+    assert active_feature_columns(configured, ["similarity", "iqa", "agreement"]) == [
+        "similarity_knn_mean", "iqa_composite", "agreement_score",
+    ]
 
 
 def test_soft_gate_and_threshold_shapes():
@@ -300,6 +313,23 @@ def test_pool_feasibility_report_flags_under_sized_val_pool_and_fails_closed():
     # Fracture has zero candidates anywhere: must trip the min_candidates_per_class failure too.
     assert any("Fracture" in reason and "insufficient candidates per class" in reason
               for reason in report["failures"])
+
+
+def test_production_scale_pool_supports_revised_subset_sizes_in_each_val_quantile_band():
+    """~5k generated images leave ~1k validation images, or ~333 per quantile band.
+
+    The revised largest subset (250) must therefore be feasible without replacement;
+    the former 1000-image request was not.
+    """
+    frame = _synthetic_candidate_fixture(5000)
+    intended = {str(image_id): {"Edema": 1} for image_id in frame["image_id"]}
+    report = pool_feasibility_report(
+        frame, ["iqa_composite", "similarity_knn_mean"], intended, ["Edema"],
+        subset_sizes=[100, 200, 250], quantile_bins=3, val_fraction=0.2, seed=42,
+        total_subsets=120, feasibility_thresholds=_DEFAULT_THRESHOLDS,
+    )
+    assert report["passed"] is True
+    assert all("actual subset size below required" not in failure for failure in report["failures"])
 
 
 def test_evaluate_subset_design_feasibility_flags_overlap_as_non_negotiable():
@@ -1074,13 +1104,13 @@ def test_08b_requires_frozen_prevalence_context_and_rejects_empty_policy():
         module.validate_policy_selection("adaptive", {"Edema": 0.5}, [], ["Edema"])
 
 
-def test_stage4_routes_adaptive_and_fixed_ratio_to_separate_conditions():
+def test_stage4_routes_the_thesis_selected_synthetic_condition_to_learned_asism():
     source = (Path(__file__).resolve().parents[1] / "scripts" / "classify" / "01_train_conditions.py").read_text(
         encoding="utf-8"
     )
-    assert 'CONDITIONS = ["A", "B", "C", "D", "E", "F", "G"]' in source
+    assert 'CONDITIONS = ["A", "B", "F"]' in source
     assert 'condition == "F"' in source and 'selector="adaptive"' in source
-    assert 'condition == "G"' in source and 'selector="fixed_ratio"' in source
+    assert 'conditions: [A, B, F]' in (Path(__file__).resolve().parents[1] / "configs" / "stage4_classifier.yaml").read_text(encoding="utf-8")
 
 
 def test_finalizer_never_reads_final_eval_and_publishes_new_adaptive_artifacts():

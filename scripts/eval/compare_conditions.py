@@ -48,11 +48,8 @@ TAG_PATTERN = re.compile(r"^(?P<condition>[A-G])(?:_draw(?P<draw>\d+))?_seed(?P<
 
 # The CONFIRMATORY family, fixed before results are seen (§8.1/§8.2). Everything else is
 # exploratory and corrected with FDR.
-CONFIRMATORY_COMPARISONS = [("F", "C"), ("F", "G"), ("C", "D")]
-SECONDARY_COMPARISONS = [
-    ("A", "B"), ("A", "C"), ("A", "F"), ("A", "G"), ("A", "E"),
-    ("B", "C"), ("B", "F"), ("B", "G")
-]
+CONFIRMATORY_COMPARISONS = [("F", "B")]
+SECONDARY_COMPARISONS = [("A", "B"), ("A", "F")]
 
 
 def parse_tag(tag: str) -> dict | None:
@@ -259,7 +256,7 @@ def main() -> int:
     report = {
         "run_dir": str(run_dir),
         "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary disease labels",
-        "primary_comparison": "F vs C (learned vs weighted); C vs D is the matched-random control",
+        "primary_comparison": "F vs B (Learned ASISM-selected synthetic images vs all synthetic images)",
         "n_eval_rows": len(reference),
         "n_eval_patients": int(pd.Series(patient_ids).nunique()),
         "per_condition": per_condition_metrics,

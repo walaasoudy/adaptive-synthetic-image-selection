@@ -7,7 +7,6 @@ distilled into the requested adaptive network. A hard technical safety gate alwa
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -17,6 +16,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.asism.learned import apply_feature_frame  # noqa: E402
+from scripts.asism.candidate_pool import load_candidate_pool  # noqa: E402
 from scripts.asism.models import AdaptiveThresholdNetwork, MultiObjectiveRankingNetwork  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
@@ -56,11 +56,7 @@ def main() -> int:
     learned_dir = Path(cfg.paths.learned_dir)
     training_manifest = read_json(learned_dir / "learned_training_manifest.json")
 
-    baseline_path = Path(__file__).with_name("03_tune_freeze_select.py")
-    spec = importlib.util.spec_from_file_location("baseline_asism", baseline_path)
-    baseline = importlib.util.module_from_spec(spec); spec.loader.exec_module(baseline)
-    gonogo = baseline.read_json(Path(cfg.paths.gonogo_report))
-    merged = baseline.load_merged_scores(cfg, list(gonogo["surviving_signals"]))
+    merged, intended, _ = load_candidate_pool(cfg)
     columns = list(training_manifest["feature_columns"])
     normalized = apply_feature_frame(merged, columns, training_manifest["normalization"])
     checkpoint = torch.load(learned_dir / "ranking_model.pt", map_location="cpu", weights_only=True)
@@ -70,7 +66,6 @@ def main() -> int:
     with torch.no_grad():
         raw = ranker(torch.tensor(normalized.to_numpy(np.float32))).numpy()
     merged = merged.copy(); merged["learned_ranking_score"] = 1.0 / (1.0 + np.exp(-raw))
-    intended = baseline.build_intended_lookup(cfg)
 
     threshold_cfg = cfg.learned_asism.threshold_network
     contexts, targets, class_ids = [], [], []

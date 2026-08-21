@@ -408,16 +408,34 @@ exposures, interleaving/sampling policy, model seed, dataset/draw ID, config has
 ## 8. Stage 5 — final evaluation — FROZEN
 
 **Primary endpoint:** macro-AUROC over `primary_endpoint_label_set` (§5.2) on `final_eval_heldout`.
-**Primary comparison:** **Condition C vs. Condition D** (D as its across-draw distribution),
-unchanged by the v2 revision note below.
-All other metrics and comparisons are secondary or exploratory.
 
-**v2 revision note (2026-08-21) — provisional pending supervisor confirmation:** with conditions F
-and G added (§7 v2 revision note), the confirmatory family proposed for Holm–Bonferroni correction is
-{C vs. D, F vs. D, F vs. C, F vs. G}; the last three are proposed as confirmatory, not decided —
-`docs/novelty_target_decision.md`'s open governance question over the learned selector (F) covers
-whether it is even accepted as a thesis method, which this correction family assumes. **This must be
-resolved and re-frozen before Stage 4 execution begins**, not decided after seeing Stage 5 results.
+**Primary comparison — UNRESOLVED CONFLICT, must be settled before Stage 4 runs.** This section
+originally froze **C vs. D** as the primary comparison. The implemented analysis code
+(`scripts/eval/compare_conditions.py:51`, and its `primary_comparison` report field) instead declares:
+
+```
+CONFIRMATORY_COMPARISONS = [("F", "C"), ("F", "G"), ("C", "D")]
+primary_comparison = "F vs C (learned vs weighted); C vs D is the matched-random control"
+```
+
+so the code treats **F vs. C** as primary and C vs. D as a control, while this frozen document says
+C vs. D is primary. **The two disagree.** Whichever is chosen must be recorded here and in the code
+before any Stage 4 run, and never changed after Stage 5 results are seen.
+
+**v2 revision note (2026-08-21), corrected 2026-08-21:** an earlier version of this note proposed a
+confirmatory family of {C vs. D, F vs. D, F vs. C, F vs. G}. That was wrong on one point: the
+implemented family deliberately omits **F vs. D**, and omitting it is correct. Condition D's draws
+are matched to **condition C's** selection profile and are drawn from the *complement* of C's
+selection (`01_train_conditions.py`, `target_profile_from_condition_C`). D is therefore not a valid
+matched control for F: if F's selection differs from C's in size or label mix, an F-vs-D difference
+is confounded by how much synthetic data each condition received, which is exactly the confound D
+exists to remove for C. **Consequence: condition F currently has no matched-random control of its
+own.** Either accept that F's claims rest on F vs. C and F vs. G (both same-selector-family
+comparisons), or add a second matched-draw condition matched to F — a protocol change requiring
+re-freezing, additional runs, and supervisor approval.
+
+Whether the learned selector (F) is accepted as a thesis method at all remains open in
+`docs/novelty_target_decision.md`; this correction family assumes it is.
 
 **Statistics:** patient-level paired bootstrap for effect sizes and 95% CIs. **Holm–Bonferroni** for
 the pre-specified confirmatory family; **Benjamini–Hochberg FDR** for exploratory analyses, labelled

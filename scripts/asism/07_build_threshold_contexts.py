@@ -124,10 +124,10 @@ def main() -> int:
     baseline = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(baseline)
     baseline.preflight_check_candidate_pool_inputs(cfg)
-    merged, intended = baseline.load_candidate_pool(cfg)
+    merged, intended, _ = baseline.load_candidate_pool(cfg)
 
     tn_cfg = cfg.learned_asism.threshold_network
-    columns = list(cfg.learned_asism.feature_columns)
+    columns = list(read_json(Path(cfg.paths.learned_dir) / "learned_training_manifest.json")["feature_columns"])
     critic, ranker, training_manifest = load_frozen_models(cfg, columns)
     ranking_checkpoint_hash = sha256_file(Path(cfg.paths.learned_dir) / "ranking_model.pt")
     critic_checkpoint_hash = sha256_file(Path(cfg.paths.learned_dir) / "set_utility_model.pt")

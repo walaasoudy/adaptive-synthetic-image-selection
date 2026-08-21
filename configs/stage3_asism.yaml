@@ -167,7 +167,12 @@ learned_asism:
     - explainability_region_overlap
     - agreement_score
   subset_design:
-    subset_sizes: [250, 500, 1000]
+    # The validation image pool is 20% and a single-signal subset draws from
+    # one of three quantile bands without replacement.  With the Stage-2
+    # quota's expected ~5k candidates, 1000 would require ~15k candidates.
+    # These sizes keep the largest single-band validation draw feasible while
+    # retaining small/medium/large utility-set variation.
+    subset_sizes: [100, 200, 250]
     total_subsets: 120
     random_fraction: 0.20
     single_signal_fraction: 0.30

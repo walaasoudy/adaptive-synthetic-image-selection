@@ -1,4 +1,4 @@
-# Stage 4 — conditions A-G (docs/stages2_to_5_plan.md §7). FROZEN protocol.
+# Stage 4 — thesis conditions A/B/F. FROZEN protocol.
 #
 # Architecture, initialization, label policy, uncertainty policy, optimizer family, batch size,
 # augmentation, checkpoint-selection rule, validation rule, and threshold-selection rule are
@@ -15,7 +15,7 @@ paths:
   d_matching_policy_manifest: ${paths.project_root}/outputs/stage4/frozen_d_matching_policy.json
 
 split_namespace: "dev-smoke-v1"
-conditions: [A, B, C, D, E, F, G]
+conditions: [A, B, F]
 
 model:
   architecture: "densenet121"

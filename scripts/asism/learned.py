@@ -13,6 +13,70 @@ from scripts.utils.manifest import hash_dict
 from scripts.utils.splits import load_split
 
 
+# A feature is eligible only when the Go/No-Go decision admits the signal that
+# produced it.  Keeping this mapping here makes the learned selector obey the
+# same signal-governance contract as the weighted selector.
+FEATURE_COLUMNS_BY_SIGNAL = {
+    "similarity": {"similarity_knn_mean", "similarity_top1", "similarity_topk_spread"},
+    "iqa": {"iqa_composite", "iqa_sharpness", "iqa_contrast_std"},
+    "uncertainty": {"uncertainty_mean_std"},
+    "explainability": {"explainability_region_overlap"},
+    "agreement": {"agreement_score"},
+}
+
+
+def active_feature_columns(configured_columns: list[str], surviving_signals: list[str]) -> list[str]:
+    """Return configured learned-ASISM features admitted by Go/No-Go.
+
+    ``ablation_only`` and ``exclude`` signals are deliberately absent from the
+    merged score frame, so they must also be absent from every learned model.
+    The returned ordered list is frozen in the learned-training manifest and
+    reused by all downstream learned-ASISM stages.
+    """
+    surviving = set(surviving_signals)
+    unknown = surviving - set(FEATURE_COLUMNS_BY_SIGNAL)
+    if unknown:
+        raise ValueError(f"Unknown Go/No-Go signal(s): {sorted(unknown)}")
+
+    # A configured column that maps to NO known signal must be a hard error, never a silent drop.
+    # Silently dropping it would let a typo, or a genuinely new score column added to
+    # learned_asism.feature_columns without registering it above, shrink the learned model's input
+    # space with no trace in any manifest — the model would train on fewer features than the config
+    # says it uses, and nothing downstream could detect it.
+    owned = {column for columns in FEATURE_COLUMNS_BY_SIGNAL.values() for column in columns}
+    unmapped = [column for column in configured_columns if column not in owned]
+    if unmapped:
+        raise ValueError(
+            f"learned_asism.feature_columns contains column(s) not registered in "
+            f"FEATURE_COLUMNS_BY_SIGNAL: {unmapped}. Add each one to its producing signal there "
+            "(so Go/No-Go governs it) or remove it from the config — it cannot be admitted to a "
+            "learned model without a signal owner."
+        )
+
+    active = [
+        column for column in configured_columns
+        if any(column in columns and signal in surviving for signal, columns in FEATURE_COLUMNS_BY_SIGNAL.items())
+    ]
+    if not active:
+        raise ValueError("Go/No-Go admitted no learned-ASISM feature columns; learned ASISM cannot train.")
+    return active
+
+
+def contributing_signals(active_columns: list[str]) -> list[str]:
+    """Which Go/No-Go signals actually feed a given active feature set.
+
+    Recorded in the learned-training manifest so the §4.6 `reduced_variant` judgement (fewer than
+    three admitted signals -> the selector is reported as an ablation/alternative, not the primary
+    method) can be made for the LEARNED selector too, not just the weighted one. A
+    'Multi-Objective Ranking Network' fed by one surviving signal is still runnable, but it is no
+    longer multi-objective, and the manifest must say so rather than let the name imply otherwise.
+    """
+    return sorted(
+        signal for signal, columns in FEATURE_COLUMNS_BY_SIGNAL.items()
+        if columns & set(active_columns)
+    )
+
+
 def safe_feature_frame(frame: pd.DataFrame, columns: list[str]) -> tuple[pd.DataFrame, dict]:
     missing = [column for column in columns if column not in frame]
     if missing:

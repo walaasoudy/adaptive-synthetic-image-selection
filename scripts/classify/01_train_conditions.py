@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 4 — train conditions A-G (docs/stages2_to_5_plan.md §7).
+"""Stage 4 — train the thesis conditions A/B/F.
 
     A  real only                    classifier_train
     B  real + ALL synthetic         classifier_train + every Stage 2 image
@@ -47,7 +47,7 @@ from scripts.utils.artifact_contracts import (  # noqa: E402
     require_manifest_fields, stage2_paths, stage3_paths, stage4_paths,
 )
 
-CONDITIONS = ["A", "B", "C", "D", "E", "F", "G"]
+CONDITIONS = ["A", "B", "F"]
 
 
 def load_configs():

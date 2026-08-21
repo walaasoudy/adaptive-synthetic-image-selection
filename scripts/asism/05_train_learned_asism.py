@@ -15,7 +15,6 @@ on and what it is validated on, and gives the ranking network the same disjoint 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import math
 import sys
@@ -27,11 +26,12 @@ import torch
 from omegaconf import OmegaConf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.asism.learned import read_jsonl, safe_feature_frame, validate_utility_results  # noqa: E402
+from scripts.asism.learned import active_feature_columns, contributing_signals, read_jsonl, safe_feature_frame, validate_utility_results  # noqa: E402
+from scripts.asism.candidate_pool import load_candidate_pool  # noqa: E402
 from scripts.asism.models import MultiObjectiveRankingNetwork, SetUtilityNetwork, pairwise_ranking_loss  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
-from scripts.utils.manifest import hash_dict, sha256_file, write_frozen_json  # noqa: E402
+from scripts.utils.manifest import hash_dict, read_json, sha256_file, write_frozen_json  # noqa: E402
 
 
 def padded_batch(records, feature_lookup, device):
@@ -244,12 +244,15 @@ def main() -> int:
     result_frame = validate_utility_results(subsets, results)
     utility = dict(zip(result_frame.subset_id, result_frame.utility_delta))
 
-    baseline_path = Path(__file__).with_name("03_tune_freeze_select.py")
-    spec = importlib.util.spec_from_file_location("baseline_asism", baseline_path)
-    baseline = importlib.util.module_from_spec(spec); spec.loader.exec_module(baseline)
-    gonogo = baseline.read_json(Path(cfg.paths.gonogo_report))
-    merged = baseline.load_merged_scores(cfg, list(gonogo["surviving_signals"]))
-    columns = list(cfg.learned_asism.feature_columns)
+    merged, _, surviving = load_candidate_pool(cfg)
+    columns = active_feature_columns(list(cfg.learned_asism.feature_columns), surviving)
+    design_report = read_json(Path(cfg.paths.subset_design_report))
+    if design_report.get("surviving_signals") != sorted(surviving) or \
+            design_report.get("active_feature_columns") != columns:
+        raise SystemExit(
+            "UPSTREAM GATE: utility subsets were designed for a different Go/No-Go feature set. "
+            "Re-run 04_build_utility_subsets.py --phase feasibility and --phase build before training."
+        )
     normalized, normalization = safe_feature_frame(merged, columns)
     lookup = {str(image_id): row.to_numpy(np.float32) for image_id, (_, row) in zip(merged.image_id, normalized.iterrows())}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -281,8 +284,19 @@ def main() -> int:
         for image_id, target in sorted(val_targets_raw.items()):
             handle.write(json.dumps({"image_id": image_id, "marginal_utility": target,
                                      "exposures": val_exposures[image_id], "role": "val"}) + "\n")
+    signals_used = contributing_signals(columns)
     manifest = {"schema_version": 1, "method": "set_utility_to_marginal_ranking_v1", "frozen": True,
                 "feature_columns": columns, "normalization": normalization,
+                "contributing_signals": signals_used,
+                # Mirrors 02_gonogo.py's asism_variant_status rule for the WEIGHTED selector, applied
+                # here to the learned one: a ranking network fed by fewer than three admitted signals
+                # is reported as an ablation/alternative, not as the primary method (§4.6).
+                "learned_variant_status": (
+                    "primary" if len(signals_used) >= 3 else
+                    f"reduced_variant — only {len(signals_used)} signal(s) ({signals_used}) survived "
+                    "Go/No-Go and feed the ranking network; report this selector as an "
+                    "ablation/alternative rather than the primary method (§4.6)"
+                ),
                 "utility_definition": "augmented_macro_auroc-real_only_macro_auroc",
                 "n_subsets": len(subsets), "n_train_subsets": len(train_subsets), "n_val_subsets": len(val_subsets),
                 "n_rank_targets": len(train_targets),

@@ -44,7 +44,7 @@ from scripts.asism.models import AdaptiveThresholdNetwork  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
-from scripts.utils.manifest import sha256_file, write_frozen_json  # noqa: E402
+from scripts.utils.manifest import read_json, sha256_file, write_frozen_json  # noqa: E402
 
 
 def train_threshold_network(model, targets: list[dict], device, epochs: int, learning_rate: float):
@@ -196,8 +196,8 @@ def main() -> int:
     context_builder = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(context_builder)
     context_builder.preflight_check_phase1_outputs(cfg)
-    merged, _ = context_builder.load_candidate_pool(cfg)
-    columns = list(cfg.learned_asism.feature_columns)
+    merged, _, _ = context_builder.load_candidate_pool(cfg)
+    columns = list(read_json(Path(cfg.paths.learned_dir) / "learned_training_manifest.json")["feature_columns"])
     critic, ranker, training_manifest = context_builder.load_frozen_models(cfg, columns)
     normalized = context_builder.apply_feature_frame(merged, columns, training_manifest["normalization"])
     with torch.no_grad():
