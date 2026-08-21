@@ -1265,3 +1265,37 @@ def test_contributing_signals_and_primary_vs_reduced_variant_threshold():
         "primary" if len(contributing_signals(two_signals)) >= 3 else "reduced_variant"
     )
     assert status_at_two == "reduced_variant"
+
+
+def test_set_seed_makes_network_initialization_reproducible():
+    """Regression test for the 2026-08-21 bug: 05/06/08's training scripts never called
+    scripts.utils.seed.set_seed(), so torch's global RNG (weight init, dropout) was left
+    unseeded — identical configs produced different models every run, and this was confirmed to
+    occasionally degenerate 06_learn_thresholds_select.py into selecting ZERO images. This proves
+    the mechanism the fix relies on: set_seed(same_seed) before construction must make two
+    freshly-built networks start identical; without the fix (skip set_seed), they almost certainly
+    would not."""
+    from scripts.utils.seed import set_seed
+
+    def fresh_weights(seed):
+        set_seed(seed)
+        set_utility = SetUtilityNetwork(9, (128, 64), (32,))
+        ranker = MultiObjectiveRankingNetwork(9, (128, 64, 32), dropout=0.2)
+        threshold = AdaptiveThresholdNetwork(11, 10, embedding_dim=16, hidden=(64, 32), dropout=0.1)
+        return [p.detach().clone() for p in set_utility.parameters()], \
+               [p.detach().clone() for p in ranker.parameters()], \
+               [p.detach().clone() for p in threshold.parameters()]
+
+    set_utility_a, ranker_a, threshold_a = fresh_weights(42)
+    set_utility_b, ranker_b, threshold_b = fresh_weights(42)
+
+    for a, b in zip(set_utility_a, set_utility_b):
+        assert torch.equal(a, b)
+    for a, b in zip(ranker_a, ranker_b):
+        assert torch.equal(a, b)
+    for a, b in zip(threshold_a, threshold_b):
+        assert torch.equal(a, b)
+
+    # Different seeds must NOT coincidentally match (sanity check that this test can actually fail).
+    set_utility_c, _, _ = fresh_weights(43)
+    assert any(not torch.equal(a, c) for a, c in zip(set_utility_a, set_utility_c))

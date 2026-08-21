@@ -45,6 +45,7 @@ from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
 from scripts.utils.manifest import read_json, sha256_file, write_frozen_json  # noqa: E402
+from scripts.utils.seed import set_seed  # noqa: E402
 
 
 def train_threshold_network(model, targets: list[dict], device, epochs: int, learning_rate: float):
@@ -176,6 +177,9 @@ def main() -> int:
     namespace = args.namespace or str(cfg.split_namespace)
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths: cfg.paths[key] = str(value)
+    # BUG FIXED 2026-08-21: this script never seeded torch's global RNG at all — see the identical
+    # fix and its rationale in 05_train_learned_asism.py.
+    set_seed(int(cfg.learned_asism.subset_design.seed))
 
     contexts_path = Path(cfg.paths.threshold_contexts)
     evaluations_path = Path(cfg.paths.threshold_candidate_evaluations)

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -200,6 +201,25 @@ def require(path: Path, label: str) -> None:
     print(f"  validated {label}: {path}", flush=True)
 
 
+def reset_prior_run(workspace: Path) -> None:
+    """Delete this script's own output from any earlier run before rebuilding the fixture.
+
+    Every artifact under here (04's utility_subsets.jsonl, 06's selected_manifest.jsonl, ...) is
+    written with mode "x" (exclusive create) by production code — a deliberate, correct guard
+    against silently overwriting a real result. That guard makes THIS script fail with
+    FileExistsError on every rerun unless it clears its own prior output first: the fixture is
+    entirely synthetic and rebuilt fresh every invocation, so there is nothing here worth
+    preserving between runs, unlike a real production selected_manifest.jsonl.
+    """
+    target = workspace / "data" / "chexpert" / "synthetic" / NAMESPACE
+    if not target.is_dir():
+        return
+    if NAMESPACE not in str(target) or "smoke" not in str(target).lower():
+        raise SystemExit(f"REFUSING to delete a path that doesn't look like a smoke fixture: {target}")
+    shutil.rmtree(target)
+    print(f"Cleared prior run's fixture output: {target}", flush=True)
+
+
 def main() -> int:
     workspace = REPO / "outputs" / "smoke" / NAMESPACE
     if not (workspace / "SMOKE_ONLY.json").is_file():
@@ -207,6 +227,7 @@ def main() -> int:
             "Run `python scripts/smoke/run_smoke_pipeline.py --phase local` first (builds the "
             "fixture splits this script's Stage-2 fixture is layered on top of)."
         )
+    reset_prior_run(workspace)
     env = {
         **os.environ, "PROJECT_ROOT": str(workspace),
         # Reuses the SAME overlay as run_smoke_pipeline.py (proven to resolve split/namespace paths
