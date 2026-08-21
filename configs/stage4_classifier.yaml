@@ -35,8 +35,8 @@ training:
   sampling_policy: "shuffled_concat"   # recorded per run; identical across conditions
   augmentation: "none"                 # horizontal flip is forbidden: it inverts CXR anatomy
 
-# FROZEN seed policy (§7): A/B/C/E get 3 seeds each; EVERY D draw gets the same 3 seeds.
-# Total runs = 4*3 + 5*3 = 27.
+# FROZEN seed policy (§7, v2 revision note 2026-08-21): A/B/C/E/F/G get 3 seeds each; EVERY D draw
+# gets the same 3 seeds. Total runs = 6*3 + 5*3 = 33 (corrected from the pre-F/G count of 27).
 seeds: [42, 43, 44]
 
 condition_d:

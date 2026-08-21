@@ -103,7 +103,7 @@ class CXRRecordDataset:
     """Multi-label CXR dataset over an explicit record list.
 
     Each record is {"image_path": str, "labels": {label: raw_value}, "is_synthetic": bool}. Keeping
-    real and synthetic rows in one uniform record type is what lets conditions A-E differ only by
+    real and synthetic rows in one uniform record type is what lets conditions A-G differ only by
     which records they are handed, rather than by separate code paths per condition.
     """
 
