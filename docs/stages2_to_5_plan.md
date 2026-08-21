@@ -268,8 +268,9 @@ quota, never whether the floor applies.
 
 ### 4.9 Learned ASISM extension (v4 revision note, 2026-08-21) — resolves `docs/novelty_target_decision.md`
 
-**This is ASISM as the thesis defines it** — the four scoring signals (§4.1–§4.5) feeding the two
-novel learned components, "Multi-Objective Ranking Network (Novel)" and "Adaptive Threshold Learning
+**This is ASISM as the thesis defines it** — the **five** scoring signals (§4.1 similarity, §4.2
+IQA, §4.3 uncertainty, §4.4 explainability, §4.5 intended-label agreement) feeding the two novel
+learned components, "Multi-Objective Ranking Network (Novel)" and "Adaptive Threshold Learning
 (Novel)". It implements **Option 1** of `docs/novelty_target_decision.md` (pre-registered weakly
 supervised set-utility learning).
 

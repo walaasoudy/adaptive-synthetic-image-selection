@@ -18,6 +18,7 @@ from scripts.asism.learned import (
     class_aware_context_vector,
     choose_full_policy,
     compute_verified_context_counts,
+    contributing_signals,
     critic_proxy_correlation_per_class,
     determine_per_class_official_method,
     diversify_verification_candidates,
@@ -1172,7 +1173,7 @@ def test_07b_phase_run_with_confirmation_flag_reaches_the_next_real_gate(monkeyp
 
 
 def test_marginal_targets_are_size_normalized_across_subset_sizes():
-    """The same image, with the same deviation from its subset mean, must get the same marginal
+    r"""The same image, with the same deviation from its subset mean, must get the same marginal
     target whether it sat in a small subset or a large one.
 
     Regression test for the 1/(n-1) size bias: SetUtilityNetwork pools by MEAN, so the raw
@@ -1230,3 +1231,37 @@ def test_marginal_targets_are_size_normalized_across_subset_sizes():
     )
     assert exposures[probe] == 2
     assert combined[probe] == pytest.approx((99 / 100 + 249 / 250) / 2, rel=1e-6)
+
+
+def test_active_feature_columns_rejects_unmapped_column():
+    configured = [
+        "similarity_knn_mean", "iqa_composite", "agreement_score", "totally_unregistered_column",
+    ]
+    with pytest.raises(ValueError, match="not registered in FEATURE_COLUMNS_BY_SIGNAL"):
+        active_feature_columns(configured, ["similarity", "iqa", "agreement"])
+
+
+def test_contributing_signals_and_primary_vs_reduced_variant_threshold():
+    """Mirrors 02_gonogo.py's >=3-signals-survive rule for the LEARNED selector (05's
+    learned_variant_status). 3 signals is the primary/reduced_variant boundary: >=3 is primary,
+    <3 is reduced_variant — verified on both sides so the boundary itself, not just its existence,
+    is covered (the 01b CPU integration smoke only ever exercises the 4-signal case)."""
+    configured = [
+        "similarity_knn_mean", "similarity_top1", "similarity_topk_spread",
+        "iqa_composite", "iqa_sharpness", "iqa_contrast_std",
+        "uncertainty_mean_std", "explainability_region_overlap", "agreement_score",
+    ]
+
+    three_signals = active_feature_columns(configured, ["similarity", "iqa", "agreement"])
+    assert contributing_signals(three_signals) == ["agreement", "iqa", "similarity"]
+    status_at_three = (
+        "primary" if len(contributing_signals(three_signals)) >= 3 else "reduced_variant"
+    )
+    assert status_at_three == "primary"
+
+    two_signals = active_feature_columns(configured, ["similarity", "iqa"])
+    assert contributing_signals(two_signals) == ["iqa", "similarity"]
+    status_at_two = (
+        "primary" if len(contributing_signals(two_signals)) >= 3 else "reduced_variant"
+    )
+    assert status_at_two == "reduced_variant"

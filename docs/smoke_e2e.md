@@ -89,22 +89,45 @@ outputs. These are operational estimates, not measured production costs.
 STOP if any artifact gate fails, if a path contains `production`, if the workspace lacks
 `SMOKE_ONLY.json`, if pilot review fails, or if the orchestrator attempts to open real thesis data.
 
+## Learned ASISM CPU integration smoke (04 → 05 → 06)
+
+```bash
+python scripts/smoke/run_smoke_pipeline.py --phase local   # builds the split/caption fixture this needs
+python scripts/smoke/01b_learned_asism_cpu_smoke.py
+```
+
+CPU-only, no SDXL, under a minute. Fabricates 900 synthetic candidate images (label vectors only —
+no JPEGs) and four of the five score signals (`explainability` is deliberately omitted), then runs
+the **real** `04_build_utility_subsets.py`, `05_train_learned_asism.py`, and
+`06_learn_thresholds_select.py` as subprocesses against that fixture, with `utility_results.jsonl`
+fabricated (never a real proxy-classifier measurement) so `05` has something to train against
+without a GPU. Explicitly verifies:
+
+- Go/No-Go feature removal: `active_feature_columns()` narrows the ranking network's inputs to the
+  4 surviving signals rather than crashing (the bug fixed 2026-08-21) or silently keeping the 5th.
+- `contributing_signals` and `learned_variant_status` in the training manifest correctly report
+  4 signals / `"primary"` (the primary-vs-`reduced_variant` boundary itself is unit-tested in
+  `tests/test_learned_asism.py`, not here).
+- Train/val image pools are disjoint (`image_overlap_fraction == 0.0`).
+- A ranking-model checkpoint and a non-empty selected-images manifest are produced.
+
 ## Scientific limitations
 
 This run demonstrates software connectivity only. It does not validate medical quality,
-statistical power, rare-label support, or thesis outcomes.
+statistical power, rare-label support, or thesis outcomes. Nothing under this heading — including
+the learned-ASISM CPU smoke above — is scientific evidence about ASISM's selection quality.
 
-**COVERAGE GAP — this lane does not exercise the thesis's novel contribution.** The Multi-Objective
-Ranking Network and Adaptive Threshold Learning *are* implemented (`scripts/asism/04`–`09`,
-`docs/stages2_to_5_plan.md` §4.9), but this pipeline stops after Go/No-Go and jumps straight to
-Stage 4 with `conditions: [A, B]` (`configs/smoke_e2e.yaml`). It therefore never runs stages
-`04`–`09`, never produces `adaptive_selected_manifest`, and never trains **condition F** — so the
-thesis's primary comparison (F vs. B) is not exercised end to end anywhere.
+**REMAINING COVERAGE GAP.** The GPU-path table above stops after Go/No-Go and trains only
+`conditions: [A, B]` (`configs/smoke_e2e.yaml`); it does not run `07`–`09` or train **condition F**.
+Combined with the CPU tier above, current coverage is:
 
-The reason is fixture size, not a missing implementation: the fixture generates ~4 synthetic images,
-while `04 --phase feasibility` legitimately requires enough candidates to fill three quantile bands
-in two disjoint image pools. Closing the gap needs a larger synthetic fixture plus a
-`learned_asism` block in `configs/smoke_e2e.yaml` scaled to it. Until then, the learned components
-are covered by unit tests (`tests/test_learned_asism.py`, 85 tests) but have **no end-to-end
-software-connectivity evidence**, and the "END-TO-END SMOKE COMPLETE" message should be read as
-"Stages 1–5 for conditions A and B".
+| Tier | Covers | Status |
+|---|---|---|
+| Unit tests | Every learned-ASISM function in isolation | ✅ `tests/test_learned_asism.py`, 88 tests |
+| CPU integration smoke | `04` → `05` → `06` connect; Go/No-Go feature removal | ✅ `01b_learned_asism_cpu_smoke.py` |
+| GPU smoke | `07`–`09`, real (tiny) proxy verification, condition **F** trained | ❌ not built yet |
+
+Closing the last row needs a GPU-smoke extension of the existing RunPod phase: real (tiny) proxy
+classifiers for `04b`/`07b`/`08b` instead of the CPU tier's fabricated numbers, plus
+`conditions: [A, B, F]` in the GPU overlay. Until it exists, condition F and the thesis's primary
+comparison (F vs. B) have never been run end to end anywhere, including in smoke form.

@@ -102,6 +102,32 @@ stage3:
     target_synthetic_to_real_ratio: 0.25
     min_accepted_per_label: 0
     max_accepted_per_label: 4
+  # Sized for the 150-candidate synthetic fixture in
+  # scripts/smoke/01b_learned_asism_cpu_smoke.py — NOT for real production data. Only the fields
+  # that must shrink for a 150-candidate pool are overridden; everything else keeps production's
+  # value (e.g. min_verified_contexts_per_class stays 3 — the fixture's per-class counts clear it).
+  learned_asism:
+    subset_design:
+      subset_sizes: [5, 8, 10]
+      total_subsets: 24
+      quantile_bins: 2
+      minimum_image_exposures: 2
+      feasibility_thresholds:
+        min_candidates_per_class: 5
+        min_candidates_per_quantile_band: 8
+        min_val_subsets: 4
+    set_utility_network:
+      epochs: 3
+      batch_size: 4
+      early_stopping_patience: 3
+    ranking_network:
+      epochs: 3
+      batch_size: 4
+    threshold_network:
+      epochs: 3
+    compute_budget:
+      max_gpu_hours: 1.0
+      hours_per_proxy_run_estimate: 0.01
 
 stage4:
   split_namespace: dev-smoke-v1
