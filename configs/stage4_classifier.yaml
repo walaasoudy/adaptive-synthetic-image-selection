@@ -1,4 +1,4 @@
-# Stage 4 — conditions A-E (docs/stages2_to_5_plan.md §7). FROZEN protocol.
+# Stage 4 — thesis conditions A/B/F. FROZEN protocol.
 #
 # Architecture, initialization, label policy, uncertainty policy, optimizer family, batch size,
 # augmentation, checkpoint-selection rule, validation rule, and threshold-selection rule are
@@ -15,7 +15,7 @@ paths:
   d_matching_policy_manifest: ${paths.project_root}/outputs/stage4/frozen_d_matching_policy.json
 
 split_namespace: "dev-smoke-v1"
-conditions: [A, B, C, D, E]
+conditions: [A, B, F]
 
 model:
   architecture: "densenet121"
@@ -23,9 +23,10 @@ model:
   dropout_p: 0.2
   resolution: 320
 
-# FROZEN fairness protocol (§7.1): equal OPTIMIZER STEPS across A-E and every D draw.
+# FROZEN fairness protocol (§7): equal OPTIMIZER STEPS across every enabled condition and seed.
 # Not equal epochs — at fixed epochs a larger dataset silently receives more gradient updates,
-# conflating "more data" with "more training".
+# conflating "more data" with "more training". This matters most for B (all synthetic) vs F
+# (selected subset), which differ in dataset size by construction.
 training:
   max_steps: 6000
   batch_size: 32
@@ -35,14 +36,20 @@ training:
   sampling_policy: "shuffled_concat"   # recorded per run; identical across conditions
   augmentation: "none"                 # horizontal flip is forbidden: it inverts CXR anatomy
 
-# FROZEN seed policy (§7): A/B/C/E get 3 seeds each; EVERY D draw gets the same 3 seeds.
-# Total runs = 4*3 + 5*3 = 27.
+# FROZEN seed policy (§7, v3 revision note 2026-08-21): every enabled condition gets these 3 seeds.
+# Total runs = 3 conditions x 3 seeds = 9 (superseding the earlier A-G counts of 33 and 27).
 seeds: [42, 43, 44]
 
+# INACTIVE — retained, not deleted. No condition currently consumes this block: the matched-random
+# control was matched to the removed condition C (§7 v3 revision note). It is kept intact because
+# §7.1 identifies re-enabling it — re-pointed at condition F — as the fix for the thesis's one
+# structural gap: without it, an F-over-B gain cannot be attributed to ASISM's ranking rather than
+# to simply using fewer synthetic images. Re-enabling requires supervisor sign-off and n_draws*3
+# additional runs.
 condition_d:
   n_draws: 5                    # FROZEN — exactly five independent matched-random draws
   draw_seeds: [101, 102, 103, 104, 105]
-  # Each draw must match condition C on:
+  # Each draw must match the reference condition on:
   matching:
     match_total_count: true
     match_per_label_marginal: true

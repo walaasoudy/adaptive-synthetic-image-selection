@@ -24,3 +24,8 @@ kagglehub==0.3.8
 tqdm==4.67.1
 python-dotenv==1.0.1
 timm==1.0.19
+
+# Required by the production STOP gate (`python tests/run_all.py`): test_learned_asism.py uses
+# pytest fixtures and cannot self-run, so without pytest on the pod the learned-ASISM suite — the
+# tests covering the thesis's novel contribution — cannot execute at all.
+pytest==8.3.4

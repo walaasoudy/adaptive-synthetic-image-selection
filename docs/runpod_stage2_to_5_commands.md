@@ -11,7 +11,10 @@ and upstream artifact hashes.
 python -m compileall -q scripts tests
 python tests/run_all.py
 python scripts/data/02b_build_sixway_splits.py --help
-python scripts/asism/03_tune_freeze_select.py --help
+python scripts/asism/04_build_utility_subsets.py --help
+python scripts/asism/04b_evaluate_utility_subsets.py --help
+python scripts/asism/05_train_learned_asism.py --help
+python scripts/asism/09_finalize_learned_selection.py --help
 python scripts/classify/01_train_conditions.py --plan-only --namespace dev-smoke-v1
 ```
 
@@ -105,26 +108,67 @@ and every test passes.
    python scripts/classify/00_train_auxiliary_classifier.py --namespace production-thesis-v1 --max-steps 8000
    python scripts/asism/01_compute_signals.py --signal all --namespace production-thesis-v1
    python scripts/asism/02_gonogo.py --namespace production-thesis-v1
-   python scripts/asism/03_tune_freeze_select.py --phase estimate --namespace production-thesis-v1
    ```
 
-   STOP after Go/No-Go and after the compute estimate. Do not begin proxy search until the admitted
-   signals and estimated budget are manually accepted. Proxy tuning is the dominant Stage 3 cost:
+   STOP after Go/No-Go. Review which signals were admitted before continuing: the learned-ASISM
+   feature set is derived from exactly those signals, and every stage below is frozen against them.
+
+   `03_tune_freeze_select.py` (the weighted-score selector) is **not part of the thesis pipeline** —
+   the thesis's ASISM is the full module including the two learned components, so there is no
+   weighted-baseline condition to produce. The script is retained for reference only; do not run it.
+
+6b. Learned ASISM — set-utility model, ranking network, adaptive threshold network
+   (`docs/stages2_to_5_plan.md` §4.9). Each `--phase estimate` prints a GPU-hour estimate against
+   `configs/stage3_asism.yaml`'s compute-budget gates; `--phase run` is refused without the explicit
+   confirmation flag, so nothing here can accidentally launch paid GPU time:
 
    ```bash
-   python scripts/asism/03_tune_freeze_select.py --phase tune --namespace production-thesis-v1
-   python scripts/asism/03_tune_freeze_select.py --phase select --namespace production-thesis-v1
+   python scripts/asism/04_build_utility_subsets.py --phase feasibility --namespace production-thesis-v1
+   python scripts/asism/04_build_utility_subsets.py --phase build --namespace production-thesis-v1
+   python scripts/asism/04b_evaluate_utility_subsets.py --phase estimate --namespace production-thesis-v1
+   python scripts/asism/04b_evaluate_utility_subsets.py --phase run --namespace production-thesis-v1
+   python scripts/asism/05_train_learned_asism.py --namespace production-thesis-v1
+   python scripts/asism/06_learn_thresholds_select.py --namespace production-thesis-v1
    ```
 
-7. Stage 4 plan and 27 classifier runs (GPU; budget before launch, commonly many GPU-hours):
+   STOP at `--phase feasibility`: it fails closed if the candidate pool is too small for the
+   configured `subset_design.subset_sizes`. Roughly **3,750+ usable synthetic candidates** are needed
+   under the current sizes `[100, 200, 250]`. Fix by revising `subset_sizes` (or generating more in
+   Stage 2) and re-running feasibility — never by editing the thresholds to make a failing report
+   pass.
+
+   `06` produces the fixed-ratio learned threshold — an intermediate artifact and ablation
+   reference, not a Stage 4 condition. The adaptive path that feeds condition F continues:
+
+   ```bash
+   python scripts/asism/07_build_threshold_contexts.py --namespace production-thesis-v1
+   python scripts/asism/07b_verify_thresholds_proxy.py --phase estimate --namespace production-thesis-v1
+   python scripts/asism/07b_verify_thresholds_proxy.py --phase run --i-understand-this-trains-real-models --namespace production-thesis-v1
+   python scripts/asism/08_train_threshold_network.py --namespace production-thesis-v1
+   python scripts/asism/08b_verify_full_policy_proxy.py --phase estimate --namespace production-thesis-v1
+   python scripts/asism/08b_verify_full_policy_proxy.py --phase run --i-understand-this-trains-real-models --namespace production-thesis-v1
+   python scripts/asism/09_finalize_learned_selection.py --namespace production-thesis-v1
+   ```
+
+7. Stage 4 plan and 9 classifier runs — the thesis's three arms A/B/F × 3 seeds
+   (`docs/stages2_to_5_plan.md` §7 v3 revision note; GPU; budget before launch, commonly many
+   GPU-hours):
 
    ```bash
    python scripts/classify/01_train_conditions.py --plan-only --namespace production-thesis-v1
    python scripts/classify/01_train_conditions.py --condition all --namespace production-thesis-v1
    ```
 
-   Each run resumes from its optimizer checkpoint; validated completed runs are skipped. Condition D
-   cannot train unless all five deterministic matching reports pass.
+   `--condition all` trains every condition in `configs/stage4_classifier.yaml` → `conditions`
+   (currently `[A, B, F]`). F will hit an `UPSTREAM GATE` error if step 6b was skipped — that is the
+   intended fail-closed behavior, not a bug.
+
+   **Before launching, confirm the §7.1 decision:** F is a strict subset of B, so with only A/B/F
+   there is no matched-random control and an F-over-B gain cannot be attributed to ASISM's ranking
+   rather than to using fewer synthetic images. Adding that control costs `n_draws × 3` more runs.
+   Settle it now — it cannot be added after results are seen.
+
+   Each run resumes from its optimizer checkpoint; validated completed runs are skipped.
 
 8. Register and run the one protected final evaluation (GPU inference), then analyze locally (CPU):
 

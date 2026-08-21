@@ -136,45 +136,102 @@ def patient_label_vectors(frame: pd.DataFrame, labels: list[str] = PRIMARY_ENDPO
     return vectors
 
 
+def patient_label_negative_vectors(
+    frame: pd.DataFrame, labels: list[str] = PRIMARY_ENDPOINT_LABELS
+) -> dict[str, tuple[int, ...]]:
+    """Collapse image labels to deterministic patient-level confident-negative vectors.
+
+    Mirrors patient_level_support's negative definition (scripts/utils/labels.py): a patient is
+    negative for a label if none of their studies is a confident 1 and at least one is a confident
+    0. Kept separate from patient_label_vectors (positive-only) so multilabel_partition_patients can
+    target both sides of the §1.3 support rule without changing prevalence_report's positive-only
+    semantics.
+    """
+    vectors = {}
+    for patient_id, rows in frame.groupby("patient_id", sort=True):
+        vectors[str(patient_id)] = tuple(
+            int(
+                not any(normalize_label(value) == 1 for value in rows[label])
+                and any(normalize_label(value) == 0 for value in rows[label])
+            )
+            for label in labels
+        )
+    return vectors
+
+
 def multilabel_partition_patients(
-    vectors: dict[str, tuple[int, ...]], fractions: dict[str, float], seed: int
+    vectors: dict[str, tuple[int, ...]],
+    neg_vectors: dict[str, tuple[int, ...]],
+    fractions: dict[str, float],
+    seed: int,
 ) -> dict[str, set[str]]:
     """Deterministic greedy iterative multilabel allocation.
 
-    Rarest positive labels are placed first. Each patient goes to the non-full split with the
-    largest normalized deficit for that patient's labels; capacity deficit, then a seeded stable
-    tie rank, break ties. This uses one recorded seed and never retries seeds.
+    Targets both positive AND confident-negative patient counts per label (the §1.3 support rule
+    needs both sides, but only positives drove allocation before this fix). Deficits are normalized
+    by each split's own target so a small split (e.g. a 5% heldout) is judged by how much of its own
+    quota is unmet, not by raw patient counts — otherwise a large split's much bigger absolute target
+    (e.g. gen_train at 60%) always looks more "urgent" and starves rare labels out of the small
+    splits entirely. Rarest labels (by either their positive or negative population) are placed
+    first; each patient goes to the non-full split with the largest normalized deficit for that
+    patient's positive+negative labels, then capacity deficit, then a seeded stable tie rank. This
+    uses one recorded seed and never retries seeds.
     """
     names = list(SPLIT_NAMES)
     patients = sorted(vectors)
     total = len(patients)
+    n_labels = len(next(iter(vectors.values()), ()))
     capacities = {name: int(total * fractions[name]) for name in names}
     capacities[max(fractions, key=fractions.get)] += total - sum(capacities.values())
-    label_totals = [sum(v[j] for v in vectors.values()) for j in range(len(next(iter(vectors.values()), ())))]
-    targets = {name: [label_totals[j] * fractions[name] for j in range(len(label_totals))] for name in names}
+
+    pos_totals = [sum(v[j] for v in vectors.values()) for j in range(n_labels)]
+    neg_totals = [sum(v[j] for v in neg_vectors.values()) for j in range(n_labels)]
+    pos_targets = {name: [pos_totals[j] * fractions[name] for j in range(n_labels)] for name in names}
+    neg_targets = {name: [neg_totals[j] * fractions[name] for j in range(n_labels)] for name in names}
+
     rng = random.Random(seed)
     tie_order = patients[:]
     rng.shuffle(tie_order)
     tie_rank = {patient: rank for rank, patient in enumerate(tie_order)}
+
+    def rarest_signal(patient: str) -> int:
+        counts = [pos_totals[j] for j, value in enumerate(vectors[patient]) if value]
+        counts += [neg_totals[j] for j, value in enumerate(neg_vectors[patient]) if value]
+        return min(counts, default=total + 1)
+
     ordered = sorted(
         patients,
         key=lambda p: (
-            min((label_totals[j] for j, value in enumerate(vectors[p]) if value), default=total + 1),
-            -sum(vectors[p]), tie_rank[p], p,
+            rarest_signal(p),
+            -(sum(vectors[p]) + sum(neg_vectors[p])),
+            tie_rank[p],
+            p,
         ),
     )
     result = {name: set() for name in names}
-    observed = {name: [0] * len(label_totals) for name in names}
+    pos_observed = {name: [0] * n_labels for name in names}
+    neg_observed = {name: [0] * n_labels for name in names}
     for patient in ordered:
-        vector = vectors[patient]
+        pos_vector = vectors[patient]
+        neg_vector = neg_vectors[patient]
         candidates = [name for name in names if len(result[name]) < capacities[name]]
+
         def score(name):
-            label_deficit = sum(max(0.0, targets[name][j] - observed[name][j]) for j, value in enumerate(vector) if value)
+            pos_deficit = sum(
+                max(0.0, (pos_targets[name][j] - pos_observed[name][j]) / max(pos_targets[name][j], 1e-9))
+                for j, value in enumerate(pos_vector) if value
+            )
+            neg_deficit = sum(
+                max(0.0, (neg_targets[name][j] - neg_observed[name][j]) / max(neg_targets[name][j], 1e-9))
+                for j, value in enumerate(neg_vector) if value
+            )
             capacity_deficit = (capacities[name] - len(result[name])) / max(capacities[name], 1)
-            return (label_deficit, capacity_deficit, -names.index(name))
+            return (pos_deficit + neg_deficit, capacity_deficit, -names.index(name))
+
         chosen = max(candidates, key=score)
         result[chosen].add(patient)
-        observed[chosen] = [a + b for a, b in zip(observed[chosen], vector)]
+        pos_observed[chosen] = [a + b for a, b in zip(pos_observed[chosen], pos_vector)]
+        neg_observed[chosen] = [a + b for a, b in zip(neg_observed[chosen], neg_vector)]
     return result
 
 
@@ -401,7 +458,8 @@ def main() -> int:
 
     all_patients = set(frame["patient_id"].unique())
     vectors = patient_label_vectors(frame)
-    groups = multilabel_partition_patients(vectors, fractions, int(splits_cfg.split_seed))
+    neg_vectors = patient_label_negative_vectors(frame)
+    groups = multilabel_partition_patients(vectors, neg_vectors, fractions, int(splits_cfg.split_seed))
     assert_disjoint_and_exact(groups, all_patients)
 
     frames = {

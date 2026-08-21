@@ -42,7 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.utils.caption_builder import CaptionConfig, build_caption  # noqa: E402
 from scripts.utils.config import load_named_config, load_stage1_config  # noqa: E402
 from scripts.utils.experiment_registry import ExperimentRun  # noqa: E402
-from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
+from scripts.utils.labels import GENERATION_TARGET_LABELS  # noqa: E402
 from scripts.utils.artifact_contracts import (  # noqa: E402
     ArtifactContractError, config_sha256, current_code_identity_hash, namespace_identity,
     require_manifest_fields, stage2_paths,
@@ -70,7 +70,7 @@ def recipe_to_caption_row(recipe: dict) -> dict:
     staying out of the primary disease vector — §3.4.
     """
     intended = json.loads(recipe["intended_label_vector"])
-    row = {label: intended.get(label, 0) for label in PRIMARY_ENDPOINT_LABELS}
+    row = {label: intended.get(label, 0) for label in GENERATION_TARGET_LABELS}
     row["No Finding"] = 1 if bool(recipe["is_no_finding"]) else 0
     row["Support Devices"] = int(recipe["support_devices"])
     row["Age"] = int(recipe["age_bucket_start"])

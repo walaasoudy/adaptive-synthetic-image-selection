@@ -33,18 +33,29 @@ deterministic patient list with one recorded seed. **No split is derived from an
 | Reuse `gen_val` as `classifier_val` | `gen_val` is the generator's monitoring split; same contamination argument. |
 | Keep v1 and forgo a classifier development split | Forces A–E model selection onto training data (invalid) or a heldout split (leakage). |
 
-### 1.2 Frozen v1 allocation
+### 1.2 Frozen v2 allocation
 
 | Split | Fraction | Role |
 |---|---|---|
-| `gen_train` | **0.60** | Stage 1 LoRA training; Stage 3 real-reference pool (§4.1); auxiliary classifier training (§2) |
+| `gen_train` | **0.48** | Stage 1 LoRA training; Stage 3 real-reference pool (§4.1); auxiliary classifier training (§2) |
 | `gen_val` | **0.10** | Stage 1 monitoring; auxiliary classifier validation (§2) |
 | `classifier_train` | **0.15** | Real component of A–E training (§7); real component of ASISM proxy training (§4.7) |
-| `classifier_val` | **0.05** | A–E early stopping, checkpoint selection, threshold selection, hyperparameter/model selection — identical rules across all conditions |
-| `asism_tuning_heldout` | **0.05** | ASISM Go/No-Go evidence (§4.6) and proxy-search evaluation (§4.7) |
-| `final_eval_heldout` | **0.05** | Stage 5 final evaluation only (§8) |
+| `classifier_val` | **0.09** | A–E early stopping, checkpoint selection, threshold selection, hyperparameter/model selection — identical rules across all conditions |
+| `asism_tuning_heldout` | **0.09** | ASISM Go/No-Go evidence (§4.6) and proxy-search evaluation (§4.7) |
+| `final_eval_heldout` | **0.09** | Stage 5 final evaluation only (§8) |
 
 Config: `configs/splits.yaml` → `fractions.*`. Sum asserted == 1.0 at build time.
+
+**v2 revision note (production run against the full CheXpert-v1.0-small cohort, 2026-08-08):**
+the original v1 allocation (60/10/15/5/5/5) failed the §1.3 support-feasibility rule for
+`Lung Lesion` and `Atelectasis` — their confident-negative patient population is real but thin
+enough (≈660 and ≈580 patients dataset-wide, respectively) that a 5% decision-bearing split fell
+short of the required 50. Raising `classifier_val`/`asism_tuning_heldout`/`final_eval_heldout` from
+5% to 9% each (funded by lowering `gen_train` from 60% to 48%) clears both with margin. A third
+failing label, `Pleural Other`, could not be fixed this way — its dataset-wide confident-negative
+population is only ≈100 patients, so no split-fraction choice gives four disjoint decision-bearing
+splits 50 each. `Pleural Other` is excluded from `primary_endpoint_label_set` instead (§5.2) rather
+than distorting the split policy further for a label no fraction choice can support.
 
 ### 1.3 Support-feasibility rule — FROZEN
 
@@ -132,7 +143,7 @@ measures intent-vs-content agreement; it does not establish clinical truth.
 1. **Empirical co-occurrence** from `gen_train` at or above `min_support_patients`.
 2. **Medical-rule overrides**, both directions: an allow-list for clinically plausible combinations
    rare in the data, and a block-list for combinations judged likely CheXpert NLP-extraction noise.
-3. **`No Finding` recipes are the all-zero intended vector over the 12 primary disease labels**, and
+3. **`No Finding` recipes are the all-zero intended vector over `GENERATION_TARGET_LABELS`**, and
    are mutually exclusive with any positive pathology.
 4. **`Support Devices`** may be carried as a conditioning/context attribute. It does **not** affect
    the primary disease-agreement score (§7) unless `secondary_agreement.enabled` is turned on.
@@ -140,6 +151,15 @@ measures intent-vs-content agreement; it does not establish clinical truth.
 6. Frontal-only, matching Stage 1's `view_filter`.
 7. Age/sex coverage and per-recipe quotas are config-driven, oversampling rare classes subject to
    the support rule.
+
+**v3 revision note (2026-08-08):** recipe eligibility (co-occurrence mining, quotas, the
+single-label guarantee, and the caption row) is keyed to `GENERATION_TARGET_LABELS`
+(`scripts/utils/labels.py`) — `PRIMARY_ENDPOINT_LABELS` plus `INSUFFICIENT_SUPPORT_LABELS` — not
+`PRIMARY_ENDPOINT_LABELS` alone. `Pleural Other`'s exclusion from the primary endpoint (§5.2)
+reflects real-cohort support scarcity for *evaluation*; it is not a reason to also stop generating
+or training on synthetic examples of it. §4.5 agreement scoring remains scoped to
+`PRIMARY_ENDPOINT_LABELS` only, unchanged — as does the matched-random marginal-matching logic, if
+the §7.1 control is re-enabled.
 
 **Pilot gate — FROZEN:** full production generation **refuses to start** unless a versioned
 `pilot_approval_manifest.json` exists, records a completed pilot, records passing automatic artifact
@@ -192,8 +212,8 @@ correctness** — stated wherever the score is reported.
 agreement = mean P(intended positive disease labels)
           − penalty × mean P(confidently predicted unintended disease labels)
 ```
-For a **`No Finding` recipe**, agreement is high when predicted probability is low across all 12
-primary disease labels. Computed over the 12 primary labels only; `Support Devices` is excluded
+For a **`No Finding` recipe**, agreement is high when predicted probability is low across all 11
+primary disease labels. Computed over the 11 primary labels only; `Support Devices` is excluded
 unless `secondary_agreement.enabled`. Kept **separate** from uncertainty, similarity, IQA, and
 explainability — a confident correct reading and an uncertain correct reading are different facts.
 
@@ -246,6 +266,55 @@ ratio; (3) **min/max accepted count** per class; (4) uncertainty-band awareness.
 never accepted merely because its pathology is rare** — rarity changes how many images compete for a
 quota, never whether the floor applies.
 
+### 4.9 Learned ASISM extension (v4 revision note, 2026-08-21) — resolves `docs/novelty_target_decision.md`
+
+**This is ASISM as the thesis defines it** — the four scoring signals (§4.1–§4.5) feeding the two
+novel learned components, "Multi-Objective Ranking Network (Novel)" and "Adaptive Threshold Learning
+(Novel)". It implements **Option 1** of `docs/novelty_target_decision.md` (pre-registered weakly
+supervised set-utility learning).
+
+**v3 revision note (2026-08-21):** §4.7's `weighted_score_baseline` is **no longer part of the
+thesis pipeline**. It predates the learned components and was never specified by the thesis, which
+defines ASISM as the full module including both learned networks. `03_tune_freeze_select.py` is
+retained for reference; no Stage 4 condition consumes its output, and the learned stages no longer
+import it (they load candidates via `scripts/asism/candidate_pool.py`).
+Pipeline (`scripts/asism/04` through `09`, config: `configs/stage3_asism.yaml` →
+`signals.ranking_network` / `signals.threshold_network`):
+
+1. **`04_build_utility_subsets.py` / `04b_evaluate_utility_subsets.py`** — build controlled
+   candidate subsets (random, single-signal, mixed compositions) from an image pool split
+   train/val-role and disjoint by construction (`split_image_pool`), then measure each subset's real
+   downstream utility: `augmented_macro_auroc − real_only_macro_auroc` on the proxy protocol already
+   frozen by §4.7 (same `classifier_train`-based proxy training, `asism_tuning_heldout`-only
+   evaluation — no new leakage surface).
+2. **`05_train_learned_asism.py`** — trains `SetUtilityNetwork` (permutation-invariant Deep Sets) on
+   *measured* subset-level utility only, then distills per-image ranking scores
+   (`MultiObjectiveRankingNetwork`, trained with a pairwise ranking loss against the distilled
+   scores) — never by copying a subset's AUROC onto its member images. This is the mechanism that
+   avoids the pseudo-replication problem `novelty_target_decision.md` raised.
+3. **`06_learn_thresholds_select.py`** — the fixed-ratio learned threshold. An intermediate stage of
+   the pipeline and an internal ablation reference; it is **not** a Stage 4 condition (the former
+   condition G was removed — §7 v3 revision note).
+4. **`07`/`07b`/`08`/`08b`** — builds bootstrap class contexts (honestly tagged
+   `independent_clinical_sample: False` — they are resamples of one candidate pool, not new clinical
+   evidence), a critic-guided hard-threshold grid search, proxy-verifies a diversified (not
+   critic-only) subset of that grid, and trains `AdaptiveThresholdNetwork` (class-aware, via class
+   embedding + context vector) against verified-only targets.
+5. **`09_finalize_learned_selection.py`** — per class, `determine_per_class_official_method` picks
+   exactly one of three outcomes, never a blend: `fixed_target_ratio_threshold_distillation_baseline_v1`
+   (zero verified train contexts for that class), `hard_proxy_best_among_verified` (some verified
+   train evidence but below `min_verified_contexts_per_class` on either side), or
+   `adaptive_threshold_network` (enough verified evidence on both train and held-out sides **and**
+   the frozen acceptance criteria in `configs/stage3_asism.yaml` → `acceptance_criteria` pass).
+
+**Governance status:** implemented but **not yet supervisor-approved** — see the resolution note at
+the top of `docs/novelty_target_decision.md`. Not yet run on production data (§11).
+
+**Interaction with §7/§8:** `09`'s output (`adaptive_selected_manifest`) is the selection consumed by
+Stage 4 **condition F** — the thesis's "real + selected synthetic" arm, and the only synthetic-
+selection condition that survives the §7 v3 revision note. `06`'s `learned_selected_manifest` is
+retained on disk as an ablation reference but feeds no Stage 4 condition.
+
 ---
 
 ## 5. Label policy — FROZEN
@@ -255,18 +324,22 @@ All **14** CheXpert observations. This is the classifier's output space; all 14 
 reported.
 
 ### 5.2 `primary_endpoint_label_set`
-The **12** disease labels: the 14 minus `No Finding` and minus `Support Devices`.
+The **11** disease labels: the 14 minus `No Finding`, `Support Devices`, and `Pleural Other`.
 
 `Enlarged Cardiomediastinum`, `Cardiomegaly`, `Lung Opacity`, `Lung Lesion`, `Edema`,
-`Consolidation`, `Pneumonia`, `Atelectasis`, `Pneumothorax`, `Pleural Effusion`, `Pleural Other`,
-`Fracture`.
+`Consolidation`, `Pneumonia`, `Atelectasis`, `Pneumothorax`, `Pleural Effusion`, `Fracture`.
 
 - **`No Finding`** — an absence-of-disease meta-label, not a pathology. Secondary outcome only.
 - **`Support Devices`** — a device-presence label, not a disease, and the highest-prevalence, easiest
   label in CheXpert; including it would flatter the macro-average without measuring diagnostic
   performance. Secondary outcome only.
+- **`Pleural Other`** — **v2 revision note (2026-08-08):** excluded for insufficient support, not for
+  a clinical-relevance reason like the two above. On the full production CheXpert cohort only ≈100
+  patients dataset-wide carry a confident negative label for it, so no §1.2 fraction choice can give
+  every decision-bearing split the §1.3 minimum of 50 negative patients. Reported as a secondary
+  outcome with its support counts, per §5.3.
 
-Both remain in the output space; both are excluded from the **primary endpoint**.
+All three remain in the output space; all three are excluded from the **primary endpoint**.
 
 ### 5.3 Minimum support for reporting
 The §1.3 rule (≥50 positive and ≥50 negative **patients**) also governs metric eligibility. A label
@@ -297,7 +370,7 @@ identically to training, validation, threshold selection, final evaluation, and 
 
 ---
 
-## 7. Stage 4 — conditions A–E — FROZEN
+## 7. Stage 4 — conditions A/B/F — FROZEN (v3 revision note 2026-08-21)
 
 Architecture, initialization, label policy (§5), uncertainty policy (§6), optimizer family, batch
 size, augmentation, checkpoint-selection rule, validation rule, and threshold-selection rule are
@@ -308,34 +381,82 @@ size, augmentation, checkpoint-selection rule, validation rule, and threshold-se
 |---|---|---|
 | **A** | `classifier_train` | none |
 | **B** | `classifier_train` | all Stage 2 images |
-| **C** | `classifier_train` | frozen ASISM selection |
-| **D** | `classifier_train` | **exactly 5** independent deterministic matched-random draws |
-| **E** | none | all Stage 2 images |
+| **F** | `classifier_train` | Learned ASISM selection (§4.9 `adaptive_selected_manifest`) |
 
-**Condition D matching (frozen):** every draw matches C on exact total synthetic sample count;
-per-label marginal positive counts within a frozen tolerance; single-label vs. multi-label
-proportion; and relevant sampling/interleaving constraints. Joint label-vector matching is attempted
-only where support permits and is never allowed to make matching infeasible. **Residual imbalance is
-recorded per draw.**
+**v3 revision note (2026-08-21) — supersedes the v2 note.** The condition set was reduced from A–G
+to **A/B/F** to match the three arms the thesis specifies for Stage 5 (real only / real + all
+synthetic / real + selected synthetic). Conditions removed and why:
 
-**Seed policy (frozen):** A, B, C, E use **3 fixed model-training seeds** each; **every** D draw uses
-the same 3 seeds. Total runs = (4 conditions × 3 seeds) + (5 draws × 3 seeds) = **27**. Run count and
-GPU cost are computed before production execution. Seeds and draws are never reduced after seeing
-results.
+| Removed | Was | Why removed |
+|---|---|---|
+| **C** | real + weighted-baseline ASISM | The thesis does not specify a weighted ASISM selector; ASISM's Stage-3 definition is the full module including the two learned components. C was an implementation-history artifact, not a thesis arm. |
+| **G** | real + fixed-ratio learned baseline | An internal ablation of F's threshold, not a thesis arm. |
+| **E** | synthetic only | Not among the thesis's three arms. |
+| **D** | matched-random control | Removed as a consequence of removing C (it was matched to C). **See the limitation below — this removal has a scientific cost the other three do not.** |
 
-**Fairness protocol (frozen): equal optimizer steps** across A–E and all D draws — not equal epochs.
-At fixed epochs, a larger dataset receives more gradient updates, conflating "more data" with "more
-training." Equal steps isolates the data-composition effect that C vs. D exists to measure. Recorded
-per run: optimizer steps, epochs, effective dataset size, real sample exposures, synthetic sample
-exposures, interleaving/sampling policy, model seed, dataset/draw ID, config hash, checkpoint hash.
+`configs/stage4_classifier.yaml` → `conditions: [A, B, F]`. Total runs = 3 conditions × 3 seeds =
+**9** (superseding the 33 and, before it, 27 stated in earlier revisions).
+
+### 7.1 Known limitation — no matched-random control
+
+**F is a strict subset of B.** An F-over-B improvement therefore admits two explanations this design
+cannot separate:
+
+1. **ASISM selected good images** — the thesis claim, and
+2. **using fewer synthetic images is simply better**, whichever ones they are, because unselected
+   synthetic data is noisy enough that dilution alone helps.
+
+Explanation 2 would produce an F-over-B win even with a *random* selector of the same size. F vs. B
+is therefore evidence that *selection helps*, but **not** evidence that *ASISM's ranking is good* —
+which is the actual novel contribution. The thesis's three-arm summary is the headline comparison,
+not a complete experimental design, and a committee is likely to raise exactly this point.
+
+**Resolving it** requires one added condition: matched-random draws of |F| images sharing F's
+per-label profile, trained under the identical protocol. The machinery already exists and is
+retained in working order (`01_train_conditions.py`: `build_matched_random_draw`, `profile_of`,
+`configs/stage4_classifier.yaml` → `condition_d.*`); it needs re-pointing from the deleted C to F,
+plus `n_draws × 3` additional runs (5 draws → 15 runs, total 24). **This is a supervisor decision
+and must be settled before Stage 4 executes**, not after results are seen.
+
+**Fairness protocol (frozen): equal optimizer steps** across every enabled condition — not equal
+epochs. At fixed epochs, a larger dataset silently receives more gradient updates, conflating "more
+data" with "more training." Equal steps isolates the data-composition effect that F vs. B exists to
+measure. Recorded per run: optimizer steps, epochs, effective dataset size, real sample exposures,
+synthetic sample exposures, interleaving/sampling policy, model seed, dataset ID, config hash,
+checkpoint hash.
 
 ---
 
 ## 8. Stage 5 — final evaluation — FROZEN
 
 **Primary endpoint:** macro-AUROC over `primary_endpoint_label_set` (§5.2) on `final_eval_heldout`.
-**Primary comparison:** **Condition C vs. Condition D** (D as its across-draw distribution).
-All other metrics and comparisons are secondary or exploratory.
+
+**Primary comparison: F vs. B** — Learned-ASISM-selected synthetic images vs. all synthetic images
+unselected. **Supporting comparisons:** A vs. B and A vs. F. Implemented in
+`scripts/eval/compare_conditions.py`:
+
+```
+CONFIRMATORY_COMPARISONS = [("F", "B")]
+SECONDARY_COMPARISONS    = [("A", "B"), ("A", "F")]
+```
+
+Document and code agree. With a single confirmatory comparison, Holm–Bonferroni reduces to the
+uncorrected p-value for F vs. B; the correction machinery stays in place so that adding a
+confirmatory comparison later (e.g. the matched-random control in §7.1) is a configuration change,
+not a reanalysis.
+
+**v3 revision note (2026-08-21) — supersedes the v2 note.** Earlier revisions of this section froze
+**C vs. D** as primary and then recorded a conflict with a code-side **F vs. C**. Both are obsolete:
+conditions C, D, E and G no longer exist (§7 v3 revision note), so neither comparison is defined.
+The conflict is resolved by deletion, not by adjudication.
+
+**What F vs. B can and cannot establish.** It tests whether selecting synthetic images beats using
+them all. It does **not** isolate the quality of ASISM's ranking from the effect of simply using
+fewer synthetic images — see §7.1. Any Stage 5 write-up must state this limitation explicitly
+alongside the F vs. B result, or add the matched-random control described there.
+
+Whether the learned selector (F) is accepted as a thesis method at all remains open in
+`docs/novelty_target_decision.md`; this correction family assumes it is.
 
 **Statistics:** patient-level paired bootstrap for effect sizes and 95% CIs. **Holm–Bonferroni** for
 the pre-specified confirmatory family; **Benjamini–Hochberg FDR** for exploratory analyses, labelled
@@ -345,7 +466,8 @@ correction configuration are frozen before Stage 4 and are not revised after see
 **Reporting:** per-label AUROC; macro-AUROC (primary); micro-AUROC; AUPRC; sensitivity/specificity;
 F1; calibration (Brier, ECE); patient-level bootstrap CIs; corrected paired comparisons with effect
 sizes; **effective patient N after masking for every metric**; `No Finding` and `Support Devices`
-reported separately; condition D's full across-draw distribution; leave-one-signal-out ASISM
+reported separately; the §7.1 limitation stated alongside the F vs. B result (or, if the
+matched-random control is enabled, its full across-draw distribution); leave-one-signal-out ASISM
 component-contribution analysis.
 
 **Execution guards (frozen).** Stage 5 refuses to run unless: the production split manifest is
@@ -374,11 +496,14 @@ a **new pre-specified evaluation run** — reported alongside the original, neve
 6. Auxiliary classifier (§2), on `gen_train`/`gen_val`.
 7. Compute the five ASISM signals (§4.1–§4.5).
 8. Go/No-Go gate (§4.6).
-9. Bounded proxy search (§4.7) on `classifier_train` + candidates, evaluated on
-   `asism_tuning_heldout`.
-10. Freeze ASISM configuration.
-11. Freeze the experiment protocol (§5, §6, §7, §8).
-12. Train A–E (27 runs).
+9. Learned ASISM (§4.9): `04` subset design → `04b` measured subset utility → `05` set-utility and
+   ranking networks → `06`–`08b` threshold learning and proxy verification → `09` finalize. All
+   proxy evaluation is on `asism_tuning_heldout` only.
+10. Freeze ASISM configuration (§4.9 learned selector, pending the supervisor sign-off tracked in
+    `docs/novelty_target_decision.md`).
+11. Freeze the experiment protocol (§5, §6, §7, §8), including §7.1's matched-random-control
+    decision, which must be settled before any Stage 4 run.
+12. Train A/B/F (9 runs; 24 if the §7.1 matched-random control is added).
 13. Stage 5 evaluation on `final_eval_heldout`.
 14. Patient-level statistics, corrections, tables, figures.
 

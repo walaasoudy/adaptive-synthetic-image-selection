@@ -186,13 +186,13 @@ def check_reproducibility(scores_dir: Path, signal: str, config) -> dict:
     if not sidecar.is_file():
         return {"passed": False, "reason": "missing_provenance_sidecar"}
     provenance = read_json(sidecar)
-    required = {"schema_version", "signal", "n_rows", "asism_config_hash", "git_commit_hash"}
+    required = {"schema_version", "signal", "n_rows", "asism_config_sha256", "git_commit_hash"}
     missing = sorted(required - set(provenance))
     return {
         "passed": bool(not missing),
         "missing_provenance_fields": missing,
         "recorded_n_rows": provenance.get("n_rows"),
-        "asism_config_hash": provenance.get("asism_config_hash"),
+        "asism_config_sha256": provenance.get("asism_config_sha256"),
     }
 
 

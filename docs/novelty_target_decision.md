@@ -1,5 +1,44 @@
 # Supervisor decision required before learned ASISM components
 
+## Resolution status (2026-08-21)
+
+**Option 1 below has been implemented in code**, as of commit `d14488f`: `scripts/asism/models.py`
+(`SetUtilityNetwork`, `MultiObjectiveRankingNetwork`, `AdaptiveThresholdNetwork`), the pipeline
+`scripts/asism/04_build_utility_subsets.py` through `09_finalize_learned_selection.py`, and
+`scripts/asism/learned.py`. This is documented as `docs/stages2_to_5_plan.md` §4.9 (v4 revision
+note) and reflected in `configs/stage3_asism.yaml` and Stage 4 conditions F/G
+(`docs/stages2_to_5_plan.md` §7).
+
+**What this resolves:** the pseudo-replication concern raised below. `MultiObjectiveRankingNetwork`
+is never trained on a subset-level AUROC copied onto every member image; it is distilled from
+`SetUtilityNetwork`'s measured *set-level* utility only (see `learned.py`'s module docstring and
+`resolve_verified_only_targets`, which admits a target only from a proxy-*measured* candidate, never
+a critic guess). `AdaptiveThresholdNetwork` is trained per class only where that class clears
+`min_verified_contexts_per_class` on both proxy-verified train and image-disjoint held-out evidence
+(`determine_per_class_official_method`); otherwise selection falls back to
+`hard_proxy_best_among_verified` or the fixed-ratio baseline — a class is never handed to the network
+on thin evidence.
+
+**What remains open:** this document's original ask was for the supervisor to select the target
+*and approve the additional ASISM tuning budget* before implementation proceeded. That approval was
+not recorded before this code was written — implementation proceeded ahead of the sign-off this
+document itself required. Before treating the learned selector (Stage 4 condition F) as anything
+more than a candidate method for the thesis, get explicit supervisor confirmation of: (a) Option 1
+as the accepted target/claim, (b) the compute budget actually spent (`configs/stage3_asism.yaml` →
+`compute_budget`, `verification_compute_budget`, `full_policy_verification.compute_budget`), and (c)
+whether to add the matched-random control described in `docs/stages2_to_5_plan.md` §7.1 — without
+it, an F-over-B result cannot separate ASISM's ranking quality from the effect of using fewer
+synthetic images. This status update records what exists; it is not a substitute for that approval.
+
+**v2 note (2026-08-21):** the weighted-score selector referred to below is no longer part of the
+thesis pipeline (§4.9 / §7 v3 revision notes) — the thesis defines ASISM as the full module
+including both learned components, so there is no weighted-baseline condition. The memo below is
+preserved as written for the historical record.
+
+The original decision memo is preserved below, unchanged.
+
+---
+
 The repository does not currently contain a scientifically defensible supervised target for an
 image-level ranking network or a class-aware threshold model. The available labels say what SDXL
 was prompted to generate; they do not say whether adding a particular synthetic image improves a

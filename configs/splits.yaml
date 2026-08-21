@@ -20,13 +20,22 @@ manifest_version: 2
 
 # Six DIRECT top-level partitions from one deterministic patient list and one seed.
 # No split is derived from another. Must sum to exactly 1.0 (asserted at build time).
+#
+# Revised from the original 60/10/15/5/5/5 (docs/stages2_to_5_plan.md §1.2 revision note): on the
+# full production CheXpert cohort, the original 5% decision-bearing fractions left "Lung Lesion"
+# and "Atelectasis" short of the frozen ≥50-negative-patient support rule (§1.3) in
+# classifier_val/asism_tuning_heldout/final_eval_heldout. Raising those three splits to 9% (taken
+# from gen_train) clears both with margin. "Pleural Other" cannot be fixed by any fraction choice
+# (only ~100 patients dataset-wide carry a confident negative label for it) and is excluded from
+# PRIMARY_ENDPOINT_LABELS instead (scripts/utils/labels.py) rather than distorting the split policy
+# further for an unfixable label.
 fractions:
-  gen_train: 0.60             # Stage 1 LoRA training; ASISM real-reference pool; auxiliary classifier
+  gen_train: 0.48             # Stage 1 LoRA training; ASISM real-reference pool; auxiliary classifier
   gen_val: 0.10               # Stage 1 monitoring; auxiliary classifier validation
   classifier_train: 0.15      # A-E real training component; ASISM proxy real component
-  classifier_val: 0.05        # A-E model selection ONLY (early stop, checkpoint, threshold, hparams)
-  asism_tuning_heldout: 0.05  # ASISM Go/No-Go evidence + proxy-search evaluation
-  final_eval_heldout: 0.05    # Stage 5 only
+  classifier_val: 0.09        # A-E model selection ONLY (early stop, checkpoint, threshold, hparams)
+  asism_tuning_heldout: 0.09  # ASISM Go/No-Go evidence + proxy-search evaluation
+  final_eval_heldout: 0.09    # Stage 5 only
 
 split_seed: 42
 split_unit: "patient_id"      # never image level — CheXpert patients have multiple studies

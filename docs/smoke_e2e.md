@@ -77,8 +77,8 @@ Expected GPU-path outputs:
 | Stage 2 | explicit LoRA and four recipes | pilot approval record, four full images, generation completion manifest |
 | auxiliary | smoke `gen_train`/`gen_val` | two-step resume checkpoint and separate best-validation checkpoint |
 | Stage 3 signals | four synthetic images | five Parquets and five hash/provenance sidecars |
-| Go/No-Go and tuning | score artifacts and smoke tuning folds | report, bounded baseline search log, frozen baseline selector and selected IDs |
-| Stage 4 | conditions A/B/C, one seed | three two-step best checkpoints and atomic completion records |
+| Go/No-Go | score artifacts | `gonogo_report.json` with admitted/excluded signals |
+| Stage 4 | conditions **A/B only**, one seed | two two-step best checkpoints and atomic completion records |
 | Stage 5 | separate three-patient fixture final split | registered protected context, predictions with sidecars, comparison report/tables |
 
 Cold-cache estimate on one A40 48 GB: approximately 30–60 minutes, dominated by model downloads,
@@ -92,7 +92,19 @@ STOP if any artifact gate fails, if a path contains `production`, if the workspa
 ## Scientific limitations
 
 This run demonstrates software connectivity only. It does not validate medical quality,
-statistical power, rare-label support, or thesis outcomes. A trainable Multi-Objective Ranking
-Network, learned Adaptive Threshold model, and Pareto ranking are not implemented. The current
-Stage 3 combination remains explicitly a weighted-score/proxy-tuned baseline pending the supervisor
-target decision in `docs/novelty_target_decision.md`.
+statistical power, rare-label support, or thesis outcomes.
+
+**COVERAGE GAP — this lane does not exercise the thesis's novel contribution.** The Multi-Objective
+Ranking Network and Adaptive Threshold Learning *are* implemented (`scripts/asism/04`–`09`,
+`docs/stages2_to_5_plan.md` §4.9), but this pipeline stops after Go/No-Go and jumps straight to
+Stage 4 with `conditions: [A, B]` (`configs/smoke_e2e.yaml`). It therefore never runs stages
+`04`–`09`, never produces `adaptive_selected_manifest`, and never trains **condition F** — so the
+thesis's primary comparison (F vs. B) is not exercised end to end anywhere.
+
+The reason is fixture size, not a missing implementation: the fixture generates ~4 synthetic images,
+while `04 --phase feasibility` legitimately requires enough candidates to fill three quantile bands
+in two disjoint image pools. Closing the gap needs a larger synthetic fixture plus a
+`learned_asism` block in `configs/smoke_e2e.yaml` scaled to it. Until then, the learned components
+are covered by unit tests (`tests/test_learned_asism.py`, 85 tests) but have **no end-to-end
+software-connectivity evidence**, and the "END-TO-END SMOKE COMPLETE" message should be read as
+"Stages 1–5 for conditions A and B".

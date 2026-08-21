@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
-"""Stage 4 — train conditions A-E (docs/stages2_to_5_plan.md §7).
+"""Stage 4 — train the thesis conditions A/B/F.
 
-    A  real only                    classifier_train
-    B  real + ALL synthetic         classifier_train + every Stage 2 image
-    C  real + ASISM-selected        classifier_train + the frozen ASISM selection
-    D  real + matched-random        classifier_train + FIVE independent matched draws
-    E  synthetic only               every Stage 2 image
+The three arms the thesis specifies for Stage 5:
 
-Condition D is the primary control: each of its five draws matches C on total synthetic count,
-per-label marginal positive counts (within a frozen tolerance), and single-vs-multi-label
-proportion. Without it, any C-over-A gain could be explained by "adding N more images of roughly
-this class mix" rather than by ASISM's selection quality.
+    A  real only                     classifier_train
+    B  real + ALL synthetic          classifier_train + every Stage 2 image
+    F  real + Learned-ASISM-selected classifier_train + the finalized adaptive selection
 
-Fairness (§7.1): every run — all conditions, all draws, all seeds — uses the SAME optimizer-step
-budget, batch size, augmentation, and checkpoint-selection rule. All model selection is on
-classifier_val; final_eval_heldout is never touched here.
+Primary comparison: F vs B — does selecting synthetic images with Learned ASISM beat using all of
+them unselected?
+
+KNOWN LIMITATION — no matched-random control. F is a strict subset of B, so an F-over-B gain has two
+competing explanations that this design cannot separate: (a) ASISM chose *good* images, or (b) using
+*fewer* synthetic images helps regardless of which ones, because unselected synthetic data is noisy.
+Distinguishing them needs a condition drawing |F| images at random with F's label profile. The
+matched-draw machinery below (build_matched_random_draw, profile_of, condition_d.*) is retained and
+working for exactly that purpose, but no such condition is currently enabled. See
+docs/stages2_to_5_plan.md §7.
+
+Fairness (§7.1): every run — all conditions, all seeds — uses the SAME optimizer-step budget, batch
+size, augmentation, and checkpoint-selection rule. All model selection is on classifier_val;
+final_eval_heldout is never touched here.
 
 Usage:
     python scripts/classify/01_train_conditions.py --condition A
-    python scripts/classify/01_train_conditions.py --condition D          # all 5 draws x 3 seeds
     python scripts/classify/01_train_conditions.py --condition all
     python scripts/classify/01_train_conditions.py --plan-only            # run/cost accounting
 """
@@ -45,7 +50,7 @@ from scripts.utils.artifact_contracts import (  # noqa: E402
     require_manifest_fields, stage2_paths, stage3_paths, stage4_paths,
 )
 
-CONDITIONS = ["A", "B", "C", "D", "E"]
+CONDITIONS = ["A", "B", "F"]
 
 
 def load_configs():
@@ -68,12 +73,19 @@ def load_all_synthetic_ids(stage2_cfg) -> list[str]:
     return ids
 
 
-def load_selected_ids(stage3_cfg) -> list[str]:
-    path = Path(stage3_cfg.paths.selected_manifest)
+def load_selected_ids(stage3_cfg, selector: str = "weighted") -> list[str]:
+    paths = {
+        "weighted": stage3_cfg.paths.selected_manifest,
+        "adaptive": stage3_cfg.paths.adaptive_selected_manifest,
+        "fixed_ratio": stage3_cfg.paths.learned_selected_manifest,
+    }
+    if selector not in paths:
+        raise ValueError(f"unknown selector {selector}")
+    path = Path(paths[selector])
     if not path.is_file():
         raise SystemExit(
             f"UPSTREAM GATE: ASISM selection not found at {path}\n"
-            "Run: python scripts/asism/03_tune_freeze_select.py --phase select"
+            "Run the weighted selector or the learned-ASISM selection pipeline, as applicable."
         )
     ids = []
     with open(path, encoding="utf-8") as handle:
@@ -96,7 +108,7 @@ def intended_lookup(stage2_cfg) -> dict[str, dict]:
 
 
 def profile_of(image_ids: list[str], intended: dict[str, dict]) -> dict:
-    """Class-distribution profile used to match condition D against condition C."""
+    """Class-distribution profile used to match a random-draw control against a reference condition."""
     per_label = {label: 0 for label in PRIMARY_ENDPOINT_LABELS}
     single, multi, none = 0, 0, 0
     for image_id in image_ids:
@@ -293,7 +305,7 @@ def training_plan(stage4_cfg) -> dict:
     n_draws = int(stage4_cfg.condition_d.n_draws)
     all_runs = {
         "A": len(seeds), "B": len(seeds), "C": len(seeds),
-        "D": n_draws * len(seeds), "E": len(seeds),
+        "D": n_draws * len(seeds), "E": len(seeds), "F": len(seeds), "G": len(seeds),
     }
     enabled = list(stage4_cfg.get("conditions", CONDITIONS))
     runs = {condition: all_runs[condition] for condition in enabled}
@@ -335,6 +347,10 @@ def build_records(condition: str, draw_ids: list[str] | None, cfgs, namespace: s
         synthetic_ids = load_selected_ids(stage3_cfg)
     elif condition == "D":
         synthetic_ids = draw_ids
+    elif condition == "F":
+        synthetic_ids = load_selected_ids(stage3_cfg, selector="adaptive")
+    elif condition == "G":
+        synthetic_ids = load_selected_ids(stage3_cfg, selector="fixed_ratio")
 
     synthetic_records = []
     if condition != "A":
@@ -482,9 +498,14 @@ def main() -> int:
             "support_devices_in_primary": False,
         },
         "uncertainty_policy": "raw preserved; -1 and blank masked in loss and metrics",
-        "fairness_protocol": "equal optimizer steps across A-E and all D draws",
-        "primary_endpoint": "macro-AUROC over the 12 primary labels on final_eval_heldout",
-        "primary_comparison": "C vs D",
+        "fairness_protocol": "equal optimizer steps across every enabled condition and seed",
+        "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary labels on final_eval_heldout",
+        "primary_comparison": "F vs B (Learned-ASISM-selected synthetic images vs all synthetic images)",
+        "known_limitation": (
+            "F is a strict subset of B, and no matched-random control condition is enabled. An "
+            "F-over-B gain therefore cannot distinguish ASISM's selection quality from the effect "
+            "of simply using fewer synthetic images."
+        ),
         "multiplicity": {"confirmatory": "holm_bonferroni", "exploratory": "benjamini_hochberg"},
         "run_plan": plan,
         "git_commit_hash": get_git_commit_hash(),
@@ -520,6 +541,18 @@ def main() -> int:
     if args.condition != "all" and args.condition not in enabled_conditions:
         raise SystemExit(f"Condition {args.condition} is disabled by this explicit configuration: {enabled_conditions}")
     conditions = enabled_conditions if args.condition == "all" else [args.condition]
+    if "F" in conditions:
+        require_manifest_fields(
+            Path(stage3_cfg.paths.adaptive_selection_manifest),
+            {"frozen": True, "method": "class_aware_adaptive_threshold_v2"},
+            "adaptive learned ASISM selection",
+        )
+    if "G" in conditions:
+        require_manifest_fields(
+            Path(stage3_cfg.paths.learned_dir) / "learned_selection_manifest.json",
+            {"frozen": True, "method": "fixed_target_ratio_threshold_distillation_baseline_v1"},
+            "fixed-ratio learned ASISM baseline",
+        )
     seeds = list(stage4_cfg.seeds)
     all_results = []
     completed_dir = results_dir / "completed_runs"
@@ -552,7 +585,7 @@ def main() -> int:
         write_json(record_path, completion)
         return result
 
-    # Condition D's draws are matched against condition C's actual selection.
+    # Matched-random draws are built against the reference condition's actual selection.
     draw_specs: list[tuple[int, list[str], dict]] = []
     if "D" in conditions:
         intended = intended_lookup(stage2_cfg)
