@@ -1169,3 +1169,64 @@ def test_07b_phase_run_with_confirmation_flag_reaches_the_next_real_gate(monkeyp
     ])
     with pytest.raises(SystemExit, match="UPSTREAM GATE"):
         module.main()
+
+
+def test_marginal_targets_are_size_normalized_across_subset_sizes():
+    """The same image, with the same deviation from its subset mean, must get the same marginal
+    target whether it sat in a small subset or a large one.
+
+    Regression test for the 1/(n-1) size bias: SetUtilityNetwork pools by MEAN, so the raw
+    leave-one-out difference U(S)-U(S\i) scales like 1/(n-1). Averaging raw differences across
+    subsets of different sizes therefore encodes "which subset sizes did this image land in" into
+    the ranking network's supervision. Without the (n-1) normalization in marginal_targets, the
+    small-subset target here is ~(249/99)x the large-subset one and this test fails.
+    """
+    module = _load_script("05_train_learned_asism.py")
+    device = torch.device("cpu")
+
+    class LinearMeanPool(torch.nn.Module):
+        """Exactly the pooling contract of SetUtilityNetwork, with an identity head so the
+        expected value is analytic rather than an artefact of a random initialization."""
+
+        def forward(self, features, mask):
+            weights = mask.unsqueeze(-1).to(features.dtype)
+            pooled = (features * weights).sum(1) / weights.sum(1).clamp_min(1.0)
+            return pooled[:, 0]
+
+    model = LinearMeanPool()
+    probe = "probe"
+    lookup = {probe: np.array([1.0], dtype=np.float32)}
+    # Peers all sit at 0.0, so the probe's deviation from the subset mean is identical in both
+    # subsets; only the subset SIZE differs.
+    small_ids, large_ids = [probe], [probe]
+    for index in range(99):
+        key = f"small_{index}"
+        lookup[key] = np.array([0.0], dtype=np.float32)
+        small_ids.append(key)
+    for index in range(249):
+        key = f"large_{index}"
+        lookup[key] = np.array([0.0], dtype=np.float32)
+        large_ids.append(key)
+
+    small_only, _ = module.marginal_targets(
+        model, [{"image_ids": small_ids}], lookup, device
+    )
+    large_only, _ = module.marginal_targets(
+        model, [{"image_ids": large_ids}], lookup, device
+    )
+
+    # Analytic values. Raw U(S)-U(S\i) here is exactly 1/n, so after multiplying by (n-1) the
+    # target is (n-1)/n: 0.990 at n=100 and 0.996 at n=250.
+    assert small_only[probe] == pytest.approx(99 / 100, rel=1e-6)
+    assert large_only[probe] == pytest.approx(249 / 250, rel=1e-6)
+
+    # The point of the fix: the two sizes must now agree to well under 1%. Without the (n-1)
+    # factor the raw targets are 0.01 vs 0.004 — a 2.5x size bias — and this assertion fails.
+    assert small_only[probe] == pytest.approx(large_only[probe], rel=0.01)
+
+    # Averaging across both subsets must land between them, not be dominated by the smaller one.
+    combined, exposures = module.marginal_targets(
+        model, [{"image_ids": small_ids}, {"image_ids": large_ids}], lookup, device
+    )
+    assert exposures[probe] == 2
+    assert combined[probe] == pytest.approx((99 / 100 + 249 / 250) / 2, rel=1e-6)

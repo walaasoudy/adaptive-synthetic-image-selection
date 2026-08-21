@@ -165,19 +165,41 @@ def train_set_model(model, train_subsets, val_subsets, utility_by_id, lookup, co
 
 @torch.no_grad()
 def marginal_targets(model, subsets, lookup, device):
-    """Mean predicted U(S)-U(S without i); never copy the subset target to its members."""
+    """Mean SIZE-NORMALIZED predicted U(S)-U(S without i); never copy the subset target to members.
+
+    The raw leave-one-out difference is not comparable across subsets of different sizes, so it
+    cannot be averaged as-is. SetUtilityNetwork pools its per-image encodings by MEAN
+    (`set_utility_network.pooling: "mean"`, models.py::SetUtilityNetwork.encode_set), so for a subset
+    S of size n with mean encoding m_S:
+
+        m_S - m_(S\\i) = (f(x_i) - m_S) / (n - 1)
+
+    and therefore U(S) - U(S\\i) shrinks like 1/(n-1). With subset_sizes spanning 100..250, the same
+    image quality would yield targets differing by ~2.5x purely from which subsets the image landed
+    in — noise injected straight into the ranking network's supervision, unrelated to image quality.
+
+    Multiplying by (n - 1) removes that factor and leaves a size-invariant quantity proportional to
+    how far the image's encoding deviates from its subset's mean, which is the quantity that
+    actually carries "is this image better than its peers". Only then is averaging across an image's
+    subsets meaningful.
+
+    `raw_contribution * (n - 1)` is exact for the linear part of the head and a first-order
+    approximation for its nonlinearity; both are far closer to size-invariant than the unscaled
+    difference, which is size-dependent by construction.
+    """
     totals, counts = {}, {}
     model.eval()
     for row in subsets:
         ids = [image_id for image_id in row["image_ids"] if image_id in lookup]
         if len(ids) < 2:
             continue
+        size_normalizer = len(ids) - 1
         full_x, full_mask = padded_batch([{"image_ids": ids}], lookup, device)
         full = float(model(full_x, full_mask).item())
         for image_id in ids:
             reduced = [candidate for candidate in ids if candidate != image_id]
             x, mask = padded_batch([{"image_ids": reduced}], lookup, device)
-            contribution = full - float(model(x, mask).item())
+            contribution = (full - float(model(x, mask).item())) * size_normalizer
             totals[image_id] = totals.get(image_id, 0.0) + contribution
             counts[image_id] = counts.get(image_id, 0) + 1
     return {image_id: totals[image_id] / counts[image_id] for image_id in totals}, counts

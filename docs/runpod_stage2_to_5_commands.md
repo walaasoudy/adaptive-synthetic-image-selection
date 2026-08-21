@@ -11,7 +11,10 @@ and upstream artifact hashes.
 python -m compileall -q scripts tests
 python tests/run_all.py
 python scripts/data/02b_build_sixway_splits.py --help
-python scripts/asism/03_tune_freeze_select.py --help
+python scripts/asism/04_build_utility_subsets.py --help
+python scripts/asism/04b_evaluate_utility_subsets.py --help
+python scripts/asism/05_train_learned_asism.py --help
+python scripts/asism/09_finalize_learned_selection.py --help
 python scripts/classify/01_train_conditions.py --plan-only --namespace dev-smoke-v1
 ```
 
