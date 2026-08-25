@@ -3,13 +3,21 @@
 ## Resolution status (2026-08-21)
 
 **Option 1 below has been implemented in code**, as of commit `d14488f`: `scripts/asism/models.py`
-(`SetUtilityNetwork`, `MultiObjectiveRankingNetwork`, `AdaptiveThresholdNetwork`), the pipeline
+(`SetUtilityNetwork`, `MultiSignalUtilityRankingNetwork`, `AdaptiveThresholdNetwork`), the pipeline
 `scripts/asism/04_build_utility_subsets.py` through `09_finalize_learned_selection.py`, and
 `scripts/asism/learned.py`. This is documented as `docs/stages2_to_5_plan.md` §4.9 (v4 revision
 note) and reflected in `configs/stage3_asism.yaml` and Stage 4 conditions F/G
 (`docs/stages2_to_5_plan.md` §7).
 
-**What this resolves:** the pseudo-replication concern raised below. `MultiObjectiveRankingNetwork`
+**Naming follow-up (2026-08-21).** The memo below refers to a "Multi-Objective Ranking Network".
+That component is now named **Multi-Signal Utility Ranking Network** (class
+`MultiSignalUtilityRankingNetwork`), because the implemented model has one output head and one
+scalar target — the signals are input features, not objectives. This is consistent with, not a
+change to, the memo's own closing observation that "Pareto ranking is not implemented". Terminology
+only; see `docs/stages2_to_5_plan.md` §4.9 v5 revision note. The memo body below is preserved
+verbatim as a historical record and still uses the old name.
+
+**What this resolves:** the pseudo-replication concern raised below. The ranking network
 is never trained on a subset-level AUROC copied onto every member image; it is distilled from
 `SetUtilityNetwork`'s measured *set-level* utility only (see `learned.py`'s module docstring and
 `resolve_verified_only_targets`, which admits a target only from a proxy-*measured* candidate, never

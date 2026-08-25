@@ -68,8 +68,10 @@ def contributing_signals(active_columns: list[str]) -> list[str]:
     Recorded in the learned-training manifest so the §4.6 `reduced_variant` judgement (fewer than
     three admitted signals -> the selector is reported as an ablation/alternative, not the primary
     method) can be made for the LEARNED selector too, not just the weighted one. A
-    'Multi-Objective Ranking Network' fed by one surviving signal is still runnable, but it is no
-    longer multi-objective, and the manifest must say so rather than let the name imply otherwise.
+    'Multi-Signal Utility Ranking Network' fed by one surviving signal is still runnable, but it is
+    no longer multi-signal, and the manifest must say so rather than let the name imply otherwise.
+    (The network is single-objective by design in every case — see MultiSignalUtilityRankingNetwork's
+    docstring; what this count governs is how many SIGNALS feed it, not how many objectives.)
     """
     return sorted(
         signal for signal, columns in FEATURE_COLUMNS_BY_SIGNAL.items()

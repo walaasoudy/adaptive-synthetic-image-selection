@@ -33,7 +33,7 @@ from scripts.asism.learned import (  # noqa: E402
     apply_feature_frame, bootstrap_class_contexts, diversify_verification_candidates,
     hard_threshold_grid_search, real_class_support_context, split_image_pool,
 )
-from scripts.asism.models import MultiObjectiveRankingNetwork, SetUtilityNetwork  # noqa: E402
+from scripts.asism.models import MultiSignalUtilityRankingNetwork, SetUtilityNetwork  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
@@ -67,7 +67,7 @@ def load_frozen_models(cfg, columns: list[str]):
         parameter.requires_grad_(False)
 
     rank_cfg = cfg.learned_asism.ranking_network
-    ranker = MultiObjectiveRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout))
+    ranker = MultiSignalUtilityRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout))
     ranker_checkpoint = torch.load(learned_dir / "ranking_model.pt", map_location="cpu", weights_only=True)
     ranker.load_state_dict(ranker_checkpoint["state_dict"])
     ranker.eval()

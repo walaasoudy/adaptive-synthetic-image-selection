@@ -133,12 +133,95 @@ synthetic data augmentation in medical image analysis.
 | Niemeijer et al. [15] | TSynD Uncertainty-guided Synthesis | PathMNIST (MedMNIST) | Generated informative synthetic samples via classifier uncertainty; accuracy improved 67.4%→73.1% | Does not address optimal synthetic-real sample balancing |
 | Azad et al. [16] | Systematic Review | Multi-modality | Comprehensive taxonomy of diffusion-based medical diagnosis methods; identifies gaps in clinical deployment, explainability, future research | Does not investigate synthetic-real data composition or optimization strategies |
 
+## Related Work for ASISM's Two Learned Components
+
+The preceding studies establish the generation side of the pipeline. This section surveys the two
+literatures ASISM's Stage 3 learned components — the Multi-Signal Utility Ranking Network and
+Adaptive Threshold Learning — draw on and must be positioned against. Neither component exists in a
+vacuum: both names correspond to active, well-established research areas, and a Q1 submission must
+cite and differentiate from them explicitly rather than presenting the terms as if unclaimed.
+
+### 17.1 Learned data valuation and set-level utility (→ the Multi-Signal Utility Ranking Network)
+
+**Framing sentence for the paper.** The network consumes multiple quality signals and predicts a
+single learned utility objective; it is not a Pareto/multi-objective optimizer, and is named
+accordingly (renamed from "Multi-Objective Ranking Network" — `docs/stages2_to_5_plan.md` §4.9 v5
+revision note). Stating this explicitly pre-empts the obvious reviewer objection that the
+architecture has one output head.
+
+Zaheer et al. introduced Deep Sets, proving that any function invariant to input permutation can be
+decomposed as a sum-pooled per-element embedding followed by a second network, ρ(Σφ(x)) — the exact
+architecture `SetUtilityNetwork` uses to map a variable-size image subset to a single predicted
+utility score [17]. Yoon et al. proposed DVRL (Data Valuation using Reinforcement Learning), a data
+value estimator network trained with a REINFORCE-style policy gradient against validation-set reward
+to score individual training points for domain adaptation, corrupted-sample discovery, and robust
+learning; DVRL is the closest general-ML precedent for "a network that learns which data points are
+worth keeping," though it scores points directly via RL rather than distilling image-level scores
+from a supervised, set-level utility model [18]. Tan et al.'s Data Pruning via Moving-One-Sample-Out
+(NeurIPS 2023) scores each training point by its leave-one-out effect on a validation proxy — the
+same marginal-contribution principle `marginal_targets()` uses to distill `SetUtilityNetwork`'s
+set-level predictions into per-image ranking targets, though applied there to real, already-labelled
+training data rather than synthetic candidate selection [22]. The broader Shapley/Banzhaf family of
+data-valuation methods (Data Banzhaf; 2D-OOB; LossVal) formalizes marginal contribution
+game-theoretically but is generally too expensive for per-image scoring at the candidate-pool sizes
+Stage 2 produces, which motivated the bounded, pre-registered subset-sampling design in
+`04_build_utility_subsets.py` instead of exact or approximated Shapley estimation.
+
+The domain-specific precedent is closer and more important to cite directly: Xue et al. (MICCAI
+2020) trained a transformer-based controller via PPO to select which GAN-synthesized histopathology
+images (cervical and lymph-node datasets) to keep, using downstream classifier validation accuracy
+as the reward signal, and reported classification improvements of 8.1% and 2.3% over using all
+synthetic images unfiltered [19]. This is the nearest prior work to ASISM's ranking network in
+problem framing — *learn which synthetic medical images to keep by measuring their effect on a
+downstream classifier* — and the thesis must state its differences explicitly: (a) domain (chest
+X-ray vs. histopathology), (b) mechanism (Deep-Sets set-utility distillation to a pairwise-ranking
+network vs. an RL controller with no explicit per-image score), and (c) a five-signal front end
+(similarity, IQA, uncertainty, explainability, agreement) feeding the ranking network's features,
+which Xue et al. does not have — their controller operates on raw images, not on this study's
+harmonized quality-signal representation.
+
+### 17.2 Adaptive, class-aware thresholds (→ Adaptive Threshold Learning)
+
+**The name "adaptive threshold learning" is already claimed by an active, high-profile research
+area, and this is the single most important finding for positioning this component.**
+Semi-supervised learning's pseudo-labeling literature moved away from FixMatch's single global
+confidence threshold specifically because a fixed threshold under-selects hard classes and
+over-selects easy ones. Zhang et al.'s FlexMatch (NeurIPS 2021) introduced Curriculum Pseudo
+Labeling, flexibly lowering the confidence threshold for classes the model has not yet learned well
+[20]. Wang et al.'s FreeMatch (ICLR 2023) replaced FlexMatch's hand-tuned schedule with a
+self-adaptive threshold combining a global (training-progress) and local (per-class) component,
+reducing error rate by 5.78%–13.59% over FlexMatch across benchmarks [21]. Class Aware Adaptive
+Thresholding (CAT, 2024) extends the same idea to semi-supervised domain generalization by combining
+pseudo-label confidence with classifier-weight information [23]. InstanT (NeurIPS 2023) goes a level
+further, learning instance-dependent rather than merely class-dependent thresholds. **All of this
+work solves a different problem than ASISM's threshold network**: FlexMatch/FreeMatch/CAT decide,
+*during training*, whether an unlabeled sample's current pseudo-label is confident enough to
+contribute a training signal this step; `AdaptiveThresholdNetwork` decides, *once, before Stage 4
+training begins*, whether a synthetic image is admitted into the training set at all, conditioned on
+class identity and a real-prevalence/budget context vector, not on a live training-progress signal.
+The mechanism is also different: FreeMatch computes its threshold analytically from an EMA of model
+confidence, while `AdaptiveThresholdNetwork` is a small supervised network distilled from
+proxy-verified grid-search targets (`07`–`08`), gated by an explicit evidence-sufficiency rule
+(`determine_per_class_official_method`) that has no analogue in the FreeMatch family.
+
+**Practical consequence for the paper:** citing FlexMatch/FreeMatch/CAT is necessary — a Q1 reviewer
+who works in SSL will recognize the term "adaptive threshold" immediately and expect them cited —
+but the write-up must state the difference (data-admission-once vs. pseudo-label-confidence-per-step)
+in the first paragraph that introduces the component, not leave it implicit.
+
 ## The Gap This Thesis Addresses
 
 Across all of the above, the strategy for **selecting, weighting, and adaptively integrating**
 synthetic samples with real clinical data after generation is largely unexplored. Existing
-combined-data approaches rely on fixed, manually chosen ratios [7, 8]. The closest prior work —
-Rehman et al. [13] (LoRA-tuned SD on CheXpert/MIMIC-CXR, with Grad-CAM verification) and
-Niemeijer et al. [15] (TSynD, uncertainty-guided sample generation) — each address one piece of
-the problem but neither develops an adaptive, multi-signal selection and mixing strategy. This
-thesis's ASISM module (Stage 3) is designed to fill that gap.
+combined-data approaches rely on fixed, manually chosen ratios [7, 8]. Among generation-focused
+studies, the closest prior work — Rehman et al. [13] (LoRA-tuned SD on CheXpert/MIMIC-CXR, with
+Grad-CAM verification) and Niemeijer et al. [15] (TSynD, uncertainty-guided sample generation) —
+each address one piece of the problem but neither develops an adaptive, multi-signal selection and
+mixing strategy. Among selection-focused studies, Xue et al. [19] is the closest work in problem
+framing (learned selection of synthetic medical images by downstream utility) but uses an RL
+controller on raw images with no multi-signal front end and no explicit class-aware threshold; the
+FlexMatch/FreeMatch/CAT family [20, 21, 23] establishes class-adaptive thresholding as a mature
+technique but for a different problem (in-training pseudo-label confidence, not one-time synthetic
+data admission). This thesis's ASISM module (Stage 3) — a multi-signal front end feeding a
+Deep-Sets-distilled ranking network and a class-aware, evidence-gated threshold network — is
+designed to fill the combination none of these individually address.

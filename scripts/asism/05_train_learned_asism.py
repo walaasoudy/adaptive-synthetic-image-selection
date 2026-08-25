@@ -28,7 +28,7 @@ from omegaconf import OmegaConf
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.asism.learned import active_feature_columns, contributing_signals, read_jsonl, safe_feature_frame, validate_utility_results  # noqa: E402
 from scripts.asism.candidate_pool import load_candidate_pool  # noqa: E402
-from scripts.asism.models import MultiObjectiveRankingNetwork, SetUtilityNetwork, pairwise_ranking_loss  # noqa: E402
+from scripts.asism.models import MultiSignalUtilityRankingNetwork, SetUtilityNetwork, pairwise_ranking_loss  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.manifest import hash_dict, read_json, sha256_file, write_frozen_json  # noqa: E402
@@ -260,7 +260,7 @@ def main() -> int:
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths: cfg.paths[key] = str(value)
     # BUG FIXED 2026-08-21: torch's global RNG was never seeded, so SetUtilityNetwork's and
-    # MultiObjectiveRankingNetwork's weight initialization (and dropout) differed every run —
+    # MultiSignalUtilityRankingNetwork's weight initialization (and dropout) differed every run —
     # confirmed to occasionally collapse the ranker enough that 06_learn_thresholds_select.py
     # selects 0 images. Reuses learned_asism.subset_design.seed (already the canonical seed for
     # this pipeline's subset construction, per 04_build_utility_subsets.py) rather than adding a
@@ -300,7 +300,7 @@ def main() -> int:
     if len(train_targets) < 2:
         raise SystemExit("Too few train-role images have sufficient subset exposure for image-ranking training.")
     rank_cfg = cfg.learned_asism.ranking_network
-    ranker = MultiObjectiveRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout)).to(device)
+    ranker = MultiSignalUtilityRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout)).to(device)
     train_ranker(ranker, lookup, train_targets, rank_cfg, device)
     ranker_pairwise_accuracy = pairwise_ranking_accuracy(ranker, lookup, val_targets_raw, device)
 

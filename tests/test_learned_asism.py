@@ -41,7 +41,7 @@ from scripts.asism.learned import (
 )
 from scripts.asism.models import (
     AdaptiveThresholdNetwork,
-    MultiObjectiveRankingNetwork,
+    MultiSignalUtilityRankingNetwork,
     SetUtilityNetwork,
     soft_selection_gate,
 )
@@ -156,7 +156,7 @@ def test_apply_feature_frame_reuses_frozen_stats_not_the_new_pool():
 
 
 def test_learned_ranking_score_matches_across_pools_through_full_network():
-    """Production path end-to-end: apply_feature_frame -> MultiObjectiveRankingNetwork -> sigmoid
+    """Production path end-to-end: apply_feature_frame -> MultiSignalUtilityRankingNetwork -> sigmoid
     (exactly what 06_learn_thresholds_select.py computes as `learned_ranking_score`). The same
     image with the same raw features, same frozen normalization stats, same ranking checkpoint,
     must get the exact same final score whether it sits in a 10-image pool or a 2000-image pool
@@ -182,7 +182,7 @@ def test_learned_ranking_score_matches_across_pools_through_full_network():
     ], ignore_index=True)
 
     torch.manual_seed(7)
-    ranker = MultiObjectiveRankingNetwork(input_dim=2, hidden=(4,), dropout=0.0)
+    ranker = MultiSignalUtilityRankingNetwork(input_dim=2, hidden=(4,), dropout=0.0)
     ranker.eval()
 
     def learned_ranking_score_for_shared_image(pool: pd.DataFrame) -> float:
@@ -1280,7 +1280,7 @@ def test_set_seed_makes_network_initialization_reproducible():
     def fresh_weights(seed):
         set_seed(seed)
         set_utility = SetUtilityNetwork(9, (128, 64), (32,))
-        ranker = MultiObjectiveRankingNetwork(9, (128, 64, 32), dropout=0.2)
+        ranker = MultiSignalUtilityRankingNetwork(9, (128, 64, 32), dropout=0.2)
         threshold = AdaptiveThresholdNetwork(11, 10, embedding_dim=16, hidden=(64, 32), dropout=0.1)
         return [p.detach().clone() for p in set_utility.parameters()], \
                [p.detach().clone() for p in ranker.parameters()], \
