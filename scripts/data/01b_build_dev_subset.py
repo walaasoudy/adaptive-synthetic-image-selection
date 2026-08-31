@@ -1,29 +1,3 @@
-#!/usr/bin/env python3
-"""Build a configurable, patient-safe development subset of CheXpert's train.csv.
-
-Purpose: validate the entire pipeline quickly on ~10,000 images (default, never hardcoded —
-see configs/stage1_lora_sdxl.yaml: dev_subset.target_size) before running it on the full
-~224,316-image dataset. The full dataset remains the source of the thesis's final results;
-this subset only exists for fast iteration (docs/proposal.md, README's development guidance).
-
-Sampling is a deterministic, patient-level, rarity-first greedy quota heuristic: no patient is
-ever split across the subset boundary (a patient's images are either all included or all
-excluded), and rarer pathologies are given priority when choosing which patients to draw, so the
-subset stays "reasonably representative" of the full label distribution without requiring a
-heavier formal multi-label stratification algorithm (see docs/thesis plan discussion — this is a
-dev-convenience feature, not the mechanism that produces final thesis results).
-
-02_build_patient_splits.py is unaware this script exists: it just reads whatever CSV
-`split.input_csv` points at and reruns its own unmodified 70/10/20 patient-level split on it.
-Pointing `split.input_csv` back at the full train.csv (the checked-in default) requires no code
-change anywhere in the pipeline.
-
-Usage:
-    python scripts/data/01b_build_dev_subset.py
-
-No-ops (prints a message, exits 0) when configs/stage1_lora_sdxl.yaml: dev_subset.enabled=false.
-"""
-
 from __future__ import annotations
 
 import importlib

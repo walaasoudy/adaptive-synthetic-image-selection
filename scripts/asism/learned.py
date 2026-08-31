@@ -22,6 +22,7 @@ FEATURE_COLUMNS_BY_SIGNAL = {
     "uncertainty": {"uncertainty_mean_std"},
     "explainability": {"explainability_region_overlap"},
     "agreement": {"agreement_score"},
+    "distinctiveness": {"distinctiveness_score"},
 }
 
 

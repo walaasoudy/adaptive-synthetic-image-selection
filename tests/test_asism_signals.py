@@ -12,12 +12,16 @@ sys.dont_write_bytecode = True
 from pathlib import Path
 
 import numpy as np
+import pytest
 from omegaconf import OmegaConf
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.asism.signals import (  # noqa: E402
     compute_agreement_scores,
+    region_from_cam_mass,
+    compute_distinctiveness_scores,
+    duplicate_clusters,
     compute_iqa_scores,
     compute_similarity_scores,
     compute_uncertainty_scores,
@@ -238,6 +242,152 @@ def test_expected_region_multilabel_is_union():
     cardiomegaly = expected_region_for(_intended(["Cardiomegaly"]), CONFIG)
     # The union must be at least as tall as either constituent region.
     assert both[3] >= cardiomegaly[3]
+
+
+# ----------------------------------------------------------------------------------------------
+# §4.6 Distinctiveness (within-synthetic redundancy)
+# ----------------------------------------------------------------------------------------------
+
+def _distinct_config(k_neighbors=10, duplicate_similarity=0.95):
+    return OmegaConf.create({
+        "signals": {"distinctiveness": {
+            "k_neighbors": k_neighbors,
+            "duplicate_similarity": duplicate_similarity,
+            "deduplicate_before_scoring": False,
+        }}
+    })
+
+
+def _vec(*positive_labels):
+    return {label: int(label in positive_labels) for label in PRIMARY_ENDPOINT_LABELS}
+
+
+def test_distinctiveness_penalises_within_class_duplicates():
+    """Three near-identical images of one class must score LOWER than a genuinely different one."""
+    duplicate = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    embeddings = np.stack([
+        duplicate,                                  # A
+        duplicate + np.array([0.01, 0.0, 0.0]),     # B ~ A
+        duplicate + np.array([0.0, 0.01, 0.0]),     # C ~ A
+        np.array([0.0, 1.0, 0.0], dtype=np.float32),  # D, orthogonal
+    ])
+    intended = [_vec("Edema")] * 4
+    frame = compute_distinctiveness_scores(embeddings, intended, _distinct_config(k_neighbors=1))
+
+    assert frame["distinctiveness_score"][3] > frame["distinctiveness_score"][0]
+    assert frame["distinctiveness_score"][3] > frame["distinctiveness_score"][1]
+    assert frame["distinctiveness_score"][3] > frame["distinctiveness_score"][2]
+    # A, B and C are near-identical, so they receive near-identical scores -- which is exactly why a
+    # per-image threshold cannot keep just one of them, and why duplicate_clusters() exists.
+    assert abs(frame["distinctiveness_score"][0] - frame["distinctiveness_score"][1]) < 0.05
+
+
+def test_distinctiveness_is_computed_within_class_not_across_classes():
+    """A rare class must not look 'distinct' merely because fewer images of it were generated.
+
+    Guards the class-size confound: the two Fracture images are identical to each other, so both
+    must be scored redundant, even though Edema has five times as many images in the pool.
+    """
+    common = np.array([1.0, 0.0], dtype=np.float32)
+    rare = np.array([0.0, 1.0], dtype=np.float32)
+    embeddings = np.stack(
+        [common + np.random.default_rng(i).normal(0, 0.3, 2).astype(np.float32) for i in range(10)]
+        + [rare, rare.copy()]
+    )
+    intended = [_vec("Edema")] * 10 + [_vec("Fracture")] * 2
+    frame = compute_distinctiveness_scores(embeddings, intended, _distinct_config(k_neighbors=1))
+
+    fracture = frame["distinctiveness_score"][10:].to_numpy()
+    edema = frame["distinctiveness_score"][:10].to_numpy()
+    assert (fracture < edema.mean()).all(), (
+        "identical rare-class images scored as more distinct than a diverse common class -- the "
+        "score is leaking class size instead of measuring redundancy"
+    )
+    assert (frame["distinctiveness_group_size"][:10] == 10).all()
+    assert (frame["distinctiveness_group_size"][10:] == 2).all()
+
+
+def test_distinctiveness_is_undefined_for_a_single_image_class():
+    """One image in its class has no peer, so redundancy is undefined -- never a fabricated 1.0."""
+    embeddings = np.stack([np.array([1.0, 0.0], dtype=np.float32), np.array([0.0, 1.0], dtype=np.float32)])
+    frame = compute_distinctiveness_scores(embeddings, [_vec("Edema"), _vec("Fracture")], _distinct_config())
+
+    assert bool(frame["distinctiveness_is_undefined"].all())
+    assert frame["distinctiveness_score"].isna().all()
+    assert (frame["distinctiveness_k_used"] == 0).all()
+
+
+def test_distinctiveness_direction_matches_the_other_signals():
+    """Higher must mean BETTER (more unique), like every other admitted signal."""
+    embeddings = np.stack([
+        np.array([1.0, 0.0], dtype=np.float32),
+        np.array([1.0, 0.0], dtype=np.float32),   # exact duplicate of the first
+        np.array([0.0, 1.0], dtype=np.float32),   # unrelated
+    ])
+    intended = [_vec("Edema")] * 3
+    frame = compute_distinctiveness_scores(embeddings, intended, _distinct_config(k_neighbors=1))
+
+    assert frame["distinctiveness_score"][2] > frame["distinctiveness_score"][0]
+    assert frame["distinctiveness_score"][0] == pytest.approx(0.0, abs=1e-5)
+    assert frame["distinctiveness_n_duplicates"][0] >= 1
+    assert frame["distinctiveness_n_duplicates"][2] == 0
+
+
+def test_duplicate_clusters_group_only_within_class_and_skip_singletons():
+    """The pre-scoring dedup step: cluster near-identical images so ONE representative can be kept."""
+    same = np.array([1.0, 0.0], dtype=np.float32)
+    embeddings = np.stack([same, same.copy(), np.array([0.0, 1.0], dtype=np.float32), same.copy()])
+    # index 3 is embedding-identical to 0 and 1 but belongs to a DIFFERENT class.
+    intended = [_vec("Edema"), _vec("Edema"), _vec("Edema"), _vec("Fracture")]
+
+    clusters = duplicate_clusters(embeddings, intended, duplicate_similarity=0.95)
+
+    assert clusters == [[0, 1]], (
+        "expected exactly one within-class duplicate cluster; a cross-class pair must never be "
+        "merged, and singletons must not be reported"
+    )
+
+
+# ----------------------------------------------------------------------------------------------
+# §4.4 Empirically derived expected regions
+# ----------------------------------------------------------------------------------------------
+
+def test_region_from_cam_mass_finds_a_tight_box_around_concentrated_attention():
+    """A box derived from attention must actually surround where the attention is."""
+    cam = np.zeros((20, 20), dtype=np.float32)
+    cam[12:17, 4:9] = 1.0  # lower-left blob
+    x0, y0, x1, y1 = region_from_cam_mass(cam, mass_fraction=0.9)
+
+    assert 0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0
+    assert x0 <= 4 / 20 and x1 >= 9 / 20, "box misses the blob horizontally"
+    assert y0 <= 12 / 20 and y1 >= 17 / 20, "box misses the blob vertically"
+    assert (x1 - x0) < 0.6 and (y1 - y0) < 0.6, "box is far larger than the attention it encloses"
+
+
+def test_region_from_cam_mass_rejects_empty_attention():
+    """Zero attention must raise, never silently return a whole-image box."""
+    with pytest.raises(ValueError):
+        region_from_cam_mass(np.zeros((8, 8), dtype=np.float32), mass_fraction=0.8)
+
+
+def test_derived_regions_take_precedence_but_fall_back_per_label():
+    """Precedence is per LABEL: a pathology the derivation skipped keeps its config box."""
+    config = OmegaConf.create({"signals": {"explainability": {
+        "region_mode": "pathology_specific",
+        "baseline_box": [0.20, 0.15, 0.80, 0.85],
+        "pathology_regions": {"Edema": [0.10, 0.10, 0.20, 0.20],
+                              "Fracture": [0.70, 0.70, 0.90, 0.90]},
+    }}})
+    derived = {"Edema": [0.30, 0.30, 0.40, 0.40]}
+
+    edema = expected_region_for({"Edema": 1}, config, derived)
+    assert edema == (0.30, 0.30, 0.40, 0.40), "derived region should win for a derived label"
+
+    fracture = expected_region_for({"Fracture": 1}, config, derived)
+    assert fracture == (0.70, 0.70, 0.90, 0.90), "skipped label must keep its config box"
+
+    # Passing nothing must reproduce the pre-existing behaviour exactly.
+    assert expected_region_for({"Edema": 1}, config) == (0.10, 0.10, 0.20, 0.20)
 
 
 if __name__ == "__main__":

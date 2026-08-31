@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 3b — ASISM component Go/No-Go gate (docs/stages2_to_5_plan.md §4.6).
 
-Runs BEFORE weights/thresholds are tuned and frozen. Each of the five signals is checked for
+Runs BEFORE weights/thresholds are tuned and frozen. Each of the six signals is checked for
 technical validity, score directionality, numerical stability, reproducibility, missing-output
 rate, redundancy with the other signals, and downstream usefulness.
 
@@ -42,6 +42,7 @@ PRIMARY_SCORE_COLUMN = {
     "uncertainty": ("uncertainty_mean_std", None),   # None = no a-priori direction (§4.3)
     "explainability": ("explainability_region_overlap", True),
     "agreement": ("agreement_score", True),
+    "distinctiveness": ("distinctiveness_score", True),
 }
 
 ARTIFACT_FILENAME = {name: f"{name}_scores.parquet" for name in PRIMARY_SCORE_COLUMN}
@@ -159,6 +160,35 @@ def check_directionality(frame: pd.DataFrame, signal: str) -> dict:
             detail={"min": float(values.min()) if len(values) else None,
                     "max": float(values.max()) if len(values) else None},
         )
+
+    elif signal == "distinctiveness":
+        # Images with at least one within-class near-duplicate must score LOWER than images with
+        # none — a duplicate cluster is redundancy the score is specifically meant to catch.
+        if "distinctiveness_n_duplicates" in frame.columns:
+            defined = (
+                frame.loc[~frame["distinctiveness_is_undefined"].astype(bool)]
+                if "distinctiveness_is_undefined" in frame.columns else frame
+            )
+            has_duplicate = defined["distinctiveness_n_duplicates"] > 0
+            if has_duplicate.any() and (~has_duplicate).any():
+                with_duplicates = defined.loc[has_duplicate, "distinctiveness_score"].mean()
+                without_duplicates = defined.loc[~has_duplicate, "distinctiveness_score"].mean()
+                result.update(
+                    passed=bool(with_duplicates < without_duplicates),
+                    method="images_with_duplicates_score_lower_than_those_without",
+                    detail={
+                        "with_duplicates_mean": float(with_duplicates),
+                        "without_duplicates_mean": float(without_duplicates),
+                    },
+                )
+            else:
+                result.update(
+                    passed=True,
+                    method="no_duplicate_contrast_in_sample",
+                    detail={"note": "No within-class duplicates present; directionality not contradicted."},
+                )
+        else:
+            result.update(passed=False, method="missing_n_duplicates_column", detail={})
 
     elif signal == "uncertainty":
         # §4.3 forbids an a-priori direction: high uncertainty is NOT defined as bad. The check is

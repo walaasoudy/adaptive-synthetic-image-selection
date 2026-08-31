@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Safely preprocess the generation splits into square RGB JPEG images."""
-
 from __future__ import annotations
 
 import argparse

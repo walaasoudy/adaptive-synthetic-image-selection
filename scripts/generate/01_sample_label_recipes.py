@@ -1,28 +1,3 @@
-#!/usr/bin/env python3
-"""Stage 2a — sample the synthetic label-recipe table (docs/stages2_to_5_plan.md §3).
-
-Produces the `intended_label_vector` table Stage 2b generates from. These are conditioning
-intents, NOT ground truth: whether the resulting pixels actually agree is measured separately by
-ASISM's agreement signal (§4.5).
-
-Recipe validity is an auditable procedure, not an assertion (§3):
-  1. empirical co-occurrence mined from gen_train at >= min_support_patients;
-  2. medical-rule overrides, both directions (allow-list and block-list);
-  3. No Finding recipes are the ALL-ZERO vector over GENERATION_TARGET_LABELS (the primary
-     disease labels plus any excluded-from-primary-for-support-only labels, plan §3 revision
-     note), mutually exclusive with any positive pathology;
-  4. Support Devices is a context attribute only — it never enters the disease vector;
-  5. no -1 (uncertain) intent is ever encoded;
-  6. frontal-only, matching Stage 1's view_filter;
-  7. per-label quotas oversample rare classes subject to the support rule.
-
-EVERY accept/reject decision is written to recipe_decisions.jsonl with its reason — nothing is
-silently dropped, mirroring Stage 1's preprocessing-log discipline.
-
-Usage:
-    python scripts/generate/01_sample_label_recipes.py [--namespace dev] [--limit N]
-"""
-
 from __future__ import annotations
 
 import argparse
