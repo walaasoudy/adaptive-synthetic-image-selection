@@ -35,6 +35,7 @@ from scripts.asism.models import MultiSignalUtilityRankingNetwork, SetUtilityNet
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.manifest import hash_dict, read_json, sha256_file, write_frozen_json  # noqa: E402
+from scripts.utils.seed import set_seed  # noqa: E402
 
 
 def padded_batch(records, feature_lookup, device):
@@ -261,6 +262,13 @@ def main() -> int:
     namespace = args.namespace or str(cfg.split_namespace)
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths: cfg.paths[key] = str(value)
+    # BUG FIXED 2026-08-21: torch's global RNG was never seeded, so SetUtilityNetwork's and
+    # MultiSignalUtilityRankingNetwork's weight initialization (and dropout) differed every run —
+    # confirmed to occasionally collapse the ranker enough that 06_learn_thresholds_select.py
+    # selects 0 images. Reuses learned_asism.subset_design.seed (already the canonical seed for
+    # this pipeline's subset construction, per 04_build_utility_subsets.py) rather than adding a
+    # second seed knob that could silently drift out of sync with it.
+    set_seed(int(cfg.learned_asism.subset_design.seed))
     subset_path, result_path = Path(cfg.paths.utility_subsets), Path(cfg.paths.utility_results)
     if not subset_path.is_file() or not result_path.is_file():
         raise SystemExit("Learned ASISM needs frozen utility_subsets.jsonl and measured utility_results.jsonl; run Stage 3 proxy experiments first.")

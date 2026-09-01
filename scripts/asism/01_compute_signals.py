@@ -31,11 +31,12 @@ from tqdm.auto import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.asism.signals import (  # noqa: E402
+    aggregate_pathology_overlaps,
     compute_agreement_scores,
+    compute_distinctiveness_scores,
     compute_iqa_scores,
     compute_similarity_scores,
     compute_uncertainty_scores,
-    aggregate_pathology_overlaps,
     expected_region_for,
     region_overlap_score,
     write_score_artifact,
@@ -49,7 +50,10 @@ from scripts.utils.artifact_contracts import (  # noqa: E402
 from scripts.utils.manifest import get_git_commit_hash, read_json, sha256_file  # noqa: E402
 from scripts.utils.splits import load_split  # noqa: E402
 
+# "distinctiveness" is produced INSIDE run_similarity (it reuses that step's synthetic
+# embeddings, so it costs no extra encoder passes) and is therefore not separately runnable.
 ALL_SIGNALS = ["similarity", "iqa", "uncertainty", "explainability", "agreement"]
+PRODUCED_SIGNALS = ALL_SIGNALS + ["distinctiveness"]
 
 
 def load_config():
@@ -206,6 +210,27 @@ def run_explainability(manifest, images_dir, config, provenance, scores_dir) -> 
 
     from scripts.utils.labels import CLASSIFIER_TARGET_LABELS
 
+    # Empirically derived expected regions (00c_derive_expected_regions.py) take precedence per
+    # label over the hand-entered config boxes. Absent, the config boxes still apply -- so this is
+    # an upgrade, not a new hard dependency.
+    derived_regions, regions_source = {}, "config_hand_entered"
+    regions_path = Path(config.paths.asism_dir) / "expected_regions.json"
+    if regions_path.is_file():
+        derived_payload = read_json(regions_path)
+        derived_regions = dict(derived_payload.get("regions", {}))
+        regions_source = f"derived:{derived_payload.get('method')}"
+        print(
+            f"explainability: using {len(derived_regions)} empirically derived region(s); "
+            "any remaining label falls back to its config box",
+            flush=True,
+        )
+    else:
+        print(
+            "explainability: no derived expected_regions.json -- using hand-entered config boxes. "
+            "Run 00c_derive_expected_regions.py to replace them with measured ones.",
+            flush=True,
+        )
+
     records = synthetic_records(manifest, images_dir)
     dataset = CXRRecordDataset(records, resolution=resolution)
 
@@ -238,11 +263,11 @@ def run_explainability(manifest, images_dir, config, provenance, scores_dir) -> 
                 if target_label == "__max_disease__":
                     disease_idx = [CLASSIFIER_TARGET_LABELS.index(l) for l in PRIMARY_ENDPOINT_LABELS]
                     score = logits[0, disease_idx].max()
-                    region = expected_region_for({}, config)
+                    region = expected_region_for({}, config, derived_regions)
                 else:
                     score = logits[0, CLASSIFIER_TARGET_LABELS.index(target_label)]
                     single_intent = {label: int(label == target_label) for label in PRIMARY_ENDPOINT_LABELS}
-                    region = expected_region_for(single_intent, config)
+                    region = expected_region_for(single_intent, config, derived_regions)
                 score.backward()
                 weights = gradients["value"].mean(dim=(2, 3), keepdim=True)
                 cam = torch.relu((weights * activations["value"]).sum(dim=1)).squeeze(0).cpu().numpy()
@@ -269,7 +294,9 @@ def run_explainability(manifest, images_dir, config, provenance, scores_dir) -> 
 
     frame = pd.DataFrame(rows)
     write_score_artifact(
-        frame, scores_dir / "explainability_scores.parquet", "explainability", provenance
+        frame, scores_dir / "explainability_scores.parquet", "explainability",
+        {**provenance, "expected_regions_source": regions_source,
+         "n_derived_regions_used": len(derived_regions)},
     )
     print(f"explainability: {len(frame)} rows, mean overlap={frame['explainability_region_overlap'].mean():.4f}", flush=True)
 
@@ -367,11 +394,16 @@ def run_similarity(manifest, images_dir, config, provenance, scores_dir, namespa
     synthetic_paths = [images_dir / f"{image_id}.jpg" for image_id in manifest["image_id"]]
     print(f"similarity: embedding {len(synthetic_paths)} synthetic, {len(reference_paths)} real", flush=True)
 
+    # Embed ONCE and reuse. The distinctiveness signal (§4.6) is computed from these same synthetic
+    # embeddings, so it adds no encoder passes at all -- only a per-class matrix multiply.
+    synthetic_embeddings = embed(synthetic_paths)
+    intended_vectors = [dict(v) for v in manifest["intended_label_vector"]]
+
     frame = compute_similarity_scores(
-        embed(synthetic_paths),
+        synthetic_embeddings,
         embed(reference_paths),
         reference_vectors,
-        [dict(v) for v in manifest["intended_label_vector"]],
+        intended_vectors,
         config,
     )
     frame.insert(0, "image_id", manifest["image_id"].values)
@@ -379,6 +411,20 @@ def run_similarity(manifest, images_dir, config, provenance, scores_dir, namespa
     print(
         f"similarity: {len(frame)} rows, near-duplicates flagged="
         f"{int(frame['novelty_is_near_duplicate'].sum())}",
+        flush=True,
+    )
+
+    distinct = compute_distinctiveness_scores(synthetic_embeddings, intended_vectors, config)
+    distinct.insert(0, "image_id", manifest["image_id"].values)
+    write_score_artifact(
+        distinct, scores_dir / "distinctiveness_scores.parquet", "distinctiveness", provenance
+    )
+    defined = distinct.loc[~distinct["distinctiveness_is_undefined"]]
+    print(
+        f"distinctiveness: {len(distinct)} rows, "
+        f"{int(distinct['distinctiveness_is_undefined'].sum())} undefined (single-image class), "
+        f"mean={defined['distinctiveness_score'].mean():.4f} "
+        f"images-with-a-duplicate={int((defined['distinctiveness_n_duplicates'] > 0).sum())}",
         flush=True,
     )
 

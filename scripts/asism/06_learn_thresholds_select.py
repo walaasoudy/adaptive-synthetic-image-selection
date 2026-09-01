@@ -22,6 +22,7 @@ from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
 from scripts.utils.manifest import read_json, sha256_file, write_frozen_json  # noqa: E402
+from scripts.utils.seed import set_seed  # noqa: E402
 
 
 def context_vector(scores: np.ndarray, prevalence: float, candidates: int, target_count: int) -> np.ndarray:
@@ -53,6 +54,10 @@ def main() -> int:
     namespace = args.namespace or str(cfg.split_namespace)
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths: cfg.paths[key] = str(value)
+    # BUG FIXED 2026-08-21: this script never seeded torch's global RNG — AdaptiveThresholdNetwork's
+    # init was non-deterministic across runs. Confirmed to occasionally produce thresholds so high
+    # that ZERO images clear them (see the guard added below). Same fix as 05/08_train_*.py.
+    set_seed(int(cfg.learned_asism.subset_design.seed))
     learned_dir = Path(cfg.paths.learned_dir)
     training_manifest = read_json(learned_dir / "learned_training_manifest.json")
 
@@ -106,6 +111,17 @@ def main() -> int:
         else:
             rejected.append({"image_id": image_id, "reason": "below_learned_class_threshold",
                              "ranking_score": float(row.learned_ranking_score), "threshold": float(threshold)})
+    if not selected:
+        # Matches 09_finalize_learned_selection.py's identical guard for the adaptive policy. A
+        # silently-empty selected_manifest.jsonl is a valid-looking file that downstream code
+        # (Stage 4 condition builders) would only catch later via an unrelated "no synthetic images
+        # found" error, far from this actual cause — fail here, at the source, instead.
+        raise SystemExit(
+            "FINALIZATION GATE: fixed-ratio learned threshold selected ZERO images. This is a real "
+            "failure, not empty-by-design: check learned_thresholds against learned_ranking_score's "
+            "actual distribution (a degenerate ranker or an unreasonably strict "
+            "threshold_network.budget_weight/min_selected_per_label are the usual causes)."
+        )
     with open(Path(cfg.paths.learned_selected_manifest), "x", encoding="utf-8") as handle:
         for image_id in sorted(selected):
             score = float(merged.loc[merged.image_id.astype(str) == image_id, "learned_ranking_score"].iloc[0])

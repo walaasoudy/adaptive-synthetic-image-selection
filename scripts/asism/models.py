@@ -92,6 +92,8 @@ class MultiSignalUtilityRankingNetwork(nn.Module):
 
     def __init__(self, input_dim: int, hidden=(128, 64, 32), dropout=0.2):
         super().__init__()
+        # `network` is load-bearing: it determines state_dict keys, so existing ranking_model.pt
+        # checkpoints stay loadable across the rename. Do not rename this attribute.
         self.network = mlp([input_dim, *hidden, 1], dropout=dropout)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
