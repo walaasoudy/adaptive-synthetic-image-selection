@@ -17,7 +17,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.asism.learned import apply_feature_frame  # noqa: E402
 from scripts.asism.candidate_pool import load_candidate_pool  # noqa: E402
-from scripts.asism.models import AdaptiveThresholdNetwork, MultiObjectiveRankingNetwork  # noqa: E402
+from scripts.asism.models import AdaptiveThresholdNetwork, MultiSignalUtilityRankingNetwork  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
@@ -61,7 +61,7 @@ def main() -> int:
     normalized = apply_feature_frame(merged, columns, training_manifest["normalization"])
     checkpoint = torch.load(learned_dir / "ranking_model.pt", map_location="cpu", weights_only=True)
     rank_cfg = cfg.learned_asism.ranking_network
-    ranker = MultiObjectiveRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout))
+    ranker = MultiSignalUtilityRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout))
     ranker.load_state_dict(checkpoint["state_dict"]); ranker.eval()
     with torch.no_grad():
         raw = ranker(torch.tensor(normalized.to_numpy(np.float32))).numpy()
