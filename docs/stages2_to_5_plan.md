@@ -308,9 +308,14 @@ Pipeline (`scripts/asism/04` through `09`, config: `configs/stage3_asism.yaml` �
    evaluation — no new leakage surface).
 2. **`05_train_learned_asism.py`** — trains `SetUtilityNetwork` (permutation-invariant Deep Sets) on
    *measured* subset-level utility only, then distills per-image ranking scores
-   (`MultiObjectiveRankingNetwork`, trained with a pairwise ranking loss against the distilled
-   scores) — never by copying a subset's AUROC onto its member images. This is the mechanism that
-   avoids the pseudo-replication problem `novelty_target_decision.md` raised.
+   (`MultiSignalUtilityRankingNetwork` — the admitted signals fused into one scalar utility target,
+   not a multi-objective model; trained with Smooth-L1 + a pairwise ranking loss against the
+   distilled scores) — never by copying a subset's AUROC onto its member images. This is the
+   mechanism that avoids the pseudo-replication problem `novelty_target_decision.md` raised. The
+   distillation target is the leave-one-out marginal by default; `banzhaf_msr_targets` computes a
+   Data-Banzhaf (Wang & Jia, AISTATS 2023) alternative from the *same* measured subsets (no extra
+   proxy training) and 05 records the two targets' Spearman rank agreement, keeping Banzhaf opt-in
+   (`ranking_network.target_source`) until that diagnostic is reviewed.
 3. **`06_learn_thresholds_select.py`** — the fixed-ratio learned threshold. An intermediate stage of
    the pipeline and an internal ablation reference; it is **not** a Stage 4 condition (the former
    condition G was removed — §7 v3 revision note).
@@ -325,6 +330,13 @@ Pipeline (`scripts/asism/04` through `09`, config: `configs/stage3_asism.yaml` �
    train evidence but below `min_verified_contexts_per_class` on either side), or
    `adaptive_threshold_network` (enough verified evidence on both train and held-out sides **and**
    the frozen acceptance criteria in `configs/stage3_asism.yaml` → `acceptance_criteria` pass).
+   The finalizer then runs the pre-registered `choose_full_policy` tie rule over the full-policy
+   proxy measurements (asism_tuning_heldout only) to pick **one** winning threshold policy — the
+   competing variants are `fixed_target_ratio_…baseline_v1`, `hard_proxy_best_among_verified`,
+   `adaptive_threshold_network`, `literal_top_50_percent`, and the training-free
+   `freematch_style_adaptive_percentile` (FreeMatch-adapted; rarer real-population classes get a
+   more lenient admission percentile). The single winner is what Stage 4 **condition F** consumes;
+   the variants do **not** each become separate final-evaluation conditions.
 
 **Governance status:** implemented but **not yet supervisor-approved** — see the resolution note at
 the top of `docs/novelty_target_decision.md`. Not yet run on production data (§11).
