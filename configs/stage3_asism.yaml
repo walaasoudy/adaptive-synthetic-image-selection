@@ -61,6 +61,10 @@ signals:
     min_exact_match_references: 25    # below this, fall back down the hierarchy (§4.1)
     # Memorization flag: high single-NN similarity with low rank-k spread means the image is
     # suspiciously close to ONE real training image rather than to the class in general.
+    # The 0.95 cutoff is literature-grounded, not hand-tuned: DINOv2 cosine >= 0.95 == "almost
+    # identical" for medical latent-diffusion output, validated against real patient replication by
+    # Dar et al., "Unconditional latent diffusion models memorize patient imaging data", Nature
+    # Biomedical Engineering (2025), doi:10.1038/s41551-025-01468-8.
     near_duplicate_similarity: 0.95
     near_duplicate_spread: 0.02
 
@@ -198,6 +202,11 @@ learned_asism:
     image_hidden_dims: [128, 64]
     utility_hidden_dims: [32]
     pooling: "mean"
+    # Ablation only (Phase 11), default false = frozen mean-only pipeline. When true the set is
+    # summarized by masked mean AND std pooling and a fixed full-pool summary is concatenated to the
+    # utility head (Xie et al., ICLR 2024). Caveat: the (n-1) marginal-target size-normalization in
+    # 05_train_learned_asism.py is only first-order correct for the mean component under this flag.
+    superset_conditioning: false
     epochs: 100
     batch_size: 8
     learning_rate: 1.0e-4
@@ -206,12 +215,26 @@ learned_asism:
     pairwise_ranking_weight: 0.5
     early_stopping_patience: 12
   ranking_network:
+    # MultiSignalUtilityRankingNetwork (models.py): 6 admitted signals -> 128 -> 64 -> 32 -> 1
+    # scalar utility. One target, two loss terms (Smooth-L1 + pairwise ranking). NOT multi-objective.
     hidden_dims: [128, 64, 32]
     dropout: 0.20
     epochs: 100
     batch_size: 128
     learning_rate: 1.0e-4
     pairwise_ranking_weight: 0.5
+    # Ranking-target generator. "leave_one_out" = mean size-normalized LOO marginal set-utility (the
+    # frozen default). "banzhaf_msr" = Data-Banzhaf value from the SAME measured subsets (Wang & Jia,
+    # AISTATS 2023) — no extra proxy training, no GPU. 05 always computes both and records their
+    # Spearman rank agreement (learned_training_manifest.json -> target_generation); banzhaf_msr stays
+    # opt-in until that diagnostic is reviewed.
+    target_source: "leave_one_out"
+    # Transform the distilled per-image target before the Smooth-L1 + pairwise loss so one noisy
+    # proxy-subset measurement cannot dominate training on ~96 images (2D-OOB, NeurIPS 2024; Chi et
+    # al., ICML 2026; Banzhaf robustness rationale). Every option is order-preserving.
+    # "standardize" (default) | "rank" | "none". target_winsorize_quantile clips each tail (0.0 = off).
+    target_normalization: "standardize"
+    target_winsorize_quantile: 0.0
   threshold_network:
     # Architecture (AdaptiveThresholdNetwork, trained via supervised distillation in
     # 08_train_threshold_network.py — NOT the soft-gate end-to-end design; that path was rejected
@@ -250,6 +273,16 @@ learned_asism:
     # execution step (08b_verify_full_policy_proxy.py --phase run, not run in this pass).
     # n_variants/n_seeds are provisional until 08 has run and the real number of policy variants is
     # known.
+    # Training-free FreeMatch-style class-adaptive percentile threshold
+    # (learned.py::freematch_style_percentile_per_class). Registered as a competing full-policy
+    # variant (freematch_style_adaptive_percentile), NEVER a replacement for the learned network.
+    # Leniency is RANGE-normalised across the observed per-class real prevalences, and a hard
+    # per-class floor (threshold_network.min_selected_per_label, via enforce_per_class_selection_floor
+    # in 08b/09) is applied after thresholding so a rare class is never selected down to zero — the
+    # one-time-curation analogue of SST's class-fairness term (Zhao et al., IP&M, 2025).
+    freematch_style:
+      base_percentile: 50.0
+      min_percentile: 10.0
     full_policy_verification:
       n_variants: 5
       n_seeds: 3
@@ -263,6 +296,7 @@ learned_asism:
           - hard_proxy_best_among_verified
           - adaptive_threshold_network
           - literal_top_50_percent
+          - freematch_style_adaptive_percentile
     # Governance (08) — three-way, no other outcome possible:
     #   ZERO verified TRAIN contexts (regardless of held-out)           -> fixed-ratio baseline
     #   verified train contexts, but below this minimum on either side  -> hard_proxy_best_among_verified

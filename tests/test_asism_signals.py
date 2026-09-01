@@ -203,6 +203,18 @@ def test_similarity_normal_image_is_not_flagged():
     assert bool(result.loc[0, "novelty_is_near_duplicate"]) is False
 
 
+def test_near_duplicate_similarity_threshold_is_literature_grounded():
+    """The 0.95 near-duplicate cutoff is not hand-tuned: DINOv2 cosine >= 0.95 == "almost
+    identical" for medical latent-diffusion output, validated against real patient replication by
+    Dar et al., Nature Biomedical Engineering (2025), doi:10.1038/s41551-025-01468-8. A silent
+    change to this constant would weaken that citation, so pin it here."""
+    assert float(CONFIG.signals.similarity.near_duplicate_similarity) == 0.95
+    assert float(CONFIG.signals.similarity.near_duplicate_spread) == 0.02
+    assert bool(CONFIG.learned_asism.safety.reject_near_duplicates) is True
+    config_text = (CONFIGS_DIR / "stage3_asism.yaml").read_text(encoding="utf-8")
+    assert "Nature" in config_text and "10.1038/s41551-025-01468-8" in config_text
+
+
 # ---------------------------------------------------------------- Explainability (§4.4)
 
 def test_region_overlap_full_inside():

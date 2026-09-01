@@ -33,7 +33,7 @@ from scripts.asism.learned import (  # noqa: E402
     apply_feature_frame, bootstrap_class_contexts, diversify_verification_candidates,
     hard_threshold_grid_search, real_class_support_context, split_image_pool,
 )
-from scripts.asism.models import MultiObjectiveRankingNetwork, SetUtilityNetwork  # noqa: E402
+from scripts.asism.models import MultiSignalUtilityRankingNetwork, SetUtilityNetwork  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
@@ -59,15 +59,18 @@ def load_frozen_models(cfg, columns: list[str]):
     training_manifest = read_json(learned_dir / "learned_training_manifest.json")
 
     set_cfg = cfg.learned_asism.set_utility_network
-    critic = SetUtilityNetwork(len(columns), tuple(set_cfg.image_hidden_dims), tuple(set_cfg.utility_hidden_dims))
     critic_checkpoint = torch.load(learned_dir / "set_utility_model.pt", map_location="cpu", weights_only=True)
+    critic = SetUtilityNetwork(
+        len(columns), tuple(set_cfg.image_hidden_dims), tuple(set_cfg.utility_hidden_dims),
+        superset_conditioning=bool(critic_checkpoint.get("superset_conditioning", False)),
+    )
     critic.load_state_dict(critic_checkpoint["state_dict"])
     critic.eval()
     for parameter in critic.parameters():
         parameter.requires_grad_(False)
 
     rank_cfg = cfg.learned_asism.ranking_network
-    ranker = MultiObjectiveRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout))
+    ranker = MultiSignalUtilityRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout))
     ranker_checkpoint = torch.load(learned_dir / "ranking_model.pt", map_location="cpu", weights_only=True)
     ranker.load_state_dict(ranker_checkpoint["state_dict"])
     ranker.eval()
