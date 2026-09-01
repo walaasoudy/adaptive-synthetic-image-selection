@@ -12,6 +12,7 @@ from scripts.asism.learned import (
     active_feature_columns,
     aggregate_hard_proxy_best_threshold,
     apply_feature_frame,
+    banzhaf_msr_targets,
     bootstrap_class_contexts,
     build_controlled_subsets,
     build_role_conditioned_subsets,
@@ -24,23 +25,28 @@ from scripts.asism.learned import (
     eligible_classes_for_official_training,
     filter_targets_to_eligible_classes,
     enforce_acceptance_criteria,
+    enforce_per_class_selection_floor,
     evaluate_subset_design_feasibility,
+    freematch_style_percentile_per_class,
     freeze_acceptance_criteria,
     hard_threshold_grid_search,
     held_out_generalization_metrics,
+    loo_vs_banzhaf_diagnostic,
+    normalize_ranking_targets,
     pool_feasibility_report,
     real_class_support_context,
     resolve_critic_assisted_exploratory_targets,
     resolve_verified_only_targets,
     safe_feature_frame,
     scientific_status_for_namespace,
+    spearman_with_reason,
     split_image_pool,
     validate_utility_results,
     verify_built_subsets,
 )
 from scripts.asism.models import (
     AdaptiveThresholdNetwork,
-    MultiObjectiveRankingNetwork,
+    MultiSignalUtilityRankingNetwork,
     SetUtilityNetwork,
     soft_selection_gate,
 )
@@ -155,7 +161,7 @@ def test_apply_feature_frame_reuses_frozen_stats_not_the_new_pool():
 
 
 def test_learned_ranking_score_matches_across_pools_through_full_network():
-    """Production path end-to-end: apply_feature_frame -> MultiObjectiveRankingNetwork -> sigmoid
+    """Production path end-to-end: apply_feature_frame -> MultiSignalUtilityRankingNetwork -> sigmoid
     (exactly what 06_learn_thresholds_select.py computes as `learned_ranking_score`). The same
     image with the same raw features, same frozen normalization stats, same ranking checkpoint,
     must get the exact same final score whether it sits in a 10-image pool or a 2000-image pool
@@ -181,7 +187,7 @@ def test_learned_ranking_score_matches_across_pools_through_full_network():
     ], ignore_index=True)
 
     torch.manual_seed(7)
-    ranker = MultiObjectiveRankingNetwork(input_dim=2, hidden=(4,), dropout=0.0)
+    ranker = MultiSignalUtilityRankingNetwork(input_dim=2, hidden=(4,), dropout=0.0)
     ranker.eval()
 
     def learned_ranking_score_for_shared_image(pool: pd.DataFrame) -> float:
@@ -949,6 +955,7 @@ def test_plan_full_policy_verification_is_plan_only_with_independent_budget():
     plan = module.plan_full_policy_verification(per_class_official_method, full_policy_cfg)
     assert "fixed_target_ratio_threshold_distillation_baseline_v1" in plan["policy_variants"]
     assert "literal_top_50_percent" in plan["policy_variants"]
+    assert "freematch_style_adaptive_percentile" in plan["policy_variants"]
     assert "adaptive_threshold_network" in plan["policy_variants"]
     assert plan["status"] == "plan_only_not_executed"
     assert plan["estimated_runs"] == len(plan["policy_variants"]) * 3
@@ -1230,3 +1237,265 @@ def test_marginal_targets_are_size_normalized_across_subset_sizes():
     )
     assert exposures[probe] == 2
     assert combined[probe] == pytest.approx((99 / 100 + 249 / 250) / 2, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Multi-signal utility ranking — Data-Banzhaf MSR targets + LOO diagnostic
+# ---------------------------------------------------------------------------
+
+_BANZHAF_SUBSETS = [
+    {"subset_id": "s0", "role": "train", "image_ids": ["a", "b"]},
+    {"subset_id": "s1", "role": "train", "image_ids": ["a", "c"]},
+    {"subset_id": "s2", "role": "train", "image_ids": ["b", "c"]},
+    {"subset_id": "s3", "role": "train", "image_ids": ["a", "b", "c"]},
+]
+_BANZHAF_UTILITY = {"s0": 0.10, "s1": 0.20, "s2": 0.30, "s3": 0.40}
+
+
+def test_banzhaf_msr_targets_is_mean_in_minus_mean_out():
+    targets, counts = banzhaf_msr_targets(_BANZHAF_SUBSETS, _BANZHAF_UTILITY)
+    # a: in s0,s1,s3 (mean 0.2333...), out s2 (0.30)
+    assert targets["a"] == pytest.approx((0.10 + 0.20 + 0.40) / 3 - 0.30)
+    assert targets["b"] == pytest.approx((0.10 + 0.30 + 0.40) / 3 - 0.20)
+    assert targets["c"] == pytest.approx((0.20 + 0.30 + 0.40) / 3 - 0.10)
+    assert counts["a"] == {"in": 3, "out": 1}
+    # c is valued highest — it is only ever absent from the lowest-utility subset.
+    assert targets["c"] > targets["b"] > targets["a"]
+
+
+def test_banzhaf_msr_targets_excludes_one_sided_and_low_exposure_images():
+    subsets = [
+        {"subset_id": "s0", "image_ids": ["ever", "a"]},
+        {"subset_id": "s1", "image_ids": ["ever", "b"]},
+        {"subset_id": "s2", "image_ids": ["ever", "a"]},
+    ]
+    utility = {"s0": 0.1, "s1": 0.2, "s2": 0.3}
+    targets, counts = banzhaf_msr_targets(subsets, utility)
+    assert "ever" not in targets  # in every subset -> no "out" side -> undefined, omitted
+    assert counts["ever"] == {"in": 3, "out": 0}
+    assert set(targets) == {"a", "b"}
+
+    # minimum_in_subsets filter: b appears in only one subset.
+    stricter, _ = banzhaf_msr_targets(subsets, utility, minimum_in_subsets=2)
+    assert set(stricter) == {"a"}
+
+
+def test_banzhaf_msr_targets_raises_on_missing_measured_utility():
+    with pytest.raises(ValueError, match="no measured utility"):
+        banzhaf_msr_targets(_BANZHAF_SUBSETS, {"s0": 0.1})
+
+
+def test_banzhaf_msr_targets_empty_input():
+    assert banzhaf_msr_targets([], {}) == ({}, {})
+
+
+def test_spearman_with_reason_success_and_undefined_cases():
+    rho, reason = spearman_with_reason([1, 2, 3, 4], [10, 20, 30, 40])
+    assert rho == pytest.approx(1.0)
+    assert reason is None
+    assert spearman_with_reason([1.0, 1.0, 1.0], [1.0, 2.0, 3.0]) == (None, "constant_predictions_or_targets")
+    assert spearman_with_reason([1.0], [2.0]) == (None, "fewer_than_two_paired_points")
+
+
+def test_loo_vs_banzhaf_diagnostic_reports_rank_agreement_over_shared_images():
+    loo = {"a": 0.1, "b": 0.2, "c": 0.3, "only_loo": 0.9}
+    banzhaf = {"a": 1.0, "b": 2.0, "c": 3.0, "only_banzhaf": -5.0}
+    diagnostic = loo_vs_banzhaf_diagnostic(loo, banzhaf)
+    assert diagnostic["n_images_compared"] == 3  # a, b, c
+    assert diagnostic["spearman"] == pytest.approx(1.0)
+    assert diagnostic["spearman_undefined_reason"] is None
+    assert diagnostic["n_leave_one_out_targets"] == 4
+    assert diagnostic["n_banzhaf_targets"] == 4
+
+
+# ---------------------------------------------------------------------------
+# FreeMatch-style training-free class-adaptive percentile threshold
+# ---------------------------------------------------------------------------
+
+def _freematch_pool():
+    image_ids = [f"i{i}" for i in range(10)]
+    ranking_scores = {image_id: index / 9 for index, image_id in enumerate(image_ids)}
+    intended = {image_id: {"Common": 1, "Rare": 1} for image_id in image_ids}
+    return ranking_scores, intended, image_ids
+
+
+def test_freematch_style_percentile_gives_rare_classes_more_lenient_thresholds():
+    ranking_scores, intended, image_ids = _freematch_pool()
+    prevalence = {"Common": {"real_prevalence": 0.40}, "Rare": {"real_prevalence": 0.02}}
+    result = freematch_style_percentile_per_class(
+        ranking_scores, intended, image_ids, ["Common", "Rare"], prevalence,
+        base_percentile=50.0, min_percentile=10.0,
+    )
+    # Identical score distributions per class; only real prevalence differs.
+    assert result["Common"] == pytest.approx(float(np.percentile(list(ranking_scores.values()), 50.0)))
+    assert result["Rare"] < result["Common"]  # rarer real class -> more lenient (lower) cut
+
+
+def test_freematch_style_percentile_falls_back_to_base_on_missing_or_zero_prevalence():
+    ranking_scores, intended, image_ids = _freematch_pool()
+    prevalence = {"Common": {"real_prevalence": 0.40}, "Rare": {"real_prevalence": None}}
+    result = freematch_style_percentile_per_class(
+        ranking_scores, intended, image_ids, ["Common", "Rare"], prevalence,
+    )
+    base = float(np.percentile(list(ranking_scores.values()), 50.0))
+    assert result["Rare"] == pytest.approx(base)  # unknown prevalence never buys leniency
+
+
+def test_freematch_style_percentile_none_for_class_without_candidates():
+    ranking_scores, intended, image_ids = _freematch_pool()
+    result = freematch_style_percentile_per_class(
+        ranking_scores, intended, image_ids, ["Common", "Absent"],
+        {"Common": {"real_prevalence": 0.4}, "Absent": {"real_prevalence": 0.1}},
+    )
+    assert result["Absent"] is None
+
+
+def test_freematch_style_percentile_rejects_inverted_percentile_bounds():
+    ranking_scores, intended, image_ids = _freematch_pool()
+    with pytest.raises(ValueError):
+        freematch_style_percentile_per_class(
+            ranking_scores, intended, image_ids, ["Common"], {"Common": {"real_prevalence": 0.4}},
+            base_percentile=10.0, min_percentile=50.0,
+        )
+
+
+def test_freematch_style_wired_as_full_policy_variant_in_08b_and_09():
+    root = Path(__file__).resolve().parents[1] / "scripts" / "asism"
+    source_08b = (root / "08b_verify_full_policy_proxy.py").read_text(encoding="utf-8")
+    source_09 = (root / "09_finalize_learned_selection.py").read_text(encoding="utf-8")
+    for source in (source_08b, source_09):
+        assert 'freematch_style_adaptive_percentile' in source
+        assert 'freematch_style_percentile_per_class(' in source
+        assert 'enforce_per_class_selection_floor(' in source
+
+
+# ---------------------------------------------------------------------------
+# C1 — SetUtilityNetwork superset conditioning (Xie et al., ICLR 2024) — ablation flag
+# ---------------------------------------------------------------------------
+
+def test_set_utility_default_is_unchanged_mean_pooling():
+    model = SetUtilityNetwork(3, (8, 4), (3,))
+    assert model.superset_conditioning is False
+    assert not hasattr(model, "superset_summary")
+    x = torch.randn(2, 5, 3)
+    mask = torch.ones(2, 5, dtype=torch.bool)
+    assert model(x, mask).shape == (2,)
+
+
+def test_set_utility_superset_conditioning_is_permutation_invariant():
+    torch.manual_seed(3)
+    model = SetUtilityNetwork(3, (8, 4), (3,), superset_conditioning=True)
+    model.set_superset_summary(np.arange(6, dtype=np.float32) / 6)
+    model.eval()
+    x = torch.randn(1, 5, 3)
+    mask = torch.ones(1, 5, dtype=torch.bool)
+    assert torch.allclose(model(x, mask), model(x[:, [3, 1, 4, 0, 2]], mask), atol=1e-6)
+
+
+def test_set_utility_superset_summary_setter_validates_and_survives_state_dict():
+    model = SetUtilityNetwork(2, (4,), (3,), superset_conditioning=True)
+    with pytest.raises(ValueError):
+        model.set_superset_summary(np.zeros(3, dtype=np.float32))  # wrong length (needs 2*input_dim)
+    model.set_superset_summary(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+    reloaded = SetUtilityNetwork(2, (4,), (3,), superset_conditioning=True)
+    reloaded.load_state_dict(model.state_dict())
+    assert torch.equal(reloaded.superset_summary, model.superset_summary)
+    with pytest.raises(ValueError):
+        SetUtilityNetwork(2, (4,), (3,)).set_superset_summary(np.zeros(4, dtype=np.float32))
+
+
+# ---------------------------------------------------------------------------
+# C2 — ranking-target normalization (2D-OOB, NeurIPS 2024; Chi et al., ICML 2026)
+# ---------------------------------------------------------------------------
+
+def test_normalize_ranking_targets_standardize_rank_none_and_order_preserved():
+    raw = {"a": -3.0, "b": 0.0, "c": 0.1, "d": 50.0}
+    order = [k for k, _ in sorted(raw.items(), key=lambda kv: kv[1])]
+
+    none = normalize_ranking_targets(raw, "none")
+    assert none == raw
+
+    standardized = normalize_ranking_targets(raw, "standardize")
+    values = np.array([standardized[k] for k in raw])
+    assert values.mean() == pytest.approx(0.0, abs=1e-9)
+    assert values.std() == pytest.approx(1.0, abs=1e-9)
+    assert [k for k, _ in sorted(standardized.items(), key=lambda kv: kv[1])] == order
+
+    ranked = normalize_ranking_targets(raw, "rank")
+    assert min(ranked.values()) == pytest.approx(0.0)
+    assert max(ranked.values()) == pytest.approx(1.0)
+    assert [k for k, _ in sorted(ranked.items(), key=lambda kv: kv[1])] == order
+
+
+def test_normalize_ranking_targets_winsorize_clips_the_outlier():
+    raw = {f"i{n}": float(n) for n in range(10)}
+    raw["outlier"] = 1000.0
+    clipped = normalize_ranking_targets(raw, "none", winsorize_quantile=0.1)
+    assert clipped["outlier"] < 1000.0
+    assert clipped["outlier"] == pytest.approx(np.quantile(list(raw.values()), 0.9))
+    with pytest.raises(ValueError):
+        normalize_ranking_targets(raw, "none", winsorize_quantile=0.7)
+
+
+def test_normalize_ranking_targets_empty_and_unknown_method():
+    assert normalize_ranking_targets({}, "standardize") == {}
+    with pytest.raises(ValueError):
+        normalize_ranking_targets({"a": 1.0, "b": 2.0}, "zscore")
+
+
+# ---------------------------------------------------------------------------
+# C4 — per-class selection floor (SST class-fairness, IP&M 2025)
+# ---------------------------------------------------------------------------
+
+def _floor_pool(n_per_class: int = 8):
+    image_ids = [f"i{n}" for n in range(n_per_class)]
+    ranking_scores = {image_id: index / (n_per_class - 1) for index, image_id in enumerate(image_ids)}
+    intended = {image_id: {"Rare": 1} for image_id in image_ids}
+    return ranking_scores, intended, image_ids
+
+
+def test_enforce_per_class_selection_floor_admits_the_minimum():
+    ranking_scores, intended, image_ids = _floor_pool(8)
+    thresholds = {"Rare": 0.95}  # only 1 candidate clears this
+    adjusted = enforce_per_class_selection_floor(thresholds, ranking_scores, intended, image_ids, ["Rare"], 4)
+    selected = sum(1 for i in image_ids if ranking_scores[i] >= adjusted["Rare"])
+    assert selected >= 4
+    assert adjusted["Rare"] < 0.95
+
+
+def test_enforce_per_class_selection_floor_noop_when_already_enough():
+    ranking_scores, intended, image_ids = _floor_pool(8)
+    thresholds = {"Rare": 0.1}  # 8 candidates clear this
+    adjusted = enforce_per_class_selection_floor(thresholds, ranking_scores, intended, image_ids, ["Rare"], 4)
+    assert adjusted["Rare"] == 0.1
+
+
+def test_enforce_per_class_selection_floor_handles_none_and_too_few_candidates():
+    ranking_scores, intended, image_ids = _floor_pool(3)
+    thresholds = {"Rare": 0.99, "Absent": None}
+    adjusted = enforce_per_class_selection_floor(
+        thresholds, ranking_scores, intended, image_ids, ["Rare", "Absent"], 10
+    )
+    assert adjusted["Absent"] is None
+    # Only 3 candidates exist for Rare; threshold drops to the lowest so all 3 are admitted.
+    assert adjusted["Rare"] == pytest.approx(min(ranking_scores.values()))
+
+
+def test_freematch_style_percentile_range_normalises_leniency():
+    image_ids = [f"i{n}" for n in range(20)]
+    ranking_scores = {image_id: index / 19 for index, image_id in enumerate(image_ids)}
+    intended = {image_id: {"Rare": 1, "Mid": 1, "Common": 1} for image_id in image_ids}
+    prevalence = {
+        "Rare": {"real_prevalence": 0.02},
+        "Mid": {"real_prevalence": 0.20},
+        "Common": {"real_prevalence": 0.40},
+    }
+    result = freematch_style_percentile_per_class(
+        ranking_scores, intended, image_ids, ["Rare", "Mid", "Common"], prevalence,
+        base_percentile=50.0, min_percentile=10.0,
+    )
+    scores = list(ranking_scores.values())
+    # Rarest present -> min_percentile; most common -> base_percentile; Mid strictly between.
+    assert result["Rare"] == pytest.approx(float(np.percentile(scores, 10.0)))
+    assert result["Common"] == pytest.approx(float(np.percentile(scores, 50.0)))
+    assert result["Rare"] < result["Mid"] < result["Common"]

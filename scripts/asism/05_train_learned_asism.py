@@ -26,9 +26,12 @@ import torch
 from omegaconf import OmegaConf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.asism.learned import active_feature_columns, contributing_signals, read_jsonl, safe_feature_frame, validate_utility_results  # noqa: E402
+from scripts.asism.learned import (  # noqa: E402
+    active_feature_columns, banzhaf_msr_targets, contributing_signals, loo_vs_banzhaf_diagnostic,
+    normalize_ranking_targets, read_jsonl, safe_feature_frame, validate_utility_results,
+)
 from scripts.asism.candidate_pool import load_candidate_pool  # noqa: E402
-from scripts.asism.models import MultiObjectiveRankingNetwork, SetUtilityNetwork, pairwise_ranking_loss  # noqa: E402
+from scripts.asism.models import MultiSignalUtilityRankingNetwork, SetUtilityNetwork, pairwise_ranking_loss  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.manifest import hash_dict, read_json, sha256_file, write_frozen_json  # noqa: E402
@@ -279,33 +282,87 @@ def main() -> int:
     lookup = {str(image_id): row.to_numpy(np.float32) for image_id, (_, row) in zip(merged.image_id, normalized.iterrows())}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_cfg = cfg.learned_asism.set_utility_network
-    set_model = SetUtilityNetwork(len(columns), tuple(set_cfg.image_hidden_dims), tuple(set_cfg.utility_hidden_dims)).to(device)
+    superset_conditioning = bool(set_cfg.get("superset_conditioning", False))
+    set_model = SetUtilityNetwork(
+        len(columns), tuple(set_cfg.image_hidden_dims), tuple(set_cfg.utility_hidden_dims),
+        superset_conditioning=superset_conditioning,
+    ).to(device)
+    if superset_conditioning:
+        # Xie et al., ICLR 2024: concatenate a fixed permutation-invariant summary of the FULL
+        # candidate pool. Computed from the frozen normalized feature frame — the same pool every
+        # subset is drawn from; no held-out split is read.
+        pool_matrix = normalized.to_numpy(np.float64)
+        set_model.set_superset_summary(
+            np.concatenate([pool_matrix.mean(axis=0), pool_matrix.std(axis=0)]).astype(np.float32)
+        )
     min_val_subsets = int(cfg.learned_asism.subset_design.feasibility_thresholds.min_val_subsets)
     validation = train_set_model(set_model, train_subsets, val_subsets, utility, lookup, set_cfg, device,
                                  min_val_subsets)
 
-    train_targets, train_exposures = marginal_targets(set_model, train_subsets, lookup, device)
-    val_targets_raw, val_exposures = marginal_targets(set_model, val_subsets, lookup, device)
     minimum = int(cfg.learned_asism.subset_design.minimum_image_exposures)
-    train_targets = {key: value for key, value in train_targets.items() if train_exposures[key] >= minimum}
-    val_targets_raw = {key: value for key, value in val_targets_raw.items() if val_exposures[key] >= minimum}
-    if len(train_targets) < 2:
-        raise SystemExit("Too few train-role images have sufficient subset exposure for image-ranking training.")
+
+    # Leave-one-out marginal targets (the current, default supervision for the ranking network).
+    loo_train, train_exposures = marginal_targets(set_model, train_subsets, lookup, device)
+    loo_val, val_exposures = marginal_targets(set_model, val_subsets, lookup, device)
+    loo_train = {key: value for key, value in loo_train.items() if train_exposures[key] >= minimum}
+    loo_val = {key: value for key, value in loo_val.items() if val_exposures[key] >= minimum}
+
+    # Data-Banzhaf MSR targets from the SAME measured subsets — no extra proxy training, no GPU.
+    # Always computed so the LOO-vs-Banzhaf rank-agreement diagnostic can be recorded; only USED as
+    # the ranking target when explicitly selected (banzhaf stays optional until that diagnostic is
+    # reviewed — docs/stages2_to_5_plan.md §4).
+    banzhaf_train, _ = banzhaf_msr_targets(train_subsets, utility, minimum_in_subsets=minimum)
+    banzhaf_val, _ = banzhaf_msr_targets(val_subsets, utility, minimum_in_subsets=minimum)
+    # Keep only images present in the frozen feature lookup, exactly as the leave-one-out path does
+    # (marginal_targets skips ids missing from `lookup`); the ranker can only be fed images it has a
+    # feature vector for.
+    banzhaf_train = {key: value for key, value in banzhaf_train.items() if key in lookup}
+    banzhaf_val = {key: value for key, value in banzhaf_val.items() if key in lookup}
+    banzhaf_diagnostic = loo_vs_banzhaf_diagnostic(loo_train, banzhaf_train)
+
     rank_cfg = cfg.learned_asism.ranking_network
-    ranker = MultiObjectiveRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout)).to(device)
+    target_source = str(rank_cfg.get("target_source", "leave_one_out"))
+    if target_source not in {"leave_one_out", "banzhaf_msr"}:
+        raise SystemExit(
+            f"learned_asism.ranking_network.target_source must be 'leave_one_out' or 'banzhaf_msr', "
+            f"got {target_source!r}"
+        )
+    if target_source == "banzhaf_msr":
+        train_targets, val_targets_raw = banzhaf_train, banzhaf_val
+    else:
+        train_targets, val_targets_raw = loo_train, loo_val
+    if len(train_targets) < 2:
+        raise SystemExit(
+            f"Too few train-role images have sufficient subset exposure for image-ranking training "
+            f"(target_source={target_source})."
+        )
+
+    # Transform the distilled target before the Smooth-L1 + pairwise loss so one noisy proxy
+    # measurement cannot dominate training on ~96 images (order-preserving; pairwise term unchanged).
+    target_normalization = str(rank_cfg.get("target_normalization", "standardize"))
+    target_winsorize = float(rank_cfg.get("target_winsorize_quantile", 0.0))
+    train_targets = normalize_ranking_targets(train_targets, target_normalization, target_winsorize)
+    val_targets_raw = normalize_ranking_targets(val_targets_raw, target_normalization, target_winsorize)
+
+    ranker = MultiSignalUtilityRankingNetwork(len(columns), tuple(rank_cfg.hidden_dims), float(rank_cfg.dropout)).to(device)
     train_ranker(ranker, lookup, train_targets, rank_cfg, device)
     ranker_pairwise_accuracy = pairwise_ranking_accuracy(ranker, lookup, val_targets_raw, device)
 
     output = Path(cfg.paths.learned_dir); output.mkdir(parents=True, exist_ok=True)
-    torch.save({"state_dict": set_model.state_dict(), "input_dim": len(columns)}, output / "set_utility_model.pt")
+    torch.save({"state_dict": set_model.state_dict(), "input_dim": len(columns),
+                "superset_conditioning": superset_conditioning}, output / "set_utility_model.pt")
     torch.save({"state_dict": ranker.state_dict(), "input_dim": len(columns)}, output / "ranking_model.pt")
     with open(output / "image_marginal_targets.jsonl", "w", encoding="utf-8") as handle:
         for image_id, target in sorted(train_targets.items()):
             handle.write(json.dumps({"image_id": image_id, "marginal_utility": target,
-                                     "exposures": train_exposures[image_id], "role": "train"}) + "\n")
+                                     "exposures": train_exposures.get(image_id, 0), "role": "train",
+                                     "target_source": target_source,
+                                     "target_normalization": target_normalization}) + "\n")
         for image_id, target in sorted(val_targets_raw.items()):
             handle.write(json.dumps({"image_id": image_id, "marginal_utility": target,
-                                     "exposures": val_exposures[image_id], "role": "val"}) + "\n")
+                                     "exposures": val_exposures.get(image_id, 0), "role": "val",
+                                     "target_source": target_source,
+                                     "target_normalization": target_normalization}) + "\n")
     signals_used = contributing_signals(columns)
     manifest = {"schema_version": 1, "method": "set_utility_to_marginal_ranking_v1", "frozen": True,
                 "feature_columns": columns, "normalization": normalization,
@@ -325,6 +382,26 @@ def main() -> int:
                 "subset_sha256": sha256_file(subset_path), "results_sha256": sha256_file(result_path),
                 "config_hash": hash_dict(OmegaConf.to_container(cfg.learned_asism, resolve=True), length=64),
                 "validation": validation,
+                "target_generation": {
+                    "method": target_source,
+                    "default": "leave_one_out",
+                    "target_normalization": target_normalization,
+                    "target_winsorize_quantile": target_winsorize,
+                    "set_superset_conditioning": superset_conditioning,
+                    "banzhaf_status": (
+                        "in_use" if target_source == "banzhaf_msr"
+                        else "optional_pending_diagnostic_review"
+                    ),
+                    "n_leave_one_out_train_targets": len(loo_train),
+                    "n_banzhaf_train_targets": len(banzhaf_train),
+                    "loo_vs_banzhaf_diagnostic": banzhaf_diagnostic,
+                    "note": (
+                        "Banzhaf MSR targets are computed from the same measured subsets as the "
+                        "leave-one-out targets — no extra proxy training, no GPU cost. Switch the "
+                        "ranking network onto them (target_source: banzhaf_msr) only after reviewing "
+                        "loo_vs_banzhaf_diagnostic."
+                    ),
+                },
                 "ranker_validation": {
                     "pairwise_accuracy": ranker_pairwise_accuracy,
                     "measures": "distillation_fidelity_not_downstream_utility",
@@ -335,6 +412,10 @@ def main() -> int:
     print(f"Set-utility validation: spearman={validation['spearman']}, mae={validation['mae']}, "
           f"image_overlap_fraction={validation['image_overlap_fraction']}")
     print(f"Ranker held-out pairwise accuracy: {ranker_pairwise_accuracy}")
+    print(f"Ranking target source: {target_source} (default leave_one_out). "
+          f"LOO-vs-Banzhaf Spearman={banzhaf_diagnostic['spearman']} "
+          f"over {banzhaf_diagnostic['n_images_compared']} images "
+          f"(reason={banzhaf_diagnostic['spearman_undefined_reason']}).")
     print("Next: learn/freeze class thresholds and emit learned selected_manifest.jsonl.")
     return 0
 
