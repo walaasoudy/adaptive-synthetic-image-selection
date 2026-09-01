@@ -53,7 +53,10 @@ run 04_captions       python scripts/data/04_generate_captions.py --namespace "$
 # training and returns immediately, which lets Stage 2 start before any checkpoint exists.)
 # STAGE1_MAX_STEPS keeps the dev shakedown short; the production run uses the config's 15000-30000.
 STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-2000}"
-run 10_stage1_lora    accelerate launch --config_file configs/accelerate_config.yaml scripts/train/train_lora_sdxl.py split.namespace="$NS" training.max_train_steps="$STAGE1_MAX_STEPS" training.min_train_steps="$STAGE1_MAX_STEPS"
+# optimizer.name=adamw: the RunPod pytorch-2.8/cu128 image ships a bitsandbytes without a CUDA
+# binary, and the script's fallback only wraps optimizer construction (the 8-bit kernel fails
+# later at optimizer.step()). Plain torch.optim.AdamW is used instead.
+run 10_stage1_lora    accelerate launch --config_file configs/accelerate_config.yaml scripts/train/train_lora_sdxl.py split.namespace="$NS" optimizer.name=adamw training.max_train_steps="$STAGE1_MAX_STEPS" training.min_train_steps="$STAGE1_MAX_STEPS"
 
 # Point Stage 2 at the LoRA checkpoint step 10 produced (02_generate_synthetic_images.py reads
 # configs/stage2_generation.yaml directly and takes no CLI override).
