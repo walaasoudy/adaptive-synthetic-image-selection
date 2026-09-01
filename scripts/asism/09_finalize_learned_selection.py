@@ -17,7 +17,10 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.asism.learned import build_policy_selected_manifest, choose_full_policy, read_jsonl  # noqa: E402
+from scripts.asism.learned import (  # noqa: E402
+    build_policy_selected_manifest, choose_full_policy, enforce_per_class_selection_floor,
+    freematch_style_percentile_per_class, read_jsonl,
+)
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
@@ -87,6 +90,18 @@ def main() -> int:
     else:
         if winner == "literal_top_50_percent":
             thresholds = verifier.percentile_threshold_per_class(50.0, ranking_scores, intended, image_ids, labels)
+        elif winner == "freematch_style_adaptive_percentile":
+            contexts = read_jsonl(Path(cfg.paths.threshold_contexts))
+            prevalence = verifier.real_prevalence_contexts_from_threshold_contexts(contexts, labels)
+            freematch_cfg = cfg.learned_asism.threshold_network.freematch_style
+            thresholds = freematch_style_percentile_per_class(
+                ranking_scores, intended, image_ids, labels, prevalence,
+                float(freematch_cfg.base_percentile), float(freematch_cfg.min_percentile),
+            )
+            thresholds = enforce_per_class_selection_floor(
+                thresholds, ranking_scores, intended, image_ids, labels,
+                int(cfg.learned_asism.threshold_network.min_selected_per_label),
+            )
         elif winner == "hard_proxy_best_among_verified":
             thresholds = dict(baseline_thresholds)
             thresholds.update({k: v for k, v in threshold_manifest["hard_proxy_best_thresholds"].items() if v is not None})
