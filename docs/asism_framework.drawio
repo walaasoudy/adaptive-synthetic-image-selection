@@ -28,7 +28,7 @@
         <mxCell id="a4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" value="05 — set-utility network → per-image target&#xa;permutation-invariant Deep Sets · leave-one-out / Data-Banzhaf MSR" vertex="1">
           <mxGeometry height="52" width="450" x="200" y="474" as="geometry" />
         </mxCell>
-        <mxCell id="a5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" value="05 — multi-signal utility ranking network&#xa;9 → 128 → 64 → 32 → 1 · one scalar utility score per image" vertex="1">
+        <mxCell id="a5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" value="05 — multi-signal utility ranking network&#xa;six ASISM signals (nine feature columns) → MLP 128 → 64 → 32 → 1&#xa;one scalar utility score per image" vertex="1">
           <mxGeometry height="52" width="450" x="200" y="548" as="geometry" />
         </mxCell>
         <mxCell id="a6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" value="07–08 — adaptive per-class admission threshold&#xa;class embedding + context → sigmoid&#xa;three-tier governance (learned / verified-proxy / fixed baseline)" vertex="1">

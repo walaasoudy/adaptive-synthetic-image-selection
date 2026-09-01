@@ -86,8 +86,12 @@ class MultiSignalUtilityRankingNetwork(nn.Module):
     Deliberately NOT a multi-objective model: there is a single regression/ranking target (the
     distilled marginal set-utility from SetUtilityNetwork), optimized by both a Smooth-L1 term and a
     pairwise ranking term. MMoE / SDMGrad / NHDE are cited in the literature review only to make that
-    contrast explicit — none of their multi-task/Pareto machinery is used here. With the default
-    config the architecture is 6 -> 128 -> 64 -> 32 -> 1.
+    contrast explicit — none of their multi-task/Pareto machinery is used here.
+
+    ``input_dim`` is the number of Go/No-Go-admitted signal FEATURE COLUMNS, not the number of
+    signals: some signals contribute several columns. With the default ``learned_asism.feature_columns``
+    that is nine (similarity x3, IQA x3, uncertainty, explainability, agreement; distinctiveness's
+    column is not yet wired into the learned feature set). Hidden layers are 128 -> 64 -> 32 -> 1.
     """
 
     def __init__(self, input_dim: int, hidden=(128, 64, 32), dropout=0.2):
