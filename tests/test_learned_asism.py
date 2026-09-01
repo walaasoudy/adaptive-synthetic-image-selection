@@ -19,6 +19,7 @@ from scripts.asism.learned import (
     class_aware_context_vector,
     choose_full_policy,
     compute_verified_context_counts,
+    contributing_signals,
     critic_proxy_correlation_per_class,
     determine_per_class_official_method,
     diversify_verification_candidates,
@@ -1179,7 +1180,7 @@ def test_07b_phase_run_with_confirmation_flag_reaches_the_next_real_gate(monkeyp
 
 
 def test_marginal_targets_are_size_normalized_across_subset_sizes():
-    """The same image, with the same deviation from its subset mean, must get the same marginal
+    r"""The same image, with the same deviation from its subset mean, must get the same marginal
     target whether it sat in a small subset or a large one.
 
     Regression test for the 1/(n-1) size bias: SetUtilityNetwork pools by MEAN, so the raw

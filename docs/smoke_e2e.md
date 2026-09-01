@@ -74,37 +74,71 @@ Expected GPU-path outputs:
 | Stage | Input | Validated output |
 |---|---|---|
 | Stage 1 | smoke images/captions, pinned SDXL | two-step LoRA final checkpoint plus resumable optimizer checkpoints |
-| Stage 2 | explicit LoRA and four recipes | pilot approval record, four full images, generation completion manifest |
+| Stage 2 | explicit LoRA and 40 recipes | pilot approval record, ~150-300 full images across all 11 primary labels, generation completion manifest |
 | auxiliary | smoke `gen_train`/`gen_val` | two-step resume checkpoint and separate best-validation checkpoint |
-| Stage 3 signals | four synthetic images | five Parquets and five hash/provenance sidecars |
+| Stage 3 signals | real generated images | five Parquets and five hash/provenance sidecars |
 | Go/No-Go | score artifacts | `gonogo_report.json` with admitted/excluded signals |
-| Stage 4 | conditions **A/B only**, one seed | two two-step best checkpoints and atomic completion records |
+| Learned ASISM (04–09) | real signals from above | subset feasibility report, measured utility, ranking + threshold-network checkpoints, condition F's `adaptive_selected_manifest.jsonl` |
+| Stage 4 | conditions **A/B/F**, one seed | three two-step best checkpoints and atomic completion records |
 | Stage 5 | separate three-patient fixture final split | registered protected context, predictions with sidecars, comparison report/tables |
 
 Cold-cache estimate on one A40 48 GB: approximately 30–60 minutes, dominated by model downloads,
 SDXL initialization, and the tiny ASISM proxy matrix. Warm-cache resume should be materially faster.
 Allow approximately 20–35 GB for pinned model caches, checkpoints, environment packages, and smoke
-outputs. These are operational estimates, not measured production costs.
+outputs. These are operational estimates, not measured production costs — the learned-ASISM 04-09
+addition (2026-08-21) is not included in them and has never been timed; expect this estimate to be
+revised after the first real run.
 
 STOP if any artifact gate fails, if a path contains `production`, if the workspace lacks
 `SMOKE_ONLY.json`, if pilot review fails, or if the orchestrator attempts to open real thesis data.
 
+**Learned ASISM 04–09 on this GPU path is UNVERIFIED BY EXECUTION as of 2026-08-21** — no GPU was
+available to build it against. Every individual flag/path was checked against the scripts' actual
+argparse definitions and `stage3_paths()`, and the CPU tier below proves the 04→05→06 portion works
+against a (fabricated) real-shaped pool, but the full 04–09 chain — including real `04b`/`07b`/`08b`
+proxy-classifier training — has never actually run. `04 --phase feasibility` is the cheap, no-GPU
+first checkpoint: if it fails on the real generated pool, lower `stage3.learned_asism.subset_design`
+/ `feasibility_thresholds` in `configs/smoke_e2e.yaml` and rerun *only* that command — it does not
+require repeating Stage 1/2/aux/signals. Report the first real result back before trusting this
+table.
+
+## Learned ASISM CPU integration smoke (04 → 05 → 06)
+
+```bash
+python scripts/smoke/run_smoke_pipeline.py --phase local   # builds the split/caption fixture this needs
+python scripts/smoke/01b_learned_asism_cpu_smoke.py
+```
+
+CPU-only, no SDXL, under a minute. Fabricates 900 synthetic candidate images (label vectors only —
+no JPEGs) and four of the five score signals (`explainability` is deliberately omitted), then runs
+the **real** `04_build_utility_subsets.py`, `05_train_learned_asism.py`, and
+`06_learn_thresholds_select.py` as subprocesses against that fixture, with `utility_results.jsonl`
+fabricated (never a real proxy-classifier measurement) so `05` has something to train against
+without a GPU. Explicitly verifies:
+
+- Go/No-Go feature removal: `active_feature_columns()` narrows the ranking network's inputs to the
+  4 surviving signals rather than crashing (the bug fixed 2026-08-21) or silently keeping the 5th.
+- `contributing_signals` and `learned_variant_status` in the training manifest correctly report
+  4 signals / `"primary"` (the primary-vs-`reduced_variant` boundary itself is unit-tested in
+  `tests/test_learned_asism.py`, not here).
+- Train/val image pools are disjoint (`image_overlap_fraction == 0.0`).
+- A ranking-model checkpoint and a non-empty selected-images manifest are produced.
+
 ## Scientific limitations
 
 This run demonstrates software connectivity only. It does not validate medical quality,
-statistical power, rare-label support, or thesis outcomes.
+statistical power, rare-label support, or thesis outcomes. Nothing under this heading — including
+the learned-ASISM CPU smoke above — is scientific evidence about ASISM's selection quality.
 
-**COVERAGE GAP — this lane does not exercise the thesis's novel contribution.** The Multi-Objective
-Ranking Network and Adaptive Threshold Learning *are* implemented (`scripts/asism/04`–`09`,
-`docs/stages2_to_5_plan.md` §4.9), but this pipeline stops after Go/No-Go and jumps straight to
-Stage 4 with `conditions: [A, B]` (`configs/smoke_e2e.yaml`). It therefore never runs stages
-`04`–`09`, never produces `adaptive_selected_manifest`, and never trains **condition F** — so the
-thesis's primary comparison (F vs. B) is not exercised end to end anywhere.
+Current coverage:
 
-The reason is fixture size, not a missing implementation: the fixture generates ~4 synthetic images,
-while `04 --phase feasibility` legitimately requires enough candidates to fill three quantile bands
-in two disjoint image pools. Closing the gap needs a larger synthetic fixture plus a
-`learned_asism` block in `configs/smoke_e2e.yaml` scaled to it. Until then, the learned components
-are covered by unit tests (`tests/test_learned_asism.py`, 85 tests) but have **no end-to-end
-software-connectivity evidence**, and the "END-TO-END SMOKE COMPLETE" message should be read as
-"Stages 1–5 for conditions A and B".
+| Tier | Covers | Status |
+|---|---|---|
+| Unit tests | Every learned-ASISM function in isolation | ✅ `tests/test_learned_asism.py`, 88 tests |
+| CPU integration smoke | `04` → `05` → `06` connect; Go/No-Go feature removal | ✅ verified passing, `01b_learned_asism_cpu_smoke.py` |
+| GPU smoke | `04`–`09` on real generated images, real (tiny) proxy verification, condition **F** trained | ⚠️ built 2026-08-21, **never executed** — no GPU available; see the RunPod GPU phase section above |
+
+Closing the last row needs a GPU-smoke extension of the existing RunPod phase: real (tiny) proxy
+classifiers for `04b`/`07b`/`08b` instead of the CPU tier's fabricated numbers, plus
+`conditions: [A, B, F]` in the GPU overlay. Until it exists, condition F and the thesis's primary
+comparison (F vs. B) have never been run end to end anywhere, including in smoke form.

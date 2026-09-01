@@ -1,28 +1,3 @@
-#!/usr/bin/env python3
-"""Patient-level train/val/heldout split for CheXpert (docs/stage1_plan.md §6 — the single most
-consequence-laden decision in Stage 1).
-
-Splits by patient ID, never by image ID, into three disjoint groups:
-  - gen_train:          used for LoRA gradient updates.
-  - gen_val:             held out from training, used for validation loss / qualitative monitoring.
-  - classifier_heldout:  NEVER touched by Stage 1 at all — reserved so Stage 5's eventual
-                          real-vs-synthetic comparison isn't contaminated by generator exposure.
-                          Further sub-split (patient-level, separately seeded) into:
-                            - asism_tuning_heldout: used only by Stage 3's ASISM weight/threshold
-                              search, so that search never touches Stage 5's final report data.
-                            - final_eval_heldout:   untouched until Stage 5's final comparison.
-
-The official CheXpert valid.csv (234 curated images) is left untouched in raw/ and is not
-consumed by this script at all, for the same reason.
-
-Reads its input from `split.input_csv` (configs/stage1_lora_sdxl.yaml), which defaults to the
-full CheXpert train.csv but can be pointed at the dev-subset CSV produced by
-01b_build_dev_subset.py — a config-only switch, no code change required here.
-
-Usage:
-    python scripts/data/02_build_patient_splits.py
-"""
-
 from __future__ import annotations
 
 import re

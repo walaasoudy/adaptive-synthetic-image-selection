@@ -356,6 +356,148 @@ def compute_similarity_scores(
 
 
 # ----------------------------------------------------------------------------------------------
+# §4.6 Within-synthetic distinctiveness (NEW)
+# ----------------------------------------------------------------------------------------------
+
+def compute_distinctiveness_scores(
+    synthetic_embeddings: np.ndarray,
+    intended_vectors: list[dict],
+    config,
+) -> pd.DataFrame:
+    """How distinct each synthetic image is from OTHER SYNTHETIC images of the SAME intended class.
+
+    This is deliberately NOT the same question as §4.1's similarity/novelty, and the distinction is
+    the whole reason the signal exists:
+
+        §4.1 novelty        : how close is this image to a REAL image?      (fidelity / memorization)
+        §4.6 distinctiveness: how close is it to OTHER SYNTHETIC images?    (redundancy)
+
+    A diffusion model asked repeatedly for the same condition returns near-copies. Those copies each
+    score well on every §4.1-§4.5 signal — they are individually realistic, sharp, confidently
+    classified, and correctly localized — while adding almost no new information to a training set.
+    Nothing in the other five signals can see that, because all five score an image in isolation.
+
+    WITHIN-CLASS BY CONSTRUCTION. Neighbours are drawn only from images sharing the exact same
+    `intended_label_vector`. Comparing across classes would make the score a proxy for how many
+    images that class happens to have: a common condition with 1500 generated images would look
+    "redundant" and a rare one with 80 would look "distinct", purely from the Stage 2 quota. That
+    would then feed the class-aware threshold, which is itself trying to correct class imbalance —
+    a confound in exactly the wrong direction.
+
+    DIRECTION: reported as DISTINCTIVENESS (higher = better = more unique), matching the direction
+    of every other admitted signal, so §4.6's directionality probe needs no special case for it.
+    """
+    distinct_cfg = config.signals.distinctiveness
+    k = int(distinct_cfg.k_neighbors)
+    duplicate_similarity = float(distinct_cfg.duplicate_similarity)
+
+    normalized = synthetic_embeddings / (
+        np.linalg.norm(synthetic_embeddings, axis=1, keepdims=True) + 1e-8
+    )
+
+    # Group row indices by exact intended label vector; a No Finding recipe (all-zero) forms its
+    # own group rather than being merged into any disease group.
+    groups: dict[frozenset, list[int]] = {}
+    for row_index, intended in enumerate(intended_vectors):
+        key = frozenset(intended_vector_to_labels(intended))
+        groups.setdefault(key, []).append(row_index)
+
+    rows: list[dict] = [None] * len(normalized)
+    for key, member_indices in groups.items():
+        members = normalized[member_indices]
+        # Cosine similarity of every member against every other member of the same class.
+        similarity_matrix = members @ members.T
+        np.fill_diagonal(similarity_matrix, -np.inf)  # never let an image be its own neighbour
+
+        group_size = len(member_indices)
+        effective_k = min(k, group_size - 1)
+
+        for position, row_index in enumerate(member_indices):
+            if effective_k <= 0:
+                # A class with a single generated image has no within-class peer, so redundancy is
+                # undefined rather than zero. Recorded explicitly so the Go/No-Go missing-value
+                # check sees it instead of a fabricated "perfectly distinct" score.
+                rows[row_index] = {
+                    "distinctiveness_score": float("nan"),
+                    "distinctiveness_mean_topk_similarity": float("nan"),
+                    "distinctiveness_max_similarity": float("nan"),
+                    "distinctiveness_n_duplicates": 0,
+                    "distinctiveness_group_size": group_size,
+                    "distinctiveness_k_used": 0,
+                    "distinctiveness_is_undefined": True,
+                }
+                continue
+
+            similarities = similarity_matrix[position]
+            top_k = np.sort(similarities)[-effective_k:]
+            mean_topk = float(top_k.mean())
+            max_similarity = float(top_k[-1])
+            n_duplicates = int((similarities >= duplicate_similarity).sum())
+
+            rows[row_index] = {
+                "distinctiveness_score": float(1.0 - mean_topk),
+                "distinctiveness_mean_topk_similarity": mean_topk,
+                "distinctiveness_max_similarity": max_similarity,
+                "distinctiveness_n_duplicates": n_duplicates,
+                "distinctiveness_group_size": group_size,
+                "distinctiveness_k_used": effective_k,
+                "distinctiveness_is_undefined": False,
+            }
+
+    return pd.DataFrame(rows)
+
+
+def duplicate_clusters(
+    synthetic_embeddings: np.ndarray,
+    intended_vectors: list[dict],
+    duplicate_similarity: float,
+) -> list[list[int]]:
+    """Group near-identical within-class images into clusters (single-linkage, union-find).
+
+    Exists because a per-image score cannot break a tie inside a duplicate cluster: three
+    near-identical images receive three near-identical scores, so any threshold either admits all
+    three or rejects all three. Keeping exactly one representative is a set-level decision, and it
+    is made HERE, before scoring, rather than by pretending a threshold can make it.
+
+    Returns clusters of size >= 2 only; a singleton needs no decision.
+    """
+    normalized = synthetic_embeddings / (
+        np.linalg.norm(synthetic_embeddings, axis=1, keepdims=True) + 1e-8
+    )
+    parent = list(range(len(normalized)))
+
+    def find(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    def union(a: int, b: int) -> None:
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[max(root_a, root_b)] = min(root_a, root_b)
+
+    groups: dict[frozenset, list[int]] = {}
+    for row_index, intended in enumerate(intended_vectors):
+        groups.setdefault(frozenset(intended_vector_to_labels(intended)), []).append(row_index)
+
+    for member_indices in groups.values():
+        if len(member_indices) < 2:
+            continue
+        members = normalized[member_indices]
+        similarity_matrix = members @ members.T
+        for i in range(len(member_indices)):
+            for j in range(i + 1, len(member_indices)):
+                if similarity_matrix[i, j] >= duplicate_similarity:
+                    union(member_indices[i], member_indices[j])
+
+    clusters: dict[int, list[int]] = {}
+    for row_index in range(len(normalized)):
+        clusters.setdefault(find(row_index), []).append(row_index)
+    return [sorted(members) for members in clusters.values() if len(members) >= 2]
+
+
+# ----------------------------------------------------------------------------------------------
 # §4.4 Explainability
 # ----------------------------------------------------------------------------------------------
 
@@ -378,17 +520,66 @@ def region_overlap_score(cam: np.ndarray, region: tuple[float, float, float, flo
     return float(cam[row0:row1, col0:col1].sum() / total)
 
 
-def expected_region_for(intended: dict, config) -> tuple[float, float, float, float]:
-    """Pathology-specific expected region, or the explicit baseline box for No Finding recipes."""
+def region_from_cam_mass(mean_cam: np.ndarray, mass_fraction: float) -> tuple[float, float, float, float]:
+    """Smallest axis-aligned box holding `mass_fraction` of the averaged Grad-CAM mass.
+
+    Rows and columns are grown independently from their centre of mass outward, each step taking
+    whichever adjacent line carries more mass, until the target fraction is enclosed. Returned as
+    (x0, y0, x1, y1) fractions of the image -- the same format the hand-entered boxes used, so
+    nothing downstream needs to change shape.
+    """
+    if not 0.0 < mass_fraction <= 1.0:
+        raise ValueError(f"mass_fraction must be in (0, 1], got {mass_fraction}")
+    cam = np.maximum(mean_cam, 0.0)
+    if float(cam.sum()) <= 0.0:
+        raise ValueError("Grad-CAM mass is zero; cannot derive a region")
+
+    def span(profile: np.ndarray) -> tuple[int, int]:
+        profile = profile / profile.sum()
+        centre = int(np.argmax(np.cumsum(profile) >= 0.5))
+        low = high = centre
+        covered = float(profile[centre])
+        while covered < mass_fraction and (low > 0 or high < len(profile) - 1):
+            take_low = float(profile[low - 1]) if low > 0 else -1.0
+            take_high = float(profile[high + 1]) if high < len(profile) - 1 else -1.0
+            if take_high >= take_low:
+                high += 1
+                covered += take_high
+            else:
+                low -= 1
+                covered += take_low
+        return low, high
+
+    row0, row1 = span(cam.sum(axis=1))
+    col0, col1 = span(cam.sum(axis=0))
+    height, width = cam.shape
+    return (
+        float(col0 / width), float(row0 / height),
+        float((col1 + 1) / width), float((row1 + 1) / height),
+    )
+
+
+def expected_region_for(
+    intended: dict, config, derived_regions: dict | None = None,
+) -> tuple[float, float, float, float]:
+    """Pathology-specific expected region, or the explicit baseline box for No Finding recipes.
+
+    `derived_regions` (from 00c_derive_expected_regions.py) takes precedence per label when
+    supplied: those boxes are MEASURED from Grad-CAM on real positives, whereas the config boxes are
+    hand-entered constants with no derivation. Precedence is per LABEL, not all-or-nothing, so a
+    pathology the derivation legitimately skipped (no real positives, or no attention) still falls
+    back to its config box instead of losing its region entirely.
+    """
     explain_cfg = config.signals.explainability
     positives = intended_vector_to_labels(intended)
     if str(explain_cfg.region_mode) == "baseline" or not positives:
         return tuple(explain_cfg.baseline_box)
 
+    derived_regions = derived_regions or {}
     regions = [
-        tuple(explain_cfg.pathology_regions[label])
+        tuple(derived_regions.get(label) or explain_cfg.pathology_regions[label])
         for label in positives
-        if label in explain_cfg.pathology_regions
+        if label in derived_regions or label in explain_cfg.pathology_regions
     ]
     if not regions:
         return tuple(explain_cfg.baseline_box)

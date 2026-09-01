@@ -1,17 +1,3 @@
-#!/usr/bin/env python3
-"""Verify the extracted CheXpert-v1.0-small download before anything else runs.
-
-Since the exact Kaggle mirror isn't pinned with a checksum (docs/stage1_plan.md §6), this checks
-*structural* integrity instead: expected files, row counts, column schema, label-value domain,
-a random image-openability spot-check, and a coarse label-prevalence sanity print for manual
-comparison against published CheXpert statistics.
-
-Usage:
-    python scripts/data/01_verify_download.py [--sample-images N]
-
-Exits non-zero (and prints every failure, not just the first) if a hard check fails.
-"""
-
 from __future__ import annotations
 
 import argparse

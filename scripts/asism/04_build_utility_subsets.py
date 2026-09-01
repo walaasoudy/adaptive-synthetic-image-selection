@@ -1,23 +1,3 @@
-#!/usr/bin/env python3
-"""Build pre-registered controlled-random subset recipes for learned ASISM.
-
-This command does not invent utility labels. Each recipe must subsequently be evaluated by the
-same proxy classifier protocol and written to utility_results.jsonl.
-
-Two phases:
-  --phase feasibility  Compute candidate-pool feasibility numbers (per-label/per-quantile-band
-                       counts, achievable subset sizes, train/val-pool sizes, compute-budget
-                       estimate) WITHOUT writing any subset recipe. Writes subset_design_report.json.
-  --phase build        FAILS CLOSED unless a subset_design_report.json exists, matches the current
-                       config (config_hash), reports zero feasibility failures, and the implied
-                       compute-budget estimate is within learned_asism.compute_budget. No ratio or
-                       size is ever adjusted automatically to make a failing report pass — a failing
-                       report must be fixed by re-declaring subset_design/feasibility_thresholds in
-                       configs/stage3_asism.yaml and re-running --phase feasibility. After building,
-                       every written record is re-verified (no duplicate images, no train/val
-                       overlap, every subset matches its declared size, subset counts match the plan)
-                       before the recipe file is written to disk.
-"""
 from __future__ import annotations
 
 import argparse
@@ -39,10 +19,7 @@ from scripts.utils.manifest import get_git_commit_hash, hash_dict, read_json  # 
 
 
 def preflight_check_candidate_pool_inputs(cfg) -> None:
-    """Fail closed with a clear, actionable list of every missing upstream artifact and the exact
-    command that produces it — never a raw FileNotFoundError traceback from deep inside
-    load_candidate_pool. These artifacts require GPU generation + signal computation (RunPod);
-    nothing here invents or waits for them."""
+   
     missing: list[str] = []
 
     scores_dir = Path(cfg.paths.scores_dir)

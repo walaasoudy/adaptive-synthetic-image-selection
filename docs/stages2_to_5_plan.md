@@ -268,10 +268,29 @@ quota, never whether the floor applies.
 
 ### 4.9 Learned ASISM extension (v4 revision note, 2026-08-21) — resolves `docs/novelty_target_decision.md`
 
-**This is ASISM as the thesis defines it** — the four scoring signals (§4.1–§4.5) feeding the two
-novel learned components, "Multi-Objective Ranking Network (Novel)" and "Adaptive Threshold Learning
+**This is ASISM as the thesis defines it** — the **five** scoring signals (§4.1 similarity, §4.2
+IQA, §4.3 uncertainty, §4.4 explainability, §4.5 intended-label agreement) feeding the two novel
+learned components, "Multi-Signal Utility Ranking Network (Novel)" and "Adaptive Threshold Learning
 (Novel)". It implements **Option 1** of `docs/novelty_target_decision.md` (pre-registered weakly
 supervised set-utility learning).
+
+**v5 revision note (2026-08-21) — naming, no method change.** The ranking component was renamed from
+"Multi-Objective Ranking Network" to **Multi-Signal Utility Ranking Network (MSURN)**, and the class
+`MultiObjectiveRankingNetwork` to `MultiSignalUtilityRankingNetwork`. Reason: the implemented model
+is a single MLP with **one output head**, trained against **one scalar target** (`marginal_utility`)
+with smooth-L1 + pairwise-ranking as two loss *terms* on that same target. The nine signal columns
+are input *features*, not objectives. There is no Pareto front and no multi-objective gradient
+balancing, so "multi-objective" was incorrect in the sense the optimization literature uses it, and
+`docs/novelty_target_decision.md` already recorded that "Pareto ranking is not implemented".
+Architecture, loss, hyperparameters, configs and all measured behaviour are unchanged; the rename is
+checkpoint-safe because `state_dict` keys derive from the unchanged `self.network` attribute.
+
+**Future options (not implemented, not scope).** Two routes would make a multi-objective claim
+literally true if ever wanted: (a) Pareto non-dominated sorting over (predicted utility,
+`novelty_score`, `iqa_composite`) at *selection* time, leaving the network untouched; or (b) a
+multi-head network predicting separately-measured objectives with MGDA-style gradient balancing at
+*training* time. Both require defining and independently measuring ≥2 genuinely conflicting
+objectives, and (b) requires re-running the Stage 3 experiments.
 
 **v3 revision note (2026-08-21):** §4.7's `weighted_score_baseline` is **no longer part of the
 thesis pipeline**. It predates the learned components and was never specified by the thesis, which
