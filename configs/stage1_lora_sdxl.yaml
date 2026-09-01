@@ -29,7 +29,8 @@ dev_subset:
   # Fast-iteration development subset (docs/stage1_plan.md's "small subset" made concrete/configurable).
   # This ONLY exists to validate the pipeline quickly; the full CheXpert dataset generates final
   # thesis results. Never hardcode a sample size in code — this is the single source of truth for it.
-  enabled: false            # 01b_build_dev_subset.py no-ops (prints a message) when false.
+  enabled: true             # dev-subset run: 01b_build_dev_subset.py builds train_subset.csv.
+                            # REVERT to false for the full production-thesis-v1 run.
   target_size: 10000        # approximate output image count; configurable (5k/10k/20k/...).
   seed: 42                  # independent of split_seed so subset draws can vary without perturbing
                              # the 70/10/20 patient-splitting logic.
@@ -72,12 +73,12 @@ data:
 split:
   # Explicit schema-v2 six-way split namespace. There is deliberately no fallback to the
   # superseded root-level schema-v1 files.
-  namespace: dev-smoke-v1
+  namespace: dev-10k-v1
   manifest_version: 2
-  input_csv: ${paths.raw_dir}/train.csv  # source CSV for patient splitting. Point this at
-                                          # dev_subset.output_csv (below) to build gen_train/gen_val/
-                                          # classifier_heldout from the dev subset instead of the full
-                                          # ~224k-image CheXpert train.csv — a config-only switch, no
+  input_csv: ${dev_subset.output_csv}   # DEV-SUBSET RUN: splits are built from the ~10k
+                                          # train_subset.csv produced by 01b_build_dev_subset.py.
+                                          # REVERT to ${paths.raw_dir}/train.csv for the full
+                                          # ~224k-image production run — a config-only switch, no
                                           # code change required in 02_build_patient_splits.py or any
                                           # downstream script.
   gen_train_fraction: 0.70
