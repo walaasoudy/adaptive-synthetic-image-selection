@@ -521,6 +521,247 @@ def validate_utility_results(subsets: list[dict], results: list[dict]) -> pd.Dat
     return frame
 
 
+def spearman_with_reason(a, b) -> tuple[float | None, str | None]:
+    """Spearman rho with an explicit machine-readable reason when it is undefined.
+
+    scipy returns NaN when either input is (numerically) constant or fewer than two points are
+    present — the correlation is undefined, not zero, and NaN is not valid JSON. This returns
+    ``(rho, None)`` on success and ``(None, reason)`` otherwise so callers never write a bare NaN
+    into a frozen manifest.
+    """
+    import math as _math
+
+    import scipy.stats as _stats
+
+    a = np.asarray(list(a), dtype=np.float64)
+    b = np.asarray(list(b), dtype=np.float64)
+    if a.size < 2 or b.size < 2 or a.size != b.size:
+        return None, "fewer_than_two_paired_points"
+    correlation = _stats.spearmanr(a, b)
+    statistic = getattr(correlation, "statistic", None)
+    value = float(statistic) if statistic is not None else float(correlation[0])
+    if _math.isnan(value):
+        return None, "constant_predictions_or_targets"
+    return value, None
+
+
+def normalize_ranking_targets(
+    targets: dict[str, float], method: str = "standardize", winsorize_quantile: float = 0.0
+) -> dict[str, float]:
+    """Transform the distilled per-image ranking targets before the Smooth-L1 + pairwise loss.
+
+    On ~96 training images a single noisy proxy-subset measurement can produce an outlier marginal
+    value that dominates the regression term. ``"standardize"`` (zero mean, unit std) and ``"rank"``
+    (map to evenly-spaced ranks in [0, 1]) both bound that influence; ``"none"`` keeps the raw
+    values. ``winsorize_quantile`` in (0, 0.5) additionally clips each tail before the transform.
+    Every method is order-preserving, so the pairwise term is unaffected. Motivated by the
+    robustness rationale of the Banzhaf value (Wang & Jia, AISTATS 2023) and recent
+    marginal-contribution estimators (2D-OOB, NeurIPS 2024; Chi et al., ICML 2026).
+    """
+    if not targets:
+        return {}
+    keys = list(targets)
+    values = np.asarray([float(targets[key]) for key in keys], dtype=np.float64)
+    if winsorize_quantile:
+        if not 0.0 < winsorize_quantile < 0.5:
+            raise ValueError(f"winsorize_quantile must be in (0, 0.5), got {winsorize_quantile}")
+        low, high = np.quantile(values, [winsorize_quantile, 1.0 - winsorize_quantile])
+        values = np.clip(values, low, high)
+    if method == "none":
+        pass
+    elif method == "standardize":
+        std = float(values.std())
+        values = (values - values.mean()) / (std if std > 1e-12 else 1.0)
+    elif method == "rank":
+        import scipy.stats as _stats
+        ranks = _stats.rankdata(values, method="average")
+        values = (ranks - 1.0) / max(len(ranks) - 1, 1)
+    else:
+        raise ValueError(f"unknown target normalization method {method!r}")
+    return dict(zip(keys, values.tolist()))
+
+
+def banzhaf_msr_targets(
+    subsets: list[dict],
+    utility_by_id: dict[str, float],
+    minimum_in_subsets: int = 1,
+    minimum_out_subsets: int = 1,
+) -> tuple[dict[str, float], dict[str, dict[str, int]]]:
+    """Per-image Data-Banzhaf value via the Maximum-Sample-Reuse (MSR) estimator.
+
+    Uses ONLY the subsets already measured for SetUtilityNetwork (utility_subsets.jsonl +
+    utility_results.jsonl) — no extra proxy-model training, no additional GPU cost. For image i:
+
+        banzhaf(i) = mean( U(S) for S in subsets if i in S )
+                   - mean( U(S) for S in subsets if i not in S )
+
+    This is the one-pass MSR estimator of the Banzhaf semivalue (Wang & Jia, "Data Banzhaf: A
+    Robust Data Valuation Framework for Machine Learning", AISTATS 2023): every measured subset
+    contributes to exactly one of the two averages for every image, so all ``len(subsets)``
+    measurements are reused for all images simultaneously.
+
+    An image gets a value ONLY if it appears in at least ``minimum_in_subsets`` measured subsets AND
+    is absent from at least ``minimum_out_subsets`` of them — otherwise one mean is undefined and the
+    image is simply absent from the returned targets (never 0.0, never a one-sided value). This
+    mirrors the exposure filter that ``05_train_learned_asism.py`` already applies to the
+    leave-one-out targets. ``counts`` reports ``{"in": ..., "out": ...}`` for every image seen.
+    """
+    if not subsets:
+        return {}, {}
+    total_utility = 0.0
+    n_subsets = 0
+    in_sum: dict[str, float] = {}
+    in_count: dict[str, int] = {}
+    for subset in subsets:
+        subset_id = subset["subset_id"]
+        if subset_id not in utility_by_id:
+            raise ValueError(f"banzhaf_msr_targets: no measured utility for subset {subset_id!r}")
+        utility = float(utility_by_id[subset_id])
+        total_utility += utility
+        n_subsets += 1
+        for image_id in set(map(str, subset["image_ids"])):
+            in_sum[image_id] = in_sum.get(image_id, 0.0) + utility
+            in_count[image_id] = in_count.get(image_id, 0) + 1
+
+    targets: dict[str, float] = {}
+    counts: dict[str, dict[str, int]] = {}
+    for image_id, appearances in in_count.items():
+        out_appearances = n_subsets - appearances
+        counts[image_id] = {"in": appearances, "out": out_appearances}
+        if appearances < minimum_in_subsets or out_appearances < minimum_out_subsets:
+            continue
+        mean_in = in_sum[image_id] / appearances
+        mean_out = (total_utility - in_sum[image_id]) / out_appearances
+        targets[image_id] = mean_in - mean_out
+    return targets, counts
+
+
+def loo_vs_banzhaf_diagnostic(
+    leave_one_out_targets: dict[str, float], banzhaf_targets: dict[str, float]
+) -> dict:
+    """Rank agreement between the leave-one-out marginal targets (the current supervision for the
+    ranking network) and the Banzhaf MSR targets, over the images both methods scored.
+
+    Recorded in the learned-training manifest so the choice to switch the ranking network onto
+    Banzhaf supervision is made from evidence, not by default — the plan keeps Banzhaf optional
+    "until the diagnostic is reviewed".
+    """
+    shared = sorted(set(leave_one_out_targets) & set(banzhaf_targets))
+    rho, reason = spearman_with_reason(
+        [leave_one_out_targets[image_id] for image_id in shared],
+        [banzhaf_targets[image_id] for image_id in shared],
+    )
+    return {
+        "n_images_compared": len(shared),
+        "n_leave_one_out_targets": len(leave_one_out_targets),
+        "n_banzhaf_targets": len(banzhaf_targets),
+        "spearman": rho,
+        "spearman_undefined_reason": reason,
+    }
+
+
+def freematch_style_percentile_per_class(
+    ranking_scores: dict[str, float],
+    intended_by_id: dict[str, dict],
+    image_ids: list[str],
+    primary_labels: list[str],
+    real_prevalence_by_label: dict[str, dict],
+    base_percentile: float = 50.0,
+    min_percentile: float = 10.0,
+) -> dict[str, float | None]:
+    """Training-free class-adaptive percentile threshold, adapted from FreeMatch (Wang et al.,
+    ICLR 2023) self-adaptive thresholding.
+
+    FreeMatch lowers the confidence threshold for classes the model has learned less well so their
+    pseudo-labels are not all filtered out. ASISM applies the same idea as a ONE-TIME data-curation
+    decision (never a per-training-step recompute): a class's admission percentile is scaled DOWN
+    (more lenient) the rarer that class is in the REAL patient population
+    (``real_class_support_context`` prevalence), so a single global cut does not starve rare classes
+    of synthetic samples. The rarest class present maps to ``min_percentile`` and the most common to
+    ``base_percentile`` — leniency is RANGE-normalised across the observed per-class prevalences
+    (SST self-adaptive style: Zhao et al., Information Processing & Management, 2025), not merely
+    divided by the maximum.
+
+        ratio      = (prevalence(class) - min_prevalence) / (max_prevalence - min_prevalence)   in [0, 1]
+        percentile = min_percentile + (base_percentile - min_percentile) * ratio
+        threshold  = that percentile of the class's own candidate ranking scores
+
+    A class with unknown or zero real prevalence falls back to ``base_percentile`` — missing
+    information never buys a more lenient cut. A class with zero candidates returns ``None``. When
+    every class shares the same prevalence, all get ``base_percentile``. No neural network, no
+    gradient step; it is a competing threshold policy, not a replacement for the learned network.
+    Pair with ``enforce_per_class_selection_floor`` so a rare class is never selected down to zero.
+    """
+    if not 0.0 <= min_percentile <= base_percentile <= 100.0:
+        raise ValueError(
+            f"require 0 <= min_percentile <= base_percentile <= 100, got {min_percentile}, {base_percentile}"
+        )
+    prevalences = {
+        label: (real_prevalence_by_label.get(label) or {}).get("real_prevalence")
+        for label in primary_labels
+    }
+    positive_prevalences = [value for value in prevalences.values() if value is not None and value > 0]
+    max_prevalence = max(positive_prevalences) if positive_prevalences else None
+    min_prevalence = min(positive_prevalences) if positive_prevalences else None
+    prevalence_span = (max_prevalence - min_prevalence) if positive_prevalences else 0.0
+
+    result: dict[str, float | None] = {}
+    for label in primary_labels:
+        class_scores = [
+            ranking_scores[image_id]
+            for image_id in image_ids
+            if int(intended_by_id.get(image_id, {}).get(label, 0)) == 1
+        ]
+        if not class_scores:
+            result[label] = None
+            continue
+        prevalence = prevalences[label]
+        if max_prevalence is None or prevalence is None or prevalence <= 0 or prevalence_span <= 0:
+            percentile = base_percentile
+        else:
+            ratio = min(1.0, max(0.0, (float(prevalence) - min_prevalence) / prevalence_span))
+            percentile = min_percentile + (base_percentile - min_percentile) * ratio
+        result[label] = float(np.percentile(class_scores, percentile))
+    return result
+
+
+def enforce_per_class_selection_floor(
+    thresholds: dict[str, float | None],
+    ranking_scores: dict[str, float],
+    intended_by_id: dict[str, dict],
+    image_ids: list[str],
+    primary_labels: list[str],
+    min_selected_per_label: int,
+) -> dict[str, float | None]:
+    """Lower a class's threshold just enough to admit ``min_selected_per_label`` of its own
+    candidates whenever the class-adaptive percentile would otherwise select fewer.
+
+    The one-time-curation analogue of SST's class-fairness term (Zhao et al., Information Processing
+    & Management, 2025): a class-adaptive threshold must not starve a rare class. A class with no
+    threshold set is left untouched; a class with fewer than ``min_selected_per_label`` candidates
+    in total has its threshold dropped to admit every candidate it has. Thresholds already
+    admitting enough are unchanged.
+    """
+    adjusted = dict(thresholds)
+    for label in primary_labels:
+        threshold = adjusted.get(label)
+        if threshold is None:
+            continue
+        class_scores = sorted(
+            (ranking_scores[image_id] for image_id in image_ids
+             if int(intended_by_id.get(image_id, {}).get(label, 0)) == 1),
+            reverse=True,
+        )
+        if not class_scores:
+            continue
+        selected = sum(1 for score in class_scores if score >= threshold)
+        if selected >= min_selected_per_label:
+            continue
+        floor_index = min(min_selected_per_label, len(class_scores)) - 1
+        adjusted[label] = float(class_scores[floor_index])
+    return adjusted
+
+
 def scientific_status_for_namespace(namespace: str) -> str:
     """Only the 'production' namespace is production evidence. Every other namespace (dev,
     dev-smoke-v1, ...) is development-only and must never be reported as real-world prevalence

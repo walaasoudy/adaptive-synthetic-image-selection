@@ -145,8 +145,14 @@ def plan_full_policy_verification(per_class_official_method: dict[str, str], ful
     """PLAN ONLY — no execution. Which full-policy variants would need proxy verification once
     thresholds are combined across all 11 diseases, and the independent GPU-hour cost of doing so.
     Actual execution is a separate, fail-closed step: 08b_verify_full_policy_proxy.py --phase run."""
-    variants = sorted({"fixed_target_ratio_threshold_distillation_baseline_v1", "literal_top_50_percent"}
-                      | set(per_class_official_method.values()))
+    variants = sorted(
+        {
+            "fixed_target_ratio_threshold_distillation_baseline_v1",
+            "literal_top_50_percent",
+            "freematch_style_adaptive_percentile",
+        }
+        | set(per_class_official_method.values())
+    )
     n_seeds = int(full_policy_cfg.n_seeds)
     n_runs = len(variants) * n_seeds
     budget = full_policy_cfg.compute_budget
