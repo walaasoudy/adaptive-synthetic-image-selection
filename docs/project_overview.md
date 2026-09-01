@@ -148,7 +148,7 @@ final metric on `final_eval_heldout`:
 | **F** | real + ASISM-selected synthetic (`adaptive_selected_manifest`) |
 | **D** | real + a random synthetic subset with **F's per-class size and composition** |
 
-Primary comparison **F vs B**; **D** isolates selection quality from subset size. Confirmatory
+Primary comparison **C vs B**; **D** isolates selection quality from subset size. Confirmatory
 tests use Holm–Bonferroni; exploratory use Benjamini–Hochberg.
 
 ---
@@ -181,7 +181,7 @@ CosSIF CiBM 2024) are designed but not implemented; they would be ablation flags
   sufficient verified, image-disjoint evidence *and* passing pre-registered acceptance criteria;
   otherwise the pipeline falls back.
 - **One winning policy.** The fixed / FreeMatch / learned threshold policies do not each become a
-  final-evaluation condition; proxy evidence selects one, which becomes Condition F.
+  final-evaluation condition; proxy evidence selects one, which becomes Condition C.
 
 ---
 

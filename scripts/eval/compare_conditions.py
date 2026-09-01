@@ -44,12 +44,12 @@ from scripts.utils.metrics import (  # noqa: E402
     patient_level_bootstrap,
 )
 
-TAG_PATTERN = re.compile(r"^(?P<condition>[A-G])(?:_draw(?P<draw>\d+))?_seed(?P<seed>\d+)$")
+TAG_PATTERN = re.compile(r"^(?P<condition>[A-D])(?:_draw(?P<draw>\d+))?_seed(?P<seed>\d+)$")
 
 # The CONFIRMATORY family, fixed before results are seen (§8.1/§8.2). Everything else is
 # exploratory and corrected with FDR.
-CONFIRMATORY_COMPARISONS = [("F", "B")]
-SECONDARY_COMPARISONS = [("A", "B"), ("A", "F")]
+CONFIRMATORY_COMPARISONS = [("C", "B")]
+SECONDARY_COMPARISONS = [("A", "B"), ("A", "C")]
 
 
 def parse_tag(tag: str) -> dict | None:
@@ -256,7 +256,7 @@ def main() -> int:
     report = {
         "run_dir": str(run_dir),
         "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary disease labels",
-        "primary_comparison": "F vs B (Learned ASISM-selected synthetic images vs all synthetic images)",
+        "primary_comparison": "C vs B (ASISM-selected synthetic images vs all synthetic images)",
         "n_eval_rows": len(reference),
         "n_eval_patients": int(pd.Series(patient_ids).nunique()),
         "per_condition": per_condition_metrics,

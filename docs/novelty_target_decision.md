@@ -6,7 +6,7 @@
 (`SetUtilityNetwork`, `MultiSignalUtilityRankingNetwork`, `AdaptiveThresholdNetwork`), the pipeline
 `scripts/asism/04_build_utility_subsets.py` through `09_finalize_learned_selection.py`, and
 `scripts/asism/learned.py`. This is documented as `docs/stages2_to_5_plan.md` §4.9 (v4 revision
-note) and reflected in `configs/stage3_asism.yaml` and Stage 4 conditions F/G
+note) and reflected in `configs/stage3_asism.yaml` and Stage 4 condition C
 (`docs/stages2_to_5_plan.md` §7).
 
 **What this resolves:** the pseudo-replication concern raised below. `MultiSignalUtilityRankingNetwork`
@@ -24,12 +24,12 @@ on thin evidence.
 **What remains open:** this document's original ask was for the supervisor to select the target
 *and approve the additional ASISM tuning budget* before implementation proceeded. That approval was
 not recorded before this code was written — implementation proceeded ahead of the sign-off this
-document itself required. Before treating the learned selector (Stage 4 condition F) as anything
+document itself required. Before treating the learned selector (Stage 4 condition C) as anything
 more than a candidate method for the thesis, get explicit supervisor confirmation of: (a) Option 1
 as the accepted target/claim, (b) the compute budget actually spent (`configs/stage3_asism.yaml` →
 `compute_budget`, `verification_compute_budget`, `full_policy_verification.compute_budget`), and (c)
 whether to add the matched-random control described in `docs/stages2_to_5_plan.md` §7.1 — without
-it, an F-over-B result cannot separate ASISM's ranking quality from the effect of using fewer
+it, a C-over-B result cannot separate ASISM's ranking quality from the effect of using fewer
 synthetic images. This status update records what exists; it is not a substitute for that approval.
 
 **v2 note (2026-08-21):** the weighted-score selector referred to below is no longer part of the

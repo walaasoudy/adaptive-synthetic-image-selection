@@ -138,7 +138,7 @@ and every test passes.
    pass.
 
    `06` produces the fixed-ratio learned threshold — an intermediate artifact and ablation
-   reference, not a Stage 4 condition. The adaptive path that feeds condition F continues:
+   reference, not a Stage 4 condition. The adaptive path that feeds condition C continues:
 
    ```bash
    python scripts/asism/07_build_threshold_contexts.py --namespace production-thesis-v1
@@ -150,7 +150,7 @@ and every test passes.
    python scripts/asism/09_finalize_learned_selection.py --namespace production-thesis-v1
    ```
 
-7. Stage 4 plan and 9 classifier runs — the thesis's three arms A/B/F × 3 seeds
+7. Stage 4 plan and 9 classifier runs — the thesis's three arms A/B/C × 3 seeds
    (`docs/stages2_to_5_plan.md` §7 v3 revision note; GPU; budget before launch, commonly many
    GPU-hours):
 
@@ -160,11 +160,11 @@ and every test passes.
    ```
 
    `--condition all` trains every condition in `configs/stage4_classifier.yaml` → `conditions`
-   (currently `[A, B, F]`). F will hit an `UPSTREAM GATE` error if step 6b was skipped — that is the
+   (currently `[A, B, C]`). F will hit an `UPSTREAM GATE` error if step 6b was skipped — that is the
    intended fail-closed behavior, not a bug.
 
-   **Before launching, confirm the §7.1 decision:** F is a strict subset of B, so with only A/B/F
-   there is no matched-random control and an F-over-B gain cannot be attributed to ASISM's ranking
+   **Before launching, confirm the §7.1 decision:** C is a strict subset of B, so with only A/B/C
+   there is no matched-random control and a C-over-B gain cannot be attributed to ASISM's ranking
    rather than to using fewer synthetic images. Adding that control costs `n_draws × 3` more runs.
    Settle it now — it cannot be added after results are seen.
 

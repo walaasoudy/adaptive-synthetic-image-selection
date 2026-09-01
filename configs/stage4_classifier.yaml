@@ -1,4 +1,4 @@
-# Stage 4 — thesis conditions A/B/F. FROZEN protocol.
+# Stage 4 — thesis conditions A/B/C. FROZEN protocol.
 #
 # Architecture, initialization, label policy, uncertainty policy, optimizer family, batch size,
 # augmentation, checkpoint-selection rule, validation rule, and threshold-selection rule are
@@ -15,7 +15,7 @@ paths:
   d_matching_policy_manifest: ${paths.project_root}/outputs/stage4/frozen_d_matching_policy.json
 
 split_namespace: "dev-smoke-v1"
-conditions: [A, B, F]
+conditions: [A, B, C]
 
 model:
   architecture: "densenet121"
@@ -43,7 +43,7 @@ seeds: [42, 43, 44]
 # INACTIVE — retained, not deleted. No condition currently consumes this block: the matched-random
 # control was matched to the removed condition C (§7 v3 revision note). It is kept intact because
 # §7.1 identifies re-enabling it — re-pointed at condition F — as the fix for the thesis's one
-# structural gap: without it, an F-over-B gain cannot be attributed to ASISM's ranking rather than
+# structural gap: without it, a C-over-B gain cannot be attributed to ASISM's ranking rather than
 # to simply using fewer synthetic images. Re-enabling requires supervisor sign-off and n_draws*3
 # additional runs.
 condition_d:

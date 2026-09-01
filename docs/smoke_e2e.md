@@ -98,8 +98,8 @@ statistical power, rare-label support, or thesis outcomes.
 Ranking Network and Adaptive Threshold Learning *are* implemented (`scripts/asism/04`–`09`,
 `docs/stages2_to_5_plan.md` §4.9), but this pipeline stops after Go/No-Go and jumps straight to
 Stage 4 with `conditions: [A, B]` (`configs/smoke_e2e.yaml`). It therefore never runs stages
-`04`–`09`, never produces `adaptive_selected_manifest`, and never trains **condition F** — so the
-thesis's primary comparison (F vs. B) is not exercised end to end anywhere.
+`04`–`09`, never produces `adaptive_selected_manifest`, and never trains **condition C** — so the
+thesis's primary comparison (C vs. B) is not exercised end to end anywhere.
 
 The reason is fixture size, not a missing implementation: the fixture generates ~4 synthetic images,
 while `04 --phase feasibility` legitimately requires enough candidates to fill three quantile bands

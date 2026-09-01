@@ -1,86 +1,90 @@
-<mxfile host="app.diagrams.net" version="24.0.0">
+<mxfile host="app.diagrams.net">
   <diagram name="ASISM framework" id="asism-framework">
-    <mxGraphModel dx="1000" dy="720" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1160" math="0" shadow="0">
+    <mxGraphModel dx="1212" dy="661" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1160" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-
-        <mxCell id="title" value="Overview of the proposed ASISM framework" style="text;html=1;align=center;verticalAlign=middle;fontSize=15;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="200" y="10" width="450" height="24" as="geometry" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=15;fontStyle=1;" value="Overview of the proposed ASISM framework" vertex="1">
+          <mxGeometry height="24" width="450" x="200" y="10" as="geometry" />
         </mxCell>
-
-        <mxCell id="s1" value="Stage 1 — SDXL fine-tuning (LoRA)&#10;CheXpert-derived captions · gen_train / gen_val" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="245" y="44" width="360" height="52" as="geometry" />
+        <mxCell id="s1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" value="Stage 1 — SDXL fine-tuning (LoRA)&#xa;CheXpert-derived captions · gen_train / gen_val" vertex="1">
+          <mxGeometry height="52" width="360" x="245" y="44" as="geometry" />
         </mxCell>
-        <mxCell id="s2" value="Stage 2 — synthetic generation&#10;class-aware recipes · rarity-aware quotas · ~5k images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="245" y="128" width="360" height="52" as="geometry" />
+        <mxCell id="s2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" value="Stage 2 — synthetic generation&lt;div&gt;&lt;br/&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="52" width="360" x="245" y="128" as="geometry" />
         </mxCell>
-
-        <mxCell id="asismbg" value="Stage 3 — ASISM (novel contribution)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;dashed=1;verticalAlign=top;fontSize=12;fontStyle=2;align=left;spacingLeft=10;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="170" y="216" width="510" height="600" as="geometry" />
+        <mxCell id="asismbg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;dashed=1;verticalAlign=top;fontSize=12;fontStyle=2;align=left;spacingLeft=10;spacingTop=6;" value="Stage 3 — ASISM (novel contribution)" vertex="1">
+          <mxGeometry height="600" width="510" x="170" y="216" as="geometry" />
         </mxCell>
-
-        <mxCell id="a1" value="01 — six per-image signals&#10;similarity · image quality · uncertainty ·&#10;explainability · intended-label agreement · distinctiveness" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="244" width="450" height="66" as="geometry" />
+        <mxCell id="a1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" value="01 — six per-image signals&#xa;similarity · image quality · uncertainty ·&#xa;explainability · intended-label agreement · distinctiveness" vertex="1">
+          <mxGeometry height="66" width="450" x="200" y="244" as="geometry" />
         </mxCell>
-        <mxCell id="a2" value="02 — Go / No-Go gate&#10;include · ablation-only · exclude" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="332" width="450" height="46" as="geometry" />
+        <mxCell id="a2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" value="02 — Go / No-Go gate&#xa;include · ablation-only · exclude" vertex="1">
+          <mxGeometry height="46" width="450" x="200" y="332" as="geometry" />
         </mxCell>
-        <mxCell id="a3" value="04 — measure ~120 controlled subsets&#10;real ΔAUROC = augmented − real-only, on asism_tuning_heldout" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="400" width="450" height="52" as="geometry" />
+        <mxCell id="a3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" value="04 — measure ~120 controlled subsets&lt;br&gt;real Δ AUROC = augmented − real-only, on asism_tuning_heldout" vertex="1">
+          <mxGeometry height="52" width="450" x="200" y="400" as="geometry" />
         </mxCell>
-        <mxCell id="a4" value="05 — set-utility network → per-image target&#10;permutation-invariant Deep Sets · leave-one-out / Data-Banzhaf MSR" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="474" width="450" height="52" as="geometry" />
+        <mxCell id="a4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" value="05 — set-utility network → per-image target&#xa;permutation-invariant Deep Sets · leave-one-out / Data-Banzhaf MSR" vertex="1">
+          <mxGeometry height="52" width="450" x="200" y="474" as="geometry" />
         </mxCell>
-        <mxCell id="a5" value="05 — multi-signal utility ranking network&#10;9 → 128 → 64 → 32 → 1 · one scalar utility score per image" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="548" width="450" height="52" as="geometry" />
+        <mxCell id="a5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" value="05 — multi-signal utility ranking network&#xa;9 → 128 → 64 → 32 → 1 · one scalar utility score per image" vertex="1">
+          <mxGeometry height="52" width="450" x="200" y="548" as="geometry" />
         </mxCell>
-        <mxCell id="a6" value="07–08 — adaptive per-class admission threshold&#10;class embedding + context → sigmoid&#10;three-tier governance (learned / verified-proxy / fixed baseline)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="622" width="450" height="66" as="geometry" />
+        <mxCell id="a6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" value="07–08 — adaptive per-class admission threshold&#xa;class embedding + context → sigmoid&#xa;three-tier governance (learned / verified-proxy / fixed baseline)" vertex="1">
+          <mxGeometry height="66" width="450" x="200" y="622" as="geometry" />
         </mxCell>
-        <mxCell id="a7" value="08b–09 — full-policy proxy comparison&#10;fixed · FreeMatch-style · learned network → one winning policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="710" width="450" height="52" as="geometry" />
+        <mxCell id="a7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" value="08b–09 — full-policy proxy comparison&#xa;fixed · FreeMatch-style · learned network → one winning policy" vertex="1">
+          <mxGeometry height="52" width="450" x="200" y="710" as="geometry" />
         </mxCell>
-        <mxCell id="a8" value="selected synthetic subset — adaptive_selected_manifest.jsonl" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="778" width="450" height="30" as="geometry" />
+        <mxCell id="a8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" value="selected synthetic subset — adaptive_selected_manifest.jsonl" vertex="1">
+          <mxGeometry height="30" width="450" x="200" y="778" as="geometry" />
         </mxCell>
-
-        <mxCell id="s4" value="Stage 4 — train conditions&#10;A: real · B: real + all synthetic · F: real + ASISM-selected · D: real + matched-random" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="852" width="450" height="60" as="geometry" />
+        <mxCell id="s4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" value="Stage 4 — train conditions A / B / C&#xa;A: real · B: real + all synthetic · C: real + ASISM-selected&#xa;(optional control D: real + matched-random subset of C's size &amp; class mix — off by default)" vertex="1">
+          <mxGeometry height="60" width="450" x="200" y="852" as="geometry" />
         </mxCell>
-        <mxCell id="s5" value="Stage 5 — evaluation&#10;macro-AUROC on final_eval_heldout · primary comparison F vs B · D isolates selection quality" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="200" y="944" width="450" height="60" as="geometry" />
+        <mxCell id="s5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" value="Stage 5 — evaluation&#xa;macro-AUROC on final_eval_heldout · primary comparison C vs B&#xa;(D, if enabled, isolates selection quality from subset size)" vertex="1">
+          <mxGeometry height="60" width="450" x="200" y="944" as="geometry" />
         </mxCell>
-
-        <mxCell id="note" value="All Stage 3 tuning uses asism_tuning_heldout only;&#10;final_eval_heldout is opened once, in Stages 4–5." style="text;html=1;align=left;verticalAlign=top;fontSize=11;fontStyle=2;" vertex="1" parent="1">
-          <mxGeometry x="200" y="1024" width="450" height="40" as="geometry" />
+        <mxCell id="lg" parent="1" style="text;html=1;align=left;fontSize=11;fontStyle=1;" value="Legend" vertex="1">
+          <mxGeometry height="18" width="120" x="690" y="244" as="geometry" />
         </mxCell>
-
-        <mxCell id="lg" value="Legend" style="text;html=1;align=left;fontSize=11;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="690" y="244" width="120" height="18" as="geometry" />
+        <mxCell id="e1" edge="1" parent="1" source="s1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="s2">
+          <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="lg1" value="per-image scoring" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="690" y="266" width="130" height="26" as="geometry" />
+        <mxCell id="e2" edge="1" parent="1" source="s2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="a1">
+          <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="lg2" value="learned utility &amp; threshold" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="690" y="298" width="130" height="26" as="geometry" />
+        <mxCell id="e3" edge="1" parent="1" source="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="a2">
+          <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="lg3" value="data in / out (stages)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="690" y="330" width="130" height="26" as="geometry" />
+        <mxCell id="e4" edge="1" parent="1" source="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="a3">
+          <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="s1" target="s2"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="s2" target="a1"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="a1" target="a2"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="a2" target="a3"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="a3" target="a4"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="a4" target="a5"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="a5" target="a6"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="a6" target="a7"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="a7" target="a8"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="a8" target="s4"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" edge="1" parent="1" source="s4" target="s5"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e12" value="all synthetic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#6c8ebf;fontSize=10;exitX=1;exitY=0.5;entryX=1;entryY=0;" edge="1" parent="1" source="s2" target="s4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="a4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="a5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="a6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="a6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="a7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="a7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="a8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="a8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="s4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="s4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;" target="s5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="s2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#6c8ebf;fontSize=10;exitX=1;exitY=0.5;entryX=1;entryY=0;" target="s4" value="all synthetic">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>

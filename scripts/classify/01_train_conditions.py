@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Stage 4 — train the thesis conditions A/B/F.
+"""Stage 4 — train the thesis conditions A/B/C.
 
 The three arms the thesis specifies for Stage 5:
 
     A  real only                     classifier_train
     B  real + ALL synthetic          classifier_train + every Stage 2 image
-    F  real + Learned-ASISM-selected classifier_train + the finalized adaptive selection
+    C  real + ASISM-selected         classifier_train + the finalized adaptive selection
 
-Primary comparison: F vs B — does selecting synthetic images with Learned ASISM beat using all of
-them unselected?
+Primary comparison: C vs B — does selecting synthetic images with ASISM beat using all of them
+unselected?
 
-KNOWN LIMITATION — no matched-random control. F is a strict subset of B, so an F-over-B gain has two
+KNOWN LIMITATION — no matched-random control. C is a strict subset of B, so a C-over-B gain has two
 competing explanations that this design cannot separate: (a) ASISM chose *good* images, or (b) using
 *fewer* synthetic images helps regardless of which ones, because unselected synthetic data is noisy.
-Distinguishing them needs a condition drawing |F| images at random with F's label profile. The
-matched-draw machinery below (build_matched_random_draw, profile_of, condition_d.*) is retained and
-working for exactly that purpose, but no such condition is currently enabled. See
-docs/stages2_to_5_plan.md §7.
+Distinguishing them needs a condition drawing |C| images at random with C's label profile
+(optional condition D). The matched-draw machinery below (build_matched_random_draw, profile_of,
+condition_d.*) is retained and working for exactly that purpose, but D is not enabled by default.
+See docs/stages2_to_5_plan.md §7.
 
 Fairness (§7.1): every run — all conditions, all seeds — uses the SAME optimizer-step budget, batch
 size, augmentation, and checkpoint-selection rule. All model selection is on classifier_val;
@@ -50,7 +50,7 @@ from scripts.utils.artifact_contracts import (  # noqa: E402
     require_manifest_fields, stage2_paths, stage3_paths, stage4_paths,
 )
 
-CONDITIONS = ["A", "B", "F"]
+CONDITIONS = ["A", "B", "C"]
 
 
 def load_configs():
@@ -305,7 +305,7 @@ def training_plan(stage4_cfg) -> dict:
     n_draws = int(stage4_cfg.condition_d.n_draws)
     all_runs = {
         "A": len(seeds), "B": len(seeds), "C": len(seeds),
-        "D": n_draws * len(seeds), "E": len(seeds), "F": len(seeds), "G": len(seeds),
+        "D": n_draws * len(seeds),
     }
     enabled = list(stage4_cfg.get("conditions", CONDITIONS))
     runs = {condition: all_runs[condition] for condition in enabled}
@@ -328,29 +328,23 @@ def build_records(condition: str, draw_ids: list[str] | None, cfgs, namespace: s
     stage1_cfg = load_stage1_config()
     images_dir = Path(stage1_cfg.paths.images_dir) / namespace
 
-    real_records = []
-    if condition != "E":
-        frame = load_split(
-            "classifier_train", namespace, purpose="schema_validation", caller="stage4"
+    frame = load_split(
+        "classifier_train", namespace, purpose="schema_validation", caller="stage4"
+    )
+    real_records = records_from_split(frame, images_dir / "classifier_train")
+    if not real_records:
+        raise SystemExit(
+            f"UPSTREAM GATE: no preprocessed classifier_train images under "
+            f"{images_dir / 'classifier_train'}"
         )
-        real_records = records_from_split(frame, images_dir / "classifier_train")
-        if not real_records:
-            raise SystemExit(
-                f"UPSTREAM GATE: no preprocessed classifier_train images under "
-                f"{images_dir / 'classifier_train'}"
-            )
 
     synthetic_ids: list[str] | None = None
-    if condition in ("B", "E"):
+    if condition == "B":
         synthetic_ids = None  # all
     elif condition == "C":
-        synthetic_ids = load_selected_ids(stage3_cfg)
+        synthetic_ids = load_selected_ids(stage3_cfg, selector="adaptive")
     elif condition == "D":
         synthetic_ids = draw_ids
-    elif condition == "F":
-        synthetic_ids = load_selected_ids(stage3_cfg, selector="adaptive")
-    elif condition == "G":
-        synthetic_ids = load_selected_ids(stage3_cfg, selector="fixed_ratio")
 
     synthetic_records = []
     if condition != "A":
@@ -500,10 +494,10 @@ def main() -> int:
         "uncertainty_policy": "raw preserved; -1 and blank masked in loss and metrics",
         "fairness_protocol": "equal optimizer steps across every enabled condition and seed",
         "primary_endpoint": f"macro-AUROC over the {len(PRIMARY_ENDPOINT_LABELS)} primary labels on final_eval_heldout",
-        "primary_comparison": "F vs B (Learned-ASISM-selected synthetic images vs all synthetic images)",
+        "primary_comparison": "C vs B (ASISM-selected synthetic images vs all synthetic images)",
         "known_limitation": (
-            "F is a strict subset of B, and no matched-random control condition is enabled. An "
-            "F-over-B gain therefore cannot distinguish ASISM's selection quality from the effect "
+            "C is a strict subset of B, and no matched-random control condition is enabled. A "
+            "C-over-B gain therefore cannot distinguish ASISM's selection quality from the effect "
             "of simply using fewer synthetic images."
         ),
         "multiplicity": {"confirmatory": "holm_bonferroni", "exploratory": "benjamini_hochberg"},
@@ -541,17 +535,11 @@ def main() -> int:
     if args.condition != "all" and args.condition not in enabled_conditions:
         raise SystemExit(f"Condition {args.condition} is disabled by this explicit configuration: {enabled_conditions}")
     conditions = enabled_conditions if args.condition == "all" else [args.condition]
-    if "F" in conditions:
+    if "C" in conditions:
         require_manifest_fields(
             Path(stage3_cfg.paths.adaptive_selection_manifest),
             {"frozen": True, "method": "class_aware_adaptive_threshold_v2"},
             "adaptive learned ASISM selection",
-        )
-    if "G" in conditions:
-        require_manifest_fields(
-            Path(stage3_cfg.paths.learned_dir) / "learned_selection_manifest.json",
-            {"frozen": True, "method": "fixed_target_ratio_threshold_distillation_baseline_v1"},
-            "fixed-ratio learned ASISM baseline",
         )
     seeds = list(stage4_cfg.seeds)
     all_results = []
