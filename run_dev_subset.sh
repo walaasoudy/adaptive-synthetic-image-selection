@@ -48,7 +48,28 @@ run 01b_dev_subset    python scripts/data/01b_build_dev_subset.py
 run 02b_splits        python scripts/data/02b_build_sixway_splits.py --namespace dev --run-id "$NS"
 run 03_preprocess     python scripts/data/03_preprocess_images.py --namespace "$NS" --splits gen_train gen_val classifier_train classifier_val asism_tuning_heldout final_eval_heldout
 run 04_captions       python scripts/data/04_generate_captions.py --namespace "$NS" --splits gen_train gen_val
-run 10_stage1_lora    bash scripts/train/launch_resumable.sh split.namespace="$NS"
+
+# Stage 1 LoRA in the FOREGROUND so the pipeline waits for it. (launch_resumable.sh backgrounds
+# training and returns immediately, which lets Stage 2 start before any checkpoint exists.)
+# STAGE1_MAX_STEPS keeps the dev shakedown short; the production run uses the config's 15000-30000.
+STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-2000}"
+# optimizer.name=adamw: the RunPod pytorch-2.8/cu128 image ships a bitsandbytes without a CUDA
+# binary, and the script's fallback only wraps optimizer construction (the 8-bit kernel fails
+# later at optimizer.step()). Plain torch.optim.AdamW is used instead.
+run 10_stage1_lora    accelerate launch --config_file configs/accelerate_config.yaml scripts/train/train_lora_sdxl.py split.namespace="$NS" optimizer.name=adamw training.max_train_steps="$STAGE1_MAX_STEPS" training.min_train_steps="$STAGE1_MAX_STEPS"
+
+# Point Stage 2 at the LoRA checkpoint step 10 produced (02_generate_synthetic_images.py reads
+# configs/stage2_generation.yaml directly and takes no CLI override).
+set_lora_ckpt () {
+  local rid ckpt
+  rid=$(python3 -c "import json; print(json.load(open('checkpoints/stage1_lora_sdxl/latest_run.json'))['run_id'])")
+  ckpt="checkpoints/stage1_lora_sdxl/$rid/final"
+  [ -d "$ckpt" ] || ckpt=$(ls -d "checkpoints/stage1_lora_sdxl/$rid/lora_weights/step_"* 2>/dev/null | sort -V | tail -1)
+  [ -n "${ckpt:-}" ] && [ -d "$ckpt" ] || { echo "no LoRA checkpoint under checkpoints/stage1_lora_sdxl/$rid"; return 1; }
+  sed -i "s|^\(\s*lora_weights_dir:\).*|\1 $ckpt|" configs/stage2_generation.yaml
+  grep -n "lora_weights_dir:" configs/stage2_generation.yaml
+}
+run 11_set_lora_ckpt  set_lora_ckpt
 
 # ---------------- Stage 2 (synthetic generation) ----------------
 run 20_recipes        python scripts/generate/01_sample_label_recipes.py --namespace "$NS"
