@@ -1,30 +1,3 @@
-#!/usr/bin/env python3
-"""Derive each pathology's expected Grad-CAM region from REAL positives (docs/stages2_to_5_plan.md §4.4).
-
-WHY THIS EXISTS. The explainability signal scores a synthetic image by how much of its Grad-CAM mass
-falls inside the region where that pathology is expected to appear. Until now those regions were
-hand-entered constants in configs/stage3_asism.yaml, e.g.
-
-    Cardiomegaly: [0.30, 0.40, 0.75, 0.85]
-
-with no recorded derivation. The first question any reviewer asks is where those numbers came from,
-and "we chose them" is not an answer that survives. This script replaces the guess with a
-measurement: run the SAME Grad-CAM procedure the signal uses, on REAL images the split says are
-positive for a pathology, and take the region the classifier's attention actually concentrates in.
-
-SPLIT DISCIPLINE. Regions are derived from `gen_train` ONLY -- the split the auxiliary classifier
-was trained on (§2). Deriving them from classifier_train, classifier_val, asism_tuning_heldout or
-final_eval_heldout would leak evaluation data into a component that scores every synthetic image,
-so the split is not configurable here; it is fixed in code and recorded in the manifest.
-
-WHAT THIS IS NOT. The derived box is where a classifier trained on real data LOOKS for a pathology,
-not where the pathology anatomically is. It inherits any shortcut the classifier learned. It is an
-explainability-plausibility reference, exactly as §4.4 already states for the signal itself -- the
-improvement is that the reference is now measured and reproducible rather than asserted.
-
-Usage:
-    python scripts/asism/00c_derive_expected_regions.py --namespace production-thesis-v1
-"""
 from __future__ import annotations
 
 import argparse
