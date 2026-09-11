@@ -10,7 +10,7 @@ the real CheXpert data, trained checkpoints, generated images, and GPU execution
 artifacts validate engineering connectivity only.
 
 Stage 5 compares three conditions on `final_eval_heldout` (`configs/stage4_classifier.yaml` →
-`conditions: [A, B, F]`): **A** real only, **B** real + all synthetic, **F** real + Learned-ASISM-
+`conditions: [A, B, C]`): **A** real only, **B** real + all synthetic, **C** real + ASISM-
 selected synthetic. There is no separate weighted-baseline selector or condition — ASISM is the full
 module (`docs/stages2_to_5_plan.md` §4.9), including the Multi-Signal Utility Ranking Network and
 Adaptive Threshold Learning below. Primary comparison: **F vs. B**. See
@@ -27,7 +27,7 @@ python scripts/asism/04b_evaluate_utility_subsets.py --phase run
 python scripts/asism/05_train_learned_asism.py
 python scripts/asism/06_learn_thresholds_select.py
 # 06 is the fixed-ratio learned threshold — an intermediate/ablation artifact, not a Stage 4
-# condition. The adaptive path that feeds condition F continues with:
+# condition. The adaptive path that feeds condition C continues with:
 python scripts/asism/07_build_threshold_contexts.py
 python scripts/asism/07b_verify_thresholds_proxy.py --phase estimate
 python scripts/asism/07b_verify_thresholds_proxy.py --phase run --i-understand-this-trains-real-models

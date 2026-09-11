@@ -100,7 +100,8 @@ filter (each image in ≥ 3 subsets), ≈ 96 usable `(subset, utility)` pairs re
   `target_normalization ∈ {"standardize", "rank", "none"}` (default `"standardize"`), plus an
   optional `target_winsorize_quantile` — so one noisy proxy measurement cannot dominate training
   on ≈ 96 points. All transforms are order-preserving. `"none"` restores the prior behaviour.
-- **Multi-Signal Utility Ranking Network** — small MLP, `9 → 128 → 64 → 32 → 1`, one scalar
+- **Multi-Signal Utility Ranking Network** — small MLP, `9 → 128 → 64 → 32 → 1` (9 = the admitted
+  signal feature columns: similarity ×3, IQA ×3, uncertainty, explainability, agreement), one scalar
   utility target, optimised by Smooth-L1 + 0.5 · pairwise-ranking loss. It is *not* a
   multi-objective / Pareto model.
 
@@ -148,7 +149,7 @@ final metric on `final_eval_heldout`:
 | **F** | real + ASISM-selected synthetic (`adaptive_selected_manifest`) |
 | **D** | real + a random synthetic subset with **F's per-class size and composition** |
 
-Primary comparison **F vs B**; **D** isolates selection quality from subset size. Confirmatory
+Primary comparison **C vs B**; **D** isolates selection quality from subset size. Confirmatory
 tests use Holm–Bonferroni; exploratory use Benjamini–Hochberg.
 
 ---
@@ -181,7 +182,7 @@ CosSIF CiBM 2024) are designed but not implemented; they would be ablation flags
   sufficient verified, image-disjoint evidence *and* passing pre-registered acceptance criteria;
   otherwise the pipeline falls back.
 - **One winning policy.** The fixed / FreeMatch / learned threshold policies do not each become a
-  final-evaluation condition; proxy evidence selects one, which becomes Condition F.
+  final-evaluation condition; proxy evidence selects one, which becomes Condition C.
 
 ---
 

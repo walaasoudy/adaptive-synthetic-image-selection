@@ -6,7 +6,7 @@ Refuses to run unless every precondition in §8 holds:
   - the recorded split hash matches the current manifest;
   - the frozen experiment-protocol manifest exists (Stage 4);
   - the frozen Learned-ASISM selection manifest exists (Stage 3);
-  - the required A/B/F checkpoints exist, with their hashes recorded;
+  - the required A/B/C checkpoints exist, with their hashes recorded;
   - the classification-threshold policy is frozen;
   - an explicit --final-eval-run-id is supplied.
 
@@ -183,8 +183,8 @@ def enforce_preconditions(namespace: str, run_id: str) -> dict:
             failures.append("Learned ASISM selection manifest is not a compatible frozen artifact")
         evidence["learned_asism_manifest_hash"] = sha256_file(asism_path)
 
-    # F is the finalized Learned-ASISM selector.
-    if "F" in list(stage4_cfg.get("conditions", [])):
+    # C is the finalized Learned-ASISM selector.
+    if "C" in list(stage4_cfg.get("conditions", [])):
         learned_path = Path(stage3_cfg.paths.adaptive_selection_manifest)
         if not learned_path.is_file():
             failures.append(f"adaptive learned ASISM selection manifest missing: {learned_path}")

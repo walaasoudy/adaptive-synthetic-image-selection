@@ -1116,9 +1116,9 @@ def test_stage4_routes_the_thesis_selected_synthetic_condition_to_learned_asism(
     source = (Path(__file__).resolve().parents[1] / "scripts" / "classify" / "01_train_conditions.py").read_text(
         encoding="utf-8"
     )
-    assert 'CONDITIONS = ["A", "B", "F"]' in source
-    assert 'condition == "F"' in source and 'selector="adaptive"' in source
-    assert 'conditions: [A, B, F]' in (Path(__file__).resolve().parents[1] / "configs" / "stage4_classifier.yaml").read_text(encoding="utf-8")
+    assert 'CONDITIONS = ["A", "B", "C"]' in source
+    assert 'condition == "C"' in source and 'selector="adaptive"' in source
+    assert 'conditions: [A, B, C]' in (Path(__file__).resolve().parents[1] / "configs" / "stage4_classifier.yaml").read_text(encoding="utf-8")
 
 
 def test_finalizer_never_reads_final_eval_and_publishes_new_adaptive_artifacts():
