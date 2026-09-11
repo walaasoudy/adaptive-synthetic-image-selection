@@ -13,8 +13,13 @@ splits:
       require_full_cohort: false
 
 stage1:
+  # The base config points split.input_csv at the dev-subset CSV (commit d8e4151); the smoke
+  # fixture writes a full raw train.csv instead, so read that directly.
+  dev_subset:
+    enabled: false
   split:
     namespace: dev-smoke-v1
+    input_csv: ${paths.raw_dir}/train.csv
   data:
     resolution: 64
     min_source_resolution: 32
