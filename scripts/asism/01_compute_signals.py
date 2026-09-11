@@ -1,22 +1,3 @@
-#!/usr/bin/env python3
-"""Stage 3a — compute the five ASISM signals (docs/stages2_to_5_plan.md §4.1-§4.5).
-
-Writes FIVE independent versioned parquet artifacts, one per signal:
-    similarity_scores.parquet  iqa_scores.parquet  uncertainty_scores.parquet
-    explainability_scores.parquet  agreement_scores.parquet
-
-Independent artifacts (rather than one shared file) so a signal can be recomputed, audited, or
-EXCLUDED by the Go/No-Go gate (§4.6) without disturbing the others — an excluded-but-valid signal's
-artifact is retained for auditability.
-
-IQA needs no model and runs anywhere. The other four query the frozen auxiliary classifier (§2) or
-an embedding encoder, and fail cleanly at that upstream gate when it is absent.
-
-Usage:
-    python scripts/asism/01_compute_signals.py --signal all
-    python scripts/asism/01_compute_signals.py --signal iqa      # no GPU required
-"""
-
 from __future__ import annotations
 
 import argparse
