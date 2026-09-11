@@ -44,6 +44,7 @@ def main() -> int:
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths:
             cfg.paths[key] = str(value)
+    cfg.split_namespace = namespace
 
     required = [
         Path(cfg.paths.full_policy_verification_plan),
