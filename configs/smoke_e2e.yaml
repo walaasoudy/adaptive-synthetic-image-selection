@@ -168,7 +168,7 @@ stage3:
 
 stage4:
   split_namespace: dev-smoke-v1
-  conditions: [A, B, F]  # F added 2026-08-21 once the learned-ASISM GPU smoke feeds it
+  conditions: [A, B, C]  # C (formerly F) = the finalized Learned-ASISM selection
   model:
     pretrained_source: random
     resolution: 64

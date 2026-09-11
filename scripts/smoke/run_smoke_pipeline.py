@@ -180,10 +180,10 @@ def main() -> int:
         [py, "scripts/asism/09_finalize_learned_selection.py", "--namespace", NAMESPACE],
         learned / "adaptive_selected_manifest.jsonl", env,
     )
-    require(learned / "adaptive_selected_manifest.jsonl", "condition F: finalized Learned ASISM selection")
+    require(learned / "adaptive_selected_manifest.jsonl", "condition C: finalized Learned ASISM selection")
 
     run([py, "scripts/classify/01_train_conditions.py", "--condition", "all", "--namespace", NAMESPACE], env)
-    require(workspace / "outputs/stage4" / NAMESPACE / "stage4_training_results.json", "Stage 4 A/B/F results")
+    require(workspace / "outputs/stage4" / NAMESPACE / "stage4_training_results.json", "Stage 4 A/B/C results")
     run([py, "scripts/eval/stage5_evaluate.py", "--final-eval-run-id", "smoke-final-v1", "--namespace", NAMESPACE,
          "--bootstrap-resamples", "20"], env)
     stage5 = workspace / "outputs/stage5" / NAMESPACE / "smoke-final-v1"
