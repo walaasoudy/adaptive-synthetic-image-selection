@@ -12,7 +12,11 @@ from scripts.utils.manifest import read_json
 
 def load_candidate_pool(cfg):
     stage2_cfg = load_named_config("stage2_generation.yaml", "stage2")
-    expected = asism_score_provenance(cfg, stage2_cfg, str(cfg.split_namespace))
+    # Hash the Stage 3 config exactly as 01_compute_signals.py and 02_gonogo.py recorded it: freshly
+    # loaded, before callers rewrite cfg.paths to namespaced locations. Hashing the caller's
+    # rewritten cfg made every learned stage (04-09) reject valid score artifacts.
+    pristine = load_named_config("stage3_asism.yaml", "stage3")
+    expected = asism_score_provenance(pristine, stage2_cfg, str(cfg.split_namespace))
     gonogo = read_json(Path(cfg.paths.gonogo_report))
     surviving = list(gonogo["surviving_signals"])
     if not surviving:

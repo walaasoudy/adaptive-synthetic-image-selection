@@ -21,7 +21,9 @@ from scripts.asism.learned import (  # noqa: E402
     build_policy_selected_manifest, choose_full_policy, enforce_per_class_selection_floor,
     freematch_style_percentile_per_class, read_jsonl,
 )
-from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
+from scripts.utils.artifact_contracts import (  # noqa: E402
+    current_code_identity_hash, namespace_identity, require_generation_complete, stage3_paths,
+)
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
 from scripts.utils.manifest import read_json, sha256_file, write_frozen_json  # noqa: E402
@@ -44,6 +46,7 @@ def main() -> int:
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths:
             cfg.paths[key] = str(value)
+    cfg.split_namespace = namespace
 
     required = [
         Path(cfg.paths.full_policy_verification_plan),
@@ -68,6 +71,10 @@ def main() -> int:
     verifier = _load_neighbor("08b_verify_full_policy_proxy.py", "full_policy_verifier_08b")
     context_builder.preflight_check_phase1_outputs(cfg)
     merged, intended, _ = context_builder.load_candidate_pool(cfg)
+    # Provenance recorded in the frozen selection manifest below; Stage 4 checks these before it
+    # trains on the selection. Resolved before anything is written, so a mismatch leaves no output.
+    identity = namespace_identity(namespace)
+    _, generation = require_generation_complete(load_named_config("stage2_generation.yaml", "stage2"), namespace)
     columns = list(read_json(Path(cfg.paths.learned_dir) / "learned_training_manifest.json")["feature_columns"])
     _, ranker, training_manifest = context_builder.load_frozen_models(cfg, columns)
     normalized = context_builder.apply_feature_frame(merged, columns, training_manifest["normalization"])
@@ -136,6 +143,10 @@ def main() -> int:
         "method": "class_aware_adaptive_threshold_v2",
         "frozen": True,
         "split_namespace": namespace,
+        "namespace_class": identity["namespace_class"],
+        "split_manifest_hash": identity["split_manifest_hash"],
+        "generation_manifest_sha256": generation["generation_manifest_sha256"],
+        "code_identity_sha256": current_code_identity_hash(),
         "winning_policy": winner,
         "policy_decision": decision,
         "thresholds": thresholds,

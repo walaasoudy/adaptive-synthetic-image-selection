@@ -262,6 +262,7 @@ def main() -> int:
     namespace = args.namespace or str(cfg.split_namespace)
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths: cfg.paths[key] = str(value)
+    cfg.split_namespace = namespace
     # BUG FIXED 2026-08-21: torch's global RNG was never seeded, so SetUtilityNetwork's and
     # MultiSignalUtilityRankingNetwork's weight initialization (and dropout) differed every run —
     # confirmed to occasionally collapse the ranker enough that 06_learn_thresholds_select.py

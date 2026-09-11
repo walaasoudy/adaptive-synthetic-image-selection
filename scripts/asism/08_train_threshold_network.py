@@ -183,6 +183,7 @@ def main() -> int:
     namespace = args.namespace or str(cfg.split_namespace)
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths: cfg.paths[key] = str(value)
+    cfg.split_namespace = namespace
     # BUG FIXED 2026-08-21: this script never seeded torch's global RNG at all — see the identical
     # fix and its rationale in 05_train_learned_asism.py.
     set_seed(int(cfg.learned_asism.subset_design.seed))

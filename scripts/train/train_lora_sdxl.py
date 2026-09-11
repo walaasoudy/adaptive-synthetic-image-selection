@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import sys
@@ -503,6 +504,12 @@ def main() -> int:
 
     train_latent_cache, train_prompt_cache, train_records = build_or_load_cache(cfg, models, "gen_train", accelerator.device, args.max_samples_per_split)
     val_latent_cache, val_prompt_cache, val_records = build_or_load_cache(cfg, models, "gen_val", accelerator.device, args.max_samples_per_split)
+    # Training reads only the caches from here on; validation and the final export use the UNet
+    # alone. Drop the VAE and both text encoders (~2 GB of host RAM) for the rest of the run.
+    for frozen_only in ("vae", "text_encoder_one", "text_encoder_two"):
+        models.pop(frozen_only, None)
+    gc.collect()
+    torch.cuda.empty_cache()
 
     train_dataset = CachedSDXLDataset(train_latent_cache, train_prompt_cache, train_records, cfg.data.resolution)
     val_dataset = CachedSDXLDataset(val_latent_cache, val_prompt_cache, val_records, cfg.data.resolution)

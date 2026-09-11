@@ -398,7 +398,7 @@ def main() -> int:
     context_path = output_dir / "final_eval_registration.json"
     registration = {
         "final_eval_run_id": run_id, "namespace": namespace, "split_manifest_hash": evidence["split_manifest_hash"],
-        "asism_manifest_hash": evidence["asism_manifest_hash"], "protocol_manifest_hash": evidence["protocol_manifest_hash"],
+        "asism_manifest_hash": evidence["learned_asism_manifest_hash"], "protocol_manifest_hash": evidence["protocol_manifest_hash"],
         "checkpoint_hashes": evidence["checkpoint_hashes"], "threshold_policy_hash": threshold_hash,
         "code_git_version": get_git_commit_hash(), "code_identity_sha256": current_code_identity_hash(),
         "registered_at_utc": datetime.now(timezone.utc).isoformat(), "status": "registered",

@@ -102,10 +102,11 @@ def main() -> int:
     require(final_lora / "metadata.json", "Stage 1 final LoRA metadata")
     env["SMOKE_LORA_DIR"] = str(final_lora)
 
-    # 40 recipes (not 4): the learned-ASISM feasibility gate below needs real candidates across all
-    # 11 PRIMARY_ENDPOINT_LABELS, not just enough for a pilot review. Pilot review itself still only
+    # Up to 400 recipes (the smoke quota yields ~270): the learned-ASISM feasibility gate below needs
+    # several candidates per label in BOTH the train and the 20% val image pools; 40 left most labels
+    # with 0-1 val candidates (measured on the A10 GPU smoke). Pilot review itself still only
     # samples stage2.pilot.num_images (4) regardless of this limit.
-    run([py, "scripts/generate/01_sample_label_recipes.py", "--namespace", NAMESPACE, "--limit", "40"], env)
+    run([py, "scripts/generate/01_sample_label_recipes.py", "--namespace", NAMESPACE, "--limit", "400"], env)
     synthetic = workspace / "data/chexpert/synthetic" / NAMESPACE
     require(synthetic / "recipes_manifest.json", "Stage 2 recipe manifest")
     run([py, "scripts/generate/02_generate_synthetic_images.py", "--mode", "pilot", "--namespace", NAMESPACE], env)
@@ -179,10 +180,10 @@ def main() -> int:
         [py, "scripts/asism/09_finalize_learned_selection.py", "--namespace", NAMESPACE],
         learned / "adaptive_selected_manifest.jsonl", env,
     )
-    require(learned / "adaptive_selected_manifest.jsonl", "condition F: finalized Learned ASISM selection")
+    require(learned / "adaptive_selected_manifest.jsonl", "condition C: finalized Learned ASISM selection")
 
     run([py, "scripts/classify/01_train_conditions.py", "--condition", "all", "--namespace", NAMESPACE], env)
-    require(workspace / "outputs/stage4" / NAMESPACE / "stage4_training_results.json", "Stage 4 A/B/F results")
+    require(workspace / "outputs/stage4" / NAMESPACE / "stage4_training_results.json", "Stage 4 A/B/C results")
     run([py, "scripts/eval/stage5_evaluate.py", "--final-eval-run-id", "smoke-final-v1", "--namespace", NAMESPACE,
          "--bootstrap-resamples", "20"], env)
     stage5 = workspace / "outputs/stage5" / NAMESPACE / "smoke-final-v1"

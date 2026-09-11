@@ -47,7 +47,9 @@ class TrainingBudget:
     weight_decay: float = 1e-4
     warmup_steps: int = 0
     eval_every_n_steps: int = 200
-    num_workers: int = 0
+    # None = choose automatically (see _loader_settings). Engineering only: workers change which
+    # process decodes images, never which images form a batch or their order.
+    num_workers: int | None = None
     seed: int = 42
 
 
@@ -97,6 +99,47 @@ def require_torch():
     import torch
 
     return torch
+
+
+def _loader_settings(device: str, requested: int | None) -> dict:
+    """DataLoader worker/pinning settings for classifier training and inference.
+
+    Decoding a 768px JPEG and resizing it to 320px costs ~10 ms of CPU per image. With
+    num_workers=0 that runs serially inside the training process while the GPU waits, which makes
+    every classifier run CPU-bound. Workers only change which process decodes: the sampler, and so
+    the batch composition and order, stays in the main process, and __getitem__ is deterministic,
+    so the batches are bit-identical to the single-process path.
+
+    Precedence: THESIS_LOADER_WORKERS env (0 restores the original single-process path), then an
+    explicit TrainingBudget.num_workers, then automatic (workers on CUDA, none on CPU so local
+    tests and the CPU smoke keep their original behaviour).
+    """
+    env = os.environ.get("THESIS_LOADER_WORKERS", "").strip()
+    if env:
+        workers = int(env)
+    elif requested is not None:
+        workers = int(requested)
+    elif str(device).startswith("cuda"):
+        workers = min(8, max(1, (os.cpu_count() or 2) - 1))
+    else:
+        workers = 0
+    settings: dict = {"num_workers": workers}
+    if workers > 0:
+        settings.update(pin_memory=str(device).startswith("cuda"), prefetch_factor=4)
+    return settings
+
+
+def _configure_cuda_kernels(device: str) -> None:
+    """Let cuDNN pick the fastest convolution algorithms for the fixed 320x320 input.
+
+    Changes only kernel selection. GPU convolutions are already non-bit-deterministic in this
+    pipeline (cudnn.deterministic is never set), so this adds no new source of variation beyond
+    floating-point rounding. THESIS_CUDNN_BENCHMARK=0 disables it.
+    """
+    import torch
+
+    if str(device).startswith("cuda") and os.environ.get("THESIS_CUDNN_BENCHMARK", "1") != "0":
+        torch.backends.cudnn.benchmark = True
 
 
 class CXRRecordDataset:
@@ -244,20 +287,25 @@ def train_classifier(
     from tqdm.auto import tqdm
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    _configure_cuda_kernels(device)
     random.seed(budget.seed)
     torch.manual_seed(budget.seed)
     np.random.seed(budget.seed)
 
     train_dataset = CXRRecordDataset(train_records, resolution=resolution)
     sampler_generator = torch.Generator().manual_seed(budget.seed)
+    loader_settings = _loader_settings(device, budget.num_workers)
     loader = DataLoader(
         train_dataset,
         batch_size=budget.batch_size,
         shuffle=True,
-        num_workers=budget.num_workers,
         drop_last=False,
         generator=sampler_generator,
+        # The training loop re-iterates the loader every epoch; keep workers alive between epochs.
+        persistent_workers=loader_settings["num_workers"] > 0,
+        **loader_settings,
     )
+    non_blocking = bool(loader_settings.get("pin_memory"))
 
     model = build_model(len(CLASSIFIER_TARGET_LABELS), dropout_p, pretrained_source, budget.seed)
     model = model.to(device)
@@ -362,9 +410,9 @@ def train_classifier(
         for batch in loader:
             if step >= budget.max_steps:
                 break
-            images = batch["image"].to(device)
-            targets = batch["target"].to(device)
-            masks = batch["mask"].to(device)
+            images = batch["image"].to(device, non_blocking=non_blocking)
+            targets = batch["target"].to(device, non_blocking=non_blocking)
+            masks = batch["mask"].to(device, non_blocking=non_blocking)
 
             logits = model(images)
             loss = masked_bce_loss(logits, targets, masks)
@@ -439,13 +487,21 @@ def predict_probabilities(
     from torch.utils.data import DataLoader
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    _configure_cuda_kernels(device)
     model = model.to(device)
     model.eval()
 
     dataset = CXRRecordDataset(records, resolution=resolution)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-
+    loader_settings = _loader_settings(device, None)
     n_passes = max(1, mc_dropout_passes)
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False,
+        # MC Dropout iterates the loader once per pass; keep the workers for all passes.
+        persistent_workers=loader_settings["num_workers"] > 0 and n_passes > 1,
+        **loader_settings,
+    )
+    non_blocking = bool(loader_settings.get("pin_memory"))
+
     if mc_dropout_passes > 0:
         activated = enable_mc_dropout(model)
         if activated == 0:
@@ -459,7 +515,7 @@ def predict_probabilities(
         for _ in range(n_passes):
             batch_outputs = []
             for batch in loader:
-                logits = model(batch["image"].to(device))
+                logits = model(batch["image"].to(device, non_blocking=non_blocking))
                 batch_outputs.append(torch.sigmoid(logits).cpu().numpy())
             all_passes.append(np.concatenate(batch_outputs, axis=0))
 

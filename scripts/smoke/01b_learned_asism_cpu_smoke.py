@@ -20,7 +20,7 @@ What this DOES exercise, with the real production code path:
 
 What this does NOT exercise (needs a real, if small, GPU run — the "learned GPU smoke" tier):
   04b's real proxy-classifier training, 07-09's threshold learning and proxy verification, and
-  condition F end to end. utility_results.jsonl here is FABRICATED, not measured.
+  condition C end to end. utility_results.jsonl here is FABRICATED, not measured.
 
 STOP if any assertion fails. This is engineering connectivity evidence only — never a medical or
 generative-quality claim, and never scientific evidence about ASISM's selection quality.
@@ -294,7 +294,7 @@ def main() -> int:
     print("\nCPU LEARNED-ASISM INTEGRATION SMOKE COMPLETE.")
     print("Fixture data and fabricated utility results only — NOT a medical, generative-quality, or")
     print("selection-quality result. Proves 04 -> 05 -> 06 connect and the Go/No-Go feature-removal")
-    print("fix works end to end. 07-09 and condition F still need a GPU smoke pass (see docs/smoke_e2e.md).")
+    print("fix works end to end. 07-09 and condition C still need a GPU smoke pass (see docs/smoke_e2e.md).")
     return 0
 
 

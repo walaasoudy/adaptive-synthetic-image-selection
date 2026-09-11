@@ -110,6 +110,7 @@ def main() -> int:
     namespace = args.namespace or str(cfg.split_namespace)
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths: cfg.paths[key] = str(value)
+    cfg.split_namespace = namespace
     for key, value in stage2_paths(stage2, namespace).items():
         if key in stage2.paths: stage2.paths[key] = str(value)
 
