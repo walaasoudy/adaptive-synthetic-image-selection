@@ -67,6 +67,18 @@ GPU = os.environ.get("STAGE1_GPU", "A10")
 # $/hour, from modal.com/pricing (per-second rates x 3600). Used only for printed estimates.
 GPU_PRICE_PER_HOUR = {"T4": 0.59, "L4": 0.80, "A10": 1.10, "A10G": 1.10, "L40S": 1.95,
                       "A100-40GB": 2.10, "A100-80GB": 2.50, "H100": 3.95}
+CPU_PRICE_CORE_HOUR, MEM_PRICE_GIB_HOUR = 0.0000131 * 3600, 0.00000222 * 3600
+
+# Training is GPU-bound (99% utilization measured on A10) and reads pre-cached latents with no
+# DataLoader workers, so 2 cores are enough. RAM holds both latent and prompt caches: size it from
+# the "trainer loads both caches into RAM" line prepare_data prints (Modal bills max(request, use)).
+TRAIN_CPU = 2.0
+TRAIN_MEMORY_GIB = int(os.environ.get("STAGE1_MEMORY_GIB", "32"))
+
+
+def _hourly(cpu: float, memory_gib: float) -> float:
+    """Full $/hour of a container: GPU + requested CPU + requested memory."""
+    return GPU_PRICE_PER_HOUR.get(GPU, 0) + cpu * CPU_PRICE_CORE_HOUR + memory_gib * MEM_PRICE_GIB_HOUR
 
 # Latent moments are (8, res/8, res/8) fp16; prompt embeddings are (77x2048 + 1280) fp16.
 LATENT_BYTES_768 = 8 * 96 * 96 * 2
@@ -281,7 +293,7 @@ def prepare_data(splits: str = "all") -> None:
 # ------------------------------------------------------------------------------------------------
 
 @app.function(image=image, gpu=GPU, volumes={VOL_MOUNT: volume},
-              cpu=4.0, memory=16384, timeout=2 * 3600)
+              cpu=TRAIN_CPU, memory=16384, timeout=2 * 3600)
 def smoke(samples: int = 64, optimizer: str = "adamw") -> None:
     """Exercises every Stage 1 code path the long run depends on, in isolated directories
     (checkpoints/stage1_smoke, separate small caches), so it can never be resumed into by train().
@@ -320,7 +332,7 @@ def smoke(samples: int = 64, optimizer: str = "adamw") -> None:
     print(f"SMOKE PASSED on {GPU}: trained 10 -> resumed -> 20 -> exported "
           f"{[w.name for w in weights]}")
     print(f"  split_manifest_hash in LoRA metadata: {meta.get('split_manifest_hash')}")
-    print(f"  wall time {minutes:.1f} min  (~${minutes / 60 * GPU_PRICE_PER_HOUR.get(GPU, 0):.2f})")
+    print(f"  wall time {minutes:.1f} min  (~${minutes / 60 * _hourly(TRAIN_CPU, 16):.2f})")
     print("Next:  modal run --detach cloud/modal_stage1.py::train --hours 6")
     print("=" * 78)
 
@@ -332,7 +344,7 @@ def smoke(samples: int = 64, optimizer: str = "adamw") -> None:
 @app.function(image=image, gpu=GPU, volumes={VOL_MOUNT: volume},
               # Training reads pre-cached latents, so CPU load is light; RAM holds both caches.
               # If Modal preempts the container, re-running train() resumes from the last checkpoint.
-              cpu=4.0, memory=32768, timeout=24 * 3600)
+              cpu=TRAIN_CPU, memory=TRAIN_MEMORY_GIB * 1024, timeout=24 * 3600)
 def train(hours: float = 6.0, max_steps: int = 15000, optimizer: str = "adamw") -> None:
     """Continue (or start) the production Stage 1 run.
 
@@ -355,7 +367,7 @@ def train(hours: float = 6.0, max_steps: int = 15000, optimizer: str = "adamw") 
         print(f"Stage 1 already COMPLETE: run {run_id}, step {meta['step']}. Nothing to do.")
         return
 
-    price = GPU_PRICE_PER_HOUR.get(GPU, 0)
+    price = _hourly(TRAIN_CPU, TRAIN_MEMORY_GIB)
     print("=" * 78)
     print(f"STAGE 1  namespace={NAMESPACE}  gpu={GPU}  target={max_steps:,} steps")
     print(f"  resume   : {'run ' + run_id + ' from step ' + str(start_step) if resume else 'fresh start'}")
