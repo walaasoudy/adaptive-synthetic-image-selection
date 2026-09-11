@@ -60,9 +60,12 @@ stage2:
     # Raised from 1: the learned-ASISM GPU smoke (scripts/smoke/run_smoke_pipeline.py, added
     # 2026-08-21) needs real candidates across all 11 PRIMARY_ENDPOINT_LABELS to clear
     # stage3.learned_asism's feasibility gate below, not just a handful of pilot-review images.
-    base_quota: 8
-    min_per_label: 8
-    max_per_label: 8
+    # 8 per label (40 recipes after --limit) left the 20% val image pool with 0-1 candidates for
+    # most labels, so the feasibility gate correctly failed closed. 24 per label (~270 recipes)
+    # gives every label several val-pool candidates; 64 px / 4 steps keeps generation ~2 min.
+    base_quota: 24
+    min_per_label: 24
+    max_per_label: 24
     age_buckets: [40, 60]
   pilot:
     num_images: 4
@@ -149,7 +152,9 @@ stage3:
       verification_quantile_fractions: [0.5]
       min_verified_contexts_per_class: 1
       verification_compute_budget:
-        max_gpu_hours: 0.5
+        # 0.5 h fit the 40-image fixture; the ~360-image fixture yields 132 verification runs
+        # (1.32 h at the 0.01 h/run estimate), so 07b's gate correctly refused. Smoke-only value.
+        max_gpu_hours: 1.5
         hours_per_proxy_run_estimate: 0.01
       full_policy_verification:
         n_variants: 2
