@@ -33,6 +33,7 @@ from scripts.asism.learned import (  # noqa: E402
     apply_feature_frame, bootstrap_class_contexts, diversify_verification_candidates,
     hard_threshold_grid_search, real_class_support_context, split_image_pool,
 )
+from scripts.asism.candidate_pool import load_candidate_pool  # noqa: E402,F401  (used by 07b/08/08b/09 via this module)
 from scripts.asism.models import MultiSignalUtilityRankingNetwork, SetUtilityNetwork  # noqa: E402
 from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
