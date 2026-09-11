@@ -9,19 +9,13 @@
 note) and reflected in `configs/stage3_asism.yaml` and Stage 4 conditions F/G
 (`docs/stages2_to_5_plan.md` §7).
 
-**Naming follow-up (2026-08-21).** The memo below refers to a "Multi-Objective Ranking Network".
-That component is now named **Multi-Signal Utility Ranking Network** (class
-`MultiSignalUtilityRankingNetwork`), because the implemented model has one output head and one
-scalar target — the signals are input features, not objectives. This is consistent with, not a
-change to, the memo's own closing observation that "Pareto ranking is not implemented". Terminology
-only; see `docs/stages2_to_5_plan.md` §4.9 v5 revision note. The memo body below is preserved
-verbatim as a historical record and still uses the old name.
-
-**What this resolves:** the pseudo-replication concern raised below. The ranking network
-is never trained on a subset-level AUROC copied onto every member image; it is distilled from
-`SetUtilityNetwork`'s measured *set-level* utility only (see `learned.py`'s module docstring and
-`resolve_verified_only_targets`, which admits a target only from a proxy-*measured* candidate, never
-a critic guess). `AdaptiveThresholdNetwork` is trained per class only where that class clears
+**What this resolves:** the pseudo-replication concern raised below. `MultiSignalUtilityRankingNetwork`
+(renamed from `MultiObjectiveRankingNetwork` — it fuses the admitted signals into one scalar utility
+target, it is not a multi-task/Pareto model) is never trained on a subset-level AUROC copied onto
+every member image; it is distilled from `SetUtilityNetwork`'s measured *set-level* utility only —
+either the leave-one-out marginal or the optional Data-Banzhaf MSR estimate over the same measured
+subsets (see `learned.py`'s module docstring, `banzhaf_msr_targets`, and `resolve_verified_only_targets`,
+which admits a target only from a proxy-*measured* candidate, never a critic guess). `AdaptiveThresholdNetwork` is trained per class only where that class clears
 `min_verified_contexts_per_class` on both proxy-verified train and image-disjoint held-out evidence
 (`determine_per_class_official_method`); otherwise selection falls back to
 `hard_proxy_best_among_verified` or the fixed-ratio baseline — a class is never handed to the network

@@ -24,34 +24,70 @@ def mlp(dimensions: list[int], dropout: float = 0.0, final_sigmoid: bool = False
 
 
 class SetUtilityNetwork(nn.Module):
-    """Permutation-invariant Deep Sets predictor for measured AUROC delta."""
+    """Permutation-invariant Deep Sets predictor for measured AUROC delta.
 
-    def __init__(self, input_dim: int, image_hidden=(128, 64), utility_hidden=(32,)):
+    Default: masked MEAN pooling of per-image encodings (the frozen pipeline; the ``(n-1)``
+    size-normalization in ``05_train_learned_asism.py::marginal_targets`` is derived from it).
+
+    ``superset_conditioning=True`` (ablation only, Phase-11): the set is summarised by masked mean
+    AND std pooling — both order-invariant — and a fixed summary vector of the full candidate pool
+    is concatenated to the utility-head input. This follows Xie et al., ICLR 2024 ("Enhancing Neural
+    Subset Selection"): a set-utility target that depends on the ground set benefits from a richer
+    permutation-invariant sufficient statistic than the mean alone. NOTE: with std pooling the
+    marginal-target size-normalization is only first-order correct for the mean component, so this
+    flag is evaluated as an ablation, never silently swapped into the frozen path.
+    """
+
+    def __init__(self, input_dim: int, image_hidden=(128, 64), utility_hidden=(32,),
+                 superset_conditioning: bool = False):
         super().__init__()
+        self.superset_conditioning = bool(superset_conditioning)
         self.image_encoder = mlp([input_dim, *image_hidden], dropout=0.2)
-        self.utility_head = mlp([image_hidden[-1], *utility_hidden, 1])
+        pooled_dim = image_hidden[-1] * (2 if self.superset_conditioning else 1)
+        head_input = pooled_dim + (2 * input_dim if self.superset_conditioning else 0)
+        self.utility_head = mlp([head_input, *utility_hidden, 1])
+        if self.superset_conditioning:
+            self.register_buffer("superset_summary", torch.zeros(2 * input_dim))
+
+    def set_superset_summary(self, summary) -> None:
+        if not self.superset_conditioning:
+            raise ValueError("set_superset_summary called but superset_conditioning is False")
+        vector = torch.as_tensor(summary, dtype=self.superset_summary.dtype,
+                                 device=self.superset_summary.device)
+        if vector.shape != self.superset_summary.shape:
+            raise ValueError(
+                f"superset summary must have shape {tuple(self.superset_summary.shape)}, "
+                f"got {tuple(vector.shape)}"
+            )
+        self.superset_summary.copy_(vector)
 
     def encode_set(self, features: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         encoded = self.image_encoder(features)
         weights = mask.unsqueeze(-1).to(encoded.dtype)
-        return (encoded * weights).sum(1) / weights.sum(1).clamp_min(1.0)
+        counts = weights.sum(1).clamp_min(1.0)
+        mean = (encoded * weights).sum(1) / counts
+        if not self.superset_conditioning:
+            return mean
+        variance = (weights * (encoded - mean.unsqueeze(1)) ** 2).sum(1) / counts
+        return torch.cat([mean, variance.clamp_min(0.0).sqrt()], dim=-1)
 
     def forward(self, features: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        return self.utility_head(self.encode_set(features, mask)).squeeze(-1)
+        pooled = self.encode_set(features, mask)
+        if self.superset_conditioning:
+            summary = self.superset_summary.unsqueeze(0).expand(pooled.shape[0], -1)
+            pooled = torch.cat([pooled, summary], dim=-1)
+        return self.utility_head(pooled).squeeze(-1)
 
 
 class MultiSignalUtilityRankingNetwork(nn.Module):
-    """Per-image utility ranker: multi-SIGNAL input, SINGLE-objective output.
+    """Small MLP that fuses the Go/No-Go-admitted ASISM signals (similarity, IQA, uncertainty,
+    explainability, agreement, distinctiveness) into ONE scalar image-utility score.
 
-    Renamed from "MultiObjectiveRankingNetwork" (2026-08-21) because that name was inaccurate and
-    would not survive review. This is ONE output head trained against ONE scalar target (the
-    marginal utility distilled from SetUtilityNetwork); smooth-L1 and pairwise-ranking are two loss
-    TERMS measuring that same target, not two objectives. The `input_dim` signal columns are input
-    FEATURES, not objectives.
-
-    So this is NOT multi-objective optimization in the technical sense: no Pareto front, no
-    non-dominated sorting, no multi-objective gradient balancing (MGDA and similar). Do not rename
-    it back without actually implementing one of those — see docs/stages2_to_5_plan.md §4.9.
+    Deliberately NOT a multi-objective model: there is a single regression/ranking target (the
+    distilled marginal set-utility from SetUtilityNetwork), optimized by both a Smooth-L1 term and a
+    pairwise ranking term. MMoE / SDMGrad / NHDE are cited in the literature review only to make that
+    contrast explicit — none of their multi-task/Pareto machinery is used here. With the default
+    config the architecture is 6 -> 128 -> 64 -> 32 -> 1.
     """
 
     def __init__(self, input_dim: int, hidden=(128, 64, 32), dropout=0.2):

@@ -59,8 +59,11 @@ def load_frozen_models(cfg, columns: list[str]):
     training_manifest = read_json(learned_dir / "learned_training_manifest.json")
 
     set_cfg = cfg.learned_asism.set_utility_network
-    critic = SetUtilityNetwork(len(columns), tuple(set_cfg.image_hidden_dims), tuple(set_cfg.utility_hidden_dims))
     critic_checkpoint = torch.load(learned_dir / "set_utility_model.pt", map_location="cpu", weights_only=True)
+    critic = SetUtilityNetwork(
+        len(columns), tuple(set_cfg.image_hidden_dims), tuple(set_cfg.utility_hidden_dims),
+        superset_conditioning=bool(critic_checkpoint.get("superset_conditioning", False)),
+    )
     critic.load_state_dict(critic_checkpoint["state_dict"])
     critic.eval()
     for parameter in critic.parameters():

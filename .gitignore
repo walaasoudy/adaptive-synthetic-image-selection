@@ -40,3 +40,6 @@ Thumbs.db
 
 # Stray browser downloads landing in the project root
 *.crdownload
+
+# dev-subset pipeline resume markers
+.pipeline_state/
