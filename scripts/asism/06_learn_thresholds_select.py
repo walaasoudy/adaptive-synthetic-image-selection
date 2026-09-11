@@ -54,6 +54,7 @@ def main() -> int:
     namespace = args.namespace or str(cfg.split_namespace)
     for key, value in stage3_paths(cfg, namespace).items():
         if key in cfg.paths: cfg.paths[key] = str(value)
+    cfg.split_namespace = namespace
     # BUG FIXED 2026-08-21: this script never seeded torch's global RNG — AdaptiveThresholdNetwork's
     # init was non-deterministic across runs. Confirmed to occasionally produce thresholds so high
     # that ZERO images clear them (see the guard added below). Same fix as 05/08_train_*.py.

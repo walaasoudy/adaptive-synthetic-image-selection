@@ -471,12 +471,15 @@ def main() -> int:
 
     identity = namespace_identity(namespace)
     _, generation_completion = require_generation_complete(stage2_cfg, namespace)
-    require_manifest_fields(Path(stage3_cfg.paths.frozen_manifest), {
+    # The frozen Stage 3 selection is 09's Learned-ASISM manifest (the sole selector; Stage 5 checks
+    # the same file). The weighted selector's asism_frozen_manifest.json (03) is not produced by the
+    # pipeline, so gating on it made Stage 4 unrunnable.
+    require_manifest_fields(Path(stage3_cfg.paths.adaptive_selection_manifest), {
         "split_namespace": namespace, "namespace_class": identity["namespace_class"],
         "split_manifest_hash": identity["split_manifest_hash"],
         "generation_manifest_sha256": generation_completion["generation_manifest_sha256"],
         "code_identity_sha256": current_code_identity_hash(), "frozen": True,
-    }, "frozen ASISM")
+    }, "frozen Learned ASISM selection")
 
     results_dir = Path(stage4_cfg.paths.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
