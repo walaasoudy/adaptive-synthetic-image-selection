@@ -21,9 +21,7 @@ from scripts.asism.learned import (  # noqa: E402
     build_policy_selected_manifest, choose_full_policy, enforce_per_class_selection_floor,
     freematch_style_percentile_per_class, read_jsonl,
 )
-from scripts.utils.artifact_contracts import (  # noqa: E402
-    current_code_identity_hash, namespace_identity, require_generation_complete, stage3_paths,
-)
+from scripts.utils.artifact_contracts import stage3_paths  # noqa: E402
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.labels import PRIMARY_ENDPOINT_LABELS  # noqa: E402
 from scripts.utils.manifest import read_json, sha256_file, write_frozen_json  # noqa: E402

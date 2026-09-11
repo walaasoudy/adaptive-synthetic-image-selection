@@ -232,8 +232,9 @@ learned_asism:
     pairwise_ranking_weight: 0.5
     early_stopping_patience: 12
   ranking_network:
-    # MultiSignalUtilityRankingNetwork (models.py): 6 admitted signals -> 128 -> 64 -> 32 -> 1
-    # scalar utility. One target, two loss terms (Smooth-L1 + pairwise ranking). NOT multi-objective.
+    # MultiSignalUtilityRankingNetwork (models.py): admitted signal feature columns
+    # (9 with the default feature_columns below) -> 128 -> 64 -> 32 -> 1 scalar utility.
+    # One target, two loss terms (Smooth-L1 + pairwise ranking). NOT multi-objective.
     hidden_dims: [128, 64, 32]
     dropout: 0.20
     epochs: 100

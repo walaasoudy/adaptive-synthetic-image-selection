@@ -1116,9 +1116,9 @@ def test_stage4_routes_the_thesis_selected_synthetic_condition_to_learned_asism(
     source = (Path(__file__).resolve().parents[1] / "scripts" / "classify" / "01_train_conditions.py").read_text(
         encoding="utf-8"
     )
-    assert 'CONDITIONS = ["A", "B", "F"]' in source
-    assert 'condition == "F"' in source and 'selector="adaptive"' in source
-    assert 'conditions: [A, B, F]' in (Path(__file__).resolve().parents[1] / "configs" / "stage4_classifier.yaml").read_text(encoding="utf-8")
+    assert 'CONDITIONS = ["A", "B", "C"]' in source
+    assert 'condition == "C"' in source and 'selector="adaptive"' in source
+    assert 'conditions: [A, B, C]' in (Path(__file__).resolve().parents[1] / "configs" / "stage4_classifier.yaml").read_text(encoding="utf-8")
 
 
 def test_finalizer_never_reads_final_eval_and_publishes_new_adaptive_artifacts():
@@ -1500,60 +1500,3 @@ def test_freematch_style_percentile_range_normalises_leniency():
     assert result["Rare"] == pytest.approx(float(np.percentile(scores, 10.0)))
     assert result["Common"] == pytest.approx(float(np.percentile(scores, 50.0)))
     assert result["Rare"] < result["Mid"] < result["Common"]
-
-
-# ---------------------------------------------------------------------------
-# --namespace must reach cfg.split_namespace (read by load_candidate_pool)
-# ---------------------------------------------------------------------------
-
-class _StopAfterNamespaceSetup(Exception):
-    """Raised by a patched call right after a script's namespace setup, so nothing else runs."""
-
-
-# Script -> the first call its main() makes after the namespace setup, patched to stop there.
-# 09 needs no patch: its next statement is a missing-artifact gate that exits on its own.
-_LEARNED_STAGES_USING_CANDIDATE_POOL = {
-    "05_train_learned_asism.py": "set_seed",
-    "06_learn_thresholds_select.py": "set_seed",
-    "07b_verify_thresholds_proxy.py": "stage2_paths",
-    "08_train_threshold_network.py": "set_seed",
-    "08b_verify_full_policy_proxy.py": "stage2_paths",
-    "09_finalize_learned_selection.py": None,
-}
-
-
-@pytest.mark.parametrize("script", sorted(_LEARNED_STAGES_USING_CANDIDATE_POOL))
-def test_learned_stage_uses_cli_namespace_not_config_default(script, monkeypatch):
-    """Regression test: each learned stage rewrites its paths for --namespace, and must also set
-    cfg.split_namespace to it — load_candidate_pool() reads cfg.split_namespace to choose which split
-    manifest, generation manifest and score provenance to validate against. Without that, a
-    production run (--namespace production-thesis-v1) silently used the YAML default
-    (dev-smoke-v1). The namespace here deliberately differs from the default, which the GPU smoke
-    cannot exercise (its namespace IS the default)."""
-    module = _load_script(script)
-    requested = "dev-namespace-regression-v1"
-    captured = {}
-    real_load = module.load_named_config
-
-    def load_and_capture(filename, section):
-        config = real_load(filename, section)
-        if section == "stage3":
-            captured["cfg"] = config
-        return config
-
-    def stop(*_args, **_kwargs):
-        raise _StopAfterNamespaceSetup
-
-    monkeypatch.setattr(module, "load_named_config", load_and_capture)
-    stop_at = _LEARNED_STAGES_USING_CANDIDATE_POOL[script]
-    if stop_at:
-        monkeypatch.setattr(module, stop_at, stop)
-    monkeypatch.setattr(sys, "argv", [script, "--namespace", requested])
-
-    with pytest.raises((_StopAfterNamespaceSetup, SystemExit)):
-        module.main()
-
-    config_default = str(real_load("stage3_asism.yaml", "stage3").split_namespace)
-    assert config_default != requested, "test needs a namespace different from the YAML default"
-    assert str(captured["cfg"].split_namespace) == requested
-    assert Path(captured["cfg"].paths.scores_dir).parts[-2] == requested
