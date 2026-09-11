@@ -31,8 +31,19 @@ which synthetic images are good enough to keep:
 - Image Quality Assessment (IQA)
 - Uncertainty Estimation (Monte Carlo Dropout or Deep Ensembles)
 - Grad-CAM / Score-CAM Explainability Verification
-- Multi-Objective Ranking Network (Novel)
+- Multi-Signal Utility Ranking Network (Novel)
 - Adaptive Threshold Learning (Novel)
+
+**Naming revision (2026-08-21) — terminology only, no method change.** The fifth component was
+originally listed as "Multi-Objective Ranking Network". It was renamed after code review found the
+original name technically incorrect for what is implemented: the network has **one output head**
+trained against **one scalar target** (marginal utility distilled from the set-utility model), and
+the quality signals are input *features*, not objectives. There is no Pareto front and no
+multi-objective optimizer, so a reviewer in optimization would flag the original name on first read
+of the source. The method, architecture, and training procedure are unchanged — only the name.
+Genuine multi-objective variants (Pareto non-dominated selection, or a multi-head network with MGDA
+gradient balancing) are recorded as future options in `docs/stages2_to_5_plan.md` §4.9, not
+implemented.
 
 ### Stage 4 — Classifier Training
 - Train the classifier using only the synthetic images selected by ASISM

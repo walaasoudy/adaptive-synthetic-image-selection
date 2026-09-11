@@ -52,9 +52,12 @@ stage2:
     seed: 20260807
   recipes:
     min_support_patients: 1
-    base_quota: 1
-    min_per_label: 1
-    max_per_label: 1
+    # Raised from 1: the learned-ASISM GPU smoke (scripts/smoke/run_smoke_pipeline.py, added
+    # 2026-08-21) needs real candidates across all 11 PRIMARY_ENDPOINT_LABELS to clear
+    # stage3.learned_asism's feasibility gate below, not just a handful of pilot-review images.
+    base_quota: 8
+    min_per_label: 8
+    max_per_label: 8
     age_buckets: [40, 60]
   pilot:
     num_images: 4
@@ -102,10 +105,60 @@ stage3:
     target_synthetic_to_real_ratio: 0.25
     min_accepted_per_label: 0
     max_accepted_per_label: 4
+  # Shared by TWO smoke tiers with very different pool sizes — values are picked to be the smallest
+  # safe for the GPU tier's small REAL pool, which is also automatically safe for the CPU tier's
+  # larger FABRICATED pool (a lower threshold is satisfied by a bigger pool a fortiori):
+  #   - scripts/smoke/01b_learned_asism_cpu_smoke.py: ~900 fabricated candidates, CPU-only, verified
+  #     passing at these thresholds (2026-08-21).
+  #   - scripts/smoke/run_smoke_pipeline.py (GPU phase, added 2026-08-21): real SDXL-generated
+  #     candidates from stage2.recipes above (target ~150-300 images across 11 labels).
+  #     UNVERIFIED BY EXECUTION — no GPU was available to run this locally. If `04 --phase
+  #     feasibility` fails on the real pool, these are the first numbers to lower further; it needs
+  #     no GPU and does not repeat Stage 1/2/aux/signals.
+  learned_asism:
+    subset_design:
+      subset_sizes: [3, 4, 5]
+      total_subsets: 24
+      quantile_bins: 2  # build_controlled_subsets() hard-requires >= 2 (learned.py)
+      minimum_image_exposures: 2
+      feasibility_thresholds:
+        min_candidates_per_class: 2
+        min_candidates_per_quantile_band: 2
+        min_val_subsets: 4
+    set_utility_network:
+      epochs: 3
+      batch_size: 4
+      early_stopping_patience: 3
+    ranking_network:
+      epochs: 3
+      batch_size: 4
+    threshold_network:
+      epochs: 3
+      # Production defaults (25 contexts/class x 11 classes, up to 5 verified candidates/context,
+      # 5 full-policy variants x 3 seeds) imply hundreds of real tiny proxy-classifier training
+      # runs — fine for a real budgeted production pass, not for a smoke test. Cut to the minimum
+      # that still exercises the adaptive_threshold_network code path at least once, not just its
+      # fallbacks.
+      n_bootstrap_contexts_per_class: 2
+      top_k_per_context: 1
+      verification_quantile_fractions: [0.5]
+      min_verified_contexts_per_class: 1
+      verification_compute_budget:
+        max_gpu_hours: 0.5
+        hours_per_proxy_run_estimate: 0.01
+      full_policy_verification:
+        n_variants: 2
+        n_seeds: 1
+        compute_budget:
+          max_gpu_hours: 0.5
+          hours_per_proxy_run_estimate: 0.01
+    compute_budget:
+      max_gpu_hours: 1.0
+      hours_per_proxy_run_estimate: 0.01
 
 stage4:
   split_namespace: dev-smoke-v1
-  conditions: [A, B]
+  conditions: [A, B, F]  # F added 2026-08-21 once the learned-ASISM GPU smoke feeds it
   model:
     pretrained_source: random
     resolution: 64

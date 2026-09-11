@@ -34,6 +34,22 @@ def run(command: list[str], env: dict[str, str]) -> None:
     subprocess.run(command, cwd=REPO, env=env, check=True)
 
 
+def run_if_missing(command: list[str], output_path: Path, env: dict[str, str]) -> None:
+    """Skip a step whose output already exists, rather than reruning it into a FileExistsError.
+
+    Several learned-ASISM scripts (04 build, 06, 09) write their single output file with mode "x"
+    (exclusive create) — a deliberate guard against silently overwriting a real result. That is
+    correct for a hand-invoked production run, but an ORCHESTRATOR that may be resumed after a
+    partial failure must check first, exactly like this file already does for Stage 1's LoRA
+    checkpoint above. Without this, resuming this pipeline after any later step fails throws away
+    all of this step's (possibly expensive) work for no reason.
+    """
+    if output_path.exists():
+        print(f"  skip (already exists): {subprocess.list2cmdline(command)}", flush=True)
+        return
+    run(command, env)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=["local", "runpod", "all"], default="all")
@@ -86,7 +102,10 @@ def main() -> int:
     require(final_lora / "metadata.json", "Stage 1 final LoRA metadata")
     env["SMOKE_LORA_DIR"] = str(final_lora)
 
-    run([py, "scripts/generate/01_sample_label_recipes.py", "--namespace", NAMESPACE, "--limit", "4"], env)
+    # 40 recipes (not 4): the learned-ASISM feasibility gate below needs real candidates across all
+    # 11 PRIMARY_ENDPOINT_LABELS, not just enough for a pilot review. Pilot review itself still only
+    # samples stage2.pilot.num_images (4) regardless of this limit.
+    run([py, "scripts/generate/01_sample_label_recipes.py", "--namespace", NAMESPACE, "--limit", "40"], env)
     synthetic = workspace / "data/chexpert/synthetic" / NAMESPACE
     require(synthetic / "recipes_manifest.json", "Stage 2 recipe manifest")
     run([py, "scripts/generate/02_generate_synthetic_images.py", "--mode", "pilot", "--namespace", NAMESPACE], env)
@@ -106,8 +125,64 @@ def main() -> int:
         require(synthetic / "scores" / f"{signal}_scores.provenance.json", f"{signal} provenance")
     run([py, "scripts/asism/02_gonogo.py", "--namespace", NAMESPACE], env)
     require(synthetic / "asism/gonogo_report.json", "Go/No-Go report")
+
+    # Learned ASISM (docs/stages2_to_5_plan.md §4.9) on the REAL signals just computed above — the
+    # thesis's novel contribution, and the ONE part of this file never previously exercised
+    # end-to-end (the CPU-only tier in 01b_learned_asism_cpu_smoke.py covers 04->05->06 on a
+    # FABRICATED pool; this covers the full 04-09 chain, including real (tiny) proxy verification,
+    # on REAL generated images). UNVERIFIED BY EXECUTION as of 2026-08-21 — no GPU was available to
+    # run this locally. If `--phase feasibility` below fails, that is expected on a first attempt:
+    # fix subset_design/feasibility_thresholds in configs/smoke_e2e.yaml (stage3.learned_asism) and
+    # rerun feasibility ONLY — it needs no GPU and does not repeat Stage 1/2/aux/signals.
+    learned = synthetic / "asism/learned"
+    run([py, "scripts/asism/04_build_utility_subsets.py", "--phase", "feasibility", "--namespace", NAMESPACE], env)
+    require(learned / "subset_design_report.json", "subset design feasibility report")
+    run_if_missing(
+        [py, "scripts/asism/04_build_utility_subsets.py", "--phase", "build", "--namespace", NAMESPACE],
+        learned / "utility_subsets.jsonl", env,
+    )
+    require(learned / "utility_subsets.jsonl", "utility subsets")
+    run([py, "scripts/asism/04b_evaluate_utility_subsets.py", "--phase", "estimate", "--namespace", NAMESPACE], env)
+    run_if_missing(
+        [py, "scripts/asism/04b_evaluate_utility_subsets.py", "--phase", "run", "--namespace", NAMESPACE],
+        learned / "utility_results.jsonl", env,
+    )
+    require(learned / "utility_results.jsonl", "measured utility results")
+    run([py, "scripts/asism/05_train_learned_asism.py", "--namespace", NAMESPACE], env)
+    require(learned / "learned_training_manifest.json", "learned training manifest")
+    require(learned / "ranking_model.pt", "ranking model checkpoint")
+    run_if_missing(
+        [py, "scripts/asism/06_learn_thresholds_select.py", "--namespace", NAMESPACE],
+        learned / "selected_manifest.jsonl", env,
+    )
+    require(learned / "selected_manifest.jsonl", "fixed-ratio learned selection (condition-G ablation reference)")
+
+    run([py, "scripts/asism/07_build_threshold_contexts.py", "--namespace", NAMESPACE], env)
+    require(learned / "threshold_contexts.jsonl", "threshold contexts")
+    run([py, "scripts/asism/07b_verify_thresholds_proxy.py", "--phase", "estimate", "--namespace", NAMESPACE], env)
+    run_if_missing(
+        [py, "scripts/asism/07b_verify_thresholds_proxy.py", "--phase", "run",
+         "--i-understand-this-trains-real-models", "--namespace", NAMESPACE],
+        learned / "threshold_proxy_measurements.jsonl", env,
+    )
+    require(learned / "threshold_proxy_measurements.jsonl", "threshold proxy measurements")
+    run([py, "scripts/asism/08_train_threshold_network.py", "--namespace", NAMESPACE], env)
+    require(learned / "adaptive_threshold_manifest.json", "adaptive threshold manifest")
+    run([py, "scripts/asism/08b_verify_full_policy_proxy.py", "--phase", "estimate", "--namespace", NAMESPACE], env)
+    run_if_missing(
+        [py, "scripts/asism/08b_verify_full_policy_proxy.py", "--phase", "run",
+         "--i-understand-this-trains-real-models", "--namespace", NAMESPACE],
+        learned / "full_policy_verification_results.jsonl", env,
+    )
+    require(learned / "full_policy_verification_results.jsonl", "full-policy verification results")
+    run_if_missing(
+        [py, "scripts/asism/09_finalize_learned_selection.py", "--namespace", NAMESPACE],
+        learned / "adaptive_selected_manifest.jsonl", env,
+    )
+    require(learned / "adaptive_selected_manifest.jsonl", "condition F: finalized Learned ASISM selection")
+
     run([py, "scripts/classify/01_train_conditions.py", "--condition", "all", "--namespace", NAMESPACE], env)
-    require(workspace / "outputs/stage4" / NAMESPACE / "stage4_training_results.json", "Stage 4 A/B results")
+    require(workspace / "outputs/stage4" / NAMESPACE / "stage4_training_results.json", "Stage 4 A/B/F results")
     run([py, "scripts/eval/stage5_evaluate.py", "--final-eval-run-id", "smoke-final-v1", "--namespace", NAMESPACE,
          "--bootstrap-resamples", "20"], env)
     stage5 = workspace / "outputs/stage5" / NAMESPACE / "smoke-final-v1"

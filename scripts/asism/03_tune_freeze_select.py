@@ -19,7 +19,7 @@ Three phases, each independently invocable:
 
 NOT PART OF THE THESIS PIPELINE (docs/stages2_to_5_plan.md §4.9 / §7 v3 revision notes). This is the
 weighted-score selector, which predates the learned ASISM components. The thesis defines ASISM as the
-full module including the Multi-Objective Ranking Network and Adaptive Threshold Learning, so there
+full module including the Multi-Signal Utility Ranking Network and Adaptive Threshold Learning, so there
 is no weighted-baseline Stage 4 condition and nothing consumes this script's selected_manifest.jsonl.
 Retained for reference and for the Stage 3 signal-merge helpers other code still imports.
 

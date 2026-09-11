@@ -1,23 +1,3 @@
-#!/usr/bin/env python3
-"""Download CheXpert-v1.0-small via kagglehub and make it available at data/chexpert/raw/
-(docs/stage1_plan.md §6 — this is the acquisition step feeding 01_verify_download.py).
-
-- Downloads with `kagglehub.dataset_download("ashery/chexpert")` (kagglehub caches the extracted
-  dataset outside the repo, typically under ~/.cache/kagglehub/).
-- Locates the actual data root inside the download (the Kaggle archive may nest the CSVs/images
-  under a "CheXpert-v1.0-small/" subfolder) and symlinks (falling back to copying, e.g. on Windows
-  without Developer Mode / admin rights) each top-level entry into data/chexpert/raw/, so every
-  other script in the pipeline can keep reading from that fixed path with no manual edits.
-- Updates configs/dataset_config.yaml's `source.kaggle_dataset_slug` if it doesn't already match
-  the slug used here.
-- Always finishes by running scripts/data/01_verify_download.py and propagates its exit code.
-- Idempotent: if data/chexpert/raw/ already has train.csv + valid.csv and they pass verification,
-  the download is skipped entirely. Use --force to re-download and re-link anyway.
-
-Usage:
-    python scripts/data/00_download_dataset.py [--force] [--copy] [--sample-images N]
-"""
-
 from __future__ import annotations
 
 import argparse

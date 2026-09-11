@@ -1,31 +1,3 @@
-#!/usr/bin/env python3
-"""Build the six-way patient-level split (docs/stages2_to_5_plan.md §1) — FROZEN v1 policy.
-
-Supersedes scripts/data/02_build_patient_splits.py's three-way split (which derived
-asism_tuning_heldout/final_eval_heldout as children of classifier_heldout and left no population
-for a classifier development split). That script and its artifacts are retained for provenance and
-are never read by Stage 2-5 code.
-
-Six DIRECT top-level partitions from one deterministic patient list and one recorded seed:
-    gen_train 0.60 | gen_val 0.10 | classifier_train 0.15
-    classifier_val 0.05 | asism_tuning_heldout 0.05 | final_eval_heldout 0.05
-
-Namespaced (§1.4) so a dev-subset split can never overwrite a production split:
-    production - requires the full-cohort integrity contract; these are the thesis splits.
-    dev        - same policy on the development subset, for pipeline smoke testing; rare-label
-                 support insufficiency is recorded in the manifest rather than being fatal.
-
-final_eval_heldout IS accessed here (§1.6) — for deterministic assignment, disjointness assertions,
-the support check, and hashing. Every such access goes through
-scripts/utils/splits.assert_final_eval_access_allowed() with a non-outcome purpose, so the
-distinction between construction-time access and outcome-bearing access is enforced in code, not
-just documented.
-
-Usage:
-    python scripts/data/02b_build_sixway_splits.py --namespace dev
-    python scripts/data/02b_build_sixway_splits.py --namespace production [--freeze]
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -571,8 +543,8 @@ def main() -> int:
                 print(f"\n    {adjustment['note']}", flush=True)
             print("\nNo split run was published because the frozen support gate failed.", flush=True)
             print(
-                "\nThe frozen 60/10/15/5/5/5 policy was NOT modified. Changing it is an explicit "
-                "decision (docs/stages2_to_5_plan.md §1.3).",
+                f"\nThe frozen split fractions {fractions} were NOT modified. Changing them is an "
+                "explicit decision (docs/stages2_to_5_plan.md §1.3).",
                 flush=True,
             )
             return 2

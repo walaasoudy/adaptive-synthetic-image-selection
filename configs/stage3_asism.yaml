@@ -68,6 +68,23 @@ signals:
     near_duplicate_similarity: 0.95
     near_duplicate_spread: 0.02
 
+  distinctiveness:
+    # WITHIN-SYNTHETIC redundancy, reported as distinctiveness (higher = more unique = better, the
+    # same direction as every other admitted signal). Distinct from similarity's novelty score,
+    # which measures closeness to REAL images; this measures closeness to OTHER SYNTHETIC images.
+    # Neighbours are drawn ONLY from images sharing the exact intended_label_vector: comparing
+    # across classes would turn the score into a proxy for the Stage 2 per-class quota (a common
+    # class looks redundant, a rare one looks distinct) and would then feed the class-aware
+    # threshold that is itself correcting class imbalance.
+    k_neighbors: 10
+    # Pairs at or above this cosine similarity are treated as near-identical. Used both for the
+    # duplicate COUNT reported per image and for the pre-scoring deduplication clusters, because a
+    # per-image threshold provably cannot choose one representative out of a duplicate cluster.
+    duplicate_similarity: 0.95
+    # Deduplication keeps one representative per cluster BEFORE signals are scored. Disabled by
+    # default: enabling it changes the candidate pool itself, so it must be an explicit decision.
+    deduplicate_before_scoring: false
+
   iqa:
     # Generic NR-IQA is a BASELINE component; the domain checks below carry the signal (§4.2).
     blank_std_threshold: 5.0

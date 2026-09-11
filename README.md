@@ -12,8 +12,8 @@ artifacts validate engineering connectivity only.
 Stage 5 compares three conditions on `final_eval_heldout` (`configs/stage4_classifier.yaml` →
 `conditions: [A, B, C]`): **A** real only, **B** real + all synthetic, **C** real + ASISM-
 selected synthetic. There is no separate weighted-baseline selector or condition — ASISM is the full
-module (`docs/stages2_to_5_plan.md` §4.9), including the Multi-Objective Ranking Network and
-Adaptive Threshold Learning below. Primary comparison: **C vs. B**. See
+module (`docs/stages2_to_5_plan.md` §4.9), including the Multi-Signal Utility Ranking Network and
+Adaptive Threshold Learning below. Primary comparison: **F vs. B**. See
 `docs/stages2_to_5_plan.md` §7.1 for a known limitation of that comparison (no matched-random
 control) still pending a supervisor decision.
 
