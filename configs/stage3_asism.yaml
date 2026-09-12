@@ -139,8 +139,19 @@ gonogo:
   reproducibility_tolerance: 1.0e-6
 
 tuning:
-  # Two-stage bounded search (§4.7). Proxy trains on classifier_train + candidate synthetic subset,
-  # evaluates on asism_tuning_heldout ONLY. classifier_val is NOT used to rank candidates.
+  # Two-stage bounded search (§4.7) for the SUPERSEDED weighted-score selector
+  # (03_tune_freeze_select.py, not a pipeline step). Proxy trains on classifier_train +
+  # candidate synthetic subset, evaluates on asism_tuning_heldout ONLY. classifier_val is NOT
+  # used to rank candidates.
+  #
+  # DO NOT DELETE THIS BLOCK. Two sub-keys are load-bearing for the LEARNED pipeline, which
+  # reads its proxy-classifier settings from here rather than from learned_asism:
+  #   tuning.proxy.*                 -> 04b, 07b, 08b (batch_size, learning_rate, resolution,
+  #                                     dropout_p, pretrained_source)
+  #   tuning.coarse.proxy_max_steps  -> 04b, 07b, 08b (the training length every measured
+  #                                     subset utility is computed at)
+  # Everything else here (coarse.trials/folds/seeds, the whole shortlist block, and
+  # compute_budget below) is read only by 03 and therefore currently unused.
   coarse:
     trials: 12
     folds: 1
@@ -159,6 +170,11 @@ tuning:
     pretrained_source: "imagenet"
   # Compute-budget gate: if the pre-execution estimate exceeds this, the search space must be
   # reduced BEFORE any results are seen — never adjusted afterward.
+  # UNUSED: this gate belongs to 03_tune_freeze_select.py only. The learned pipeline's GPU
+  # gates are learned_asism.compute_budget (04b),
+  # learned_asism.threshold_network.verification_compute_budget (07b), and
+  # learned_asism.threshold_network.full_policy_verification.compute_budget (08b) — none of
+  # which is ever summed with this one.
   compute_budget:
     max_gpu_hours: 8.0
     hours_per_proxy_run_estimate: 0.15

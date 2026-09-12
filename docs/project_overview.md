@@ -39,8 +39,9 @@ patients in every split where it drives a decision. Patient IDs never cross spli
 
 ### Stage 1 — generation model
 `scripts/train/train_lora_sdxl.py`. SDXL fine-tuned with LoRA on CheXpert-derived captions
-(`scripts/data/04_generate_captions.py`), bf16, gradient checkpointing, 512-resolution training.
-Output: a frozen LoRA adapter.
+(`scripts/data/04_generate_captions.py`), bf16, gradient checkpointing, **768**-resolution
+training (`configs/stage1_lora_sdxl.yaml` → `data.resolution`; `stage1_plan.md`'s "Resolution:
+768, not 1024" note explains why neither 1024 nor 512). Output: a frozen LoRA adapter.
 
 ### Stage 2 — synthetic generation
 `scripts/generate/01_sample_label_recipes.py` → `02_generate_synthetic_images.py`. Label recipes
