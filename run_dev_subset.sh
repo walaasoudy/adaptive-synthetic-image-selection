@@ -54,8 +54,9 @@ run 04_captions       python scripts/data/04_generate_captions.py --namespace "$
 # STAGE1_MAX_STEPS keeps the dev shakedown short; the production run uses the config's 15000-30000.
 STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-2000}"
 # optimizer.name=adamw: the RunPod pytorch-2.8/cu128 image ships a bitsandbytes without a CUDA
-# binary, and the script's fallback only wraps optimizer construction (the 8-bit kernel fails
-# later at optimizer.step()). Plain torch.optim.AdamW is used instead.
+# binary. train_lora_sdxl.py now probes a real AdamW8bit step and falls back on its own, so this
+# override is no longer required to avoid the crash -- it is kept as an explicit, recorded choice
+# so this pipeline's optimizer does not depend on what a given pod image happens to ship.
 run 10_stage1_lora    accelerate launch --config_file configs/accelerate_config.yaml scripts/train/train_lora_sdxl.py split.namespace="$NS" optimizer.name=adamw training.max_train_steps="$STAGE1_MAX_STEPS" training.min_train_steps="$STAGE1_MAX_STEPS"
 
 # Point Stage 2 at the LoRA checkpoint step 10 produced (02_generate_synthetic_images.py reads
