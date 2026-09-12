@@ -32,8 +32,8 @@ manifest_version: 2
 fractions:
   gen_train: 0.48             # Stage 1 LoRA training; ASISM real-reference pool; auxiliary classifier
   gen_val: 0.10               # Stage 1 monitoring; auxiliary classifier validation
-  classifier_train: 0.15      # A-E real training component; ASISM proxy real component
-  classifier_val: 0.09        # A-E model selection ONLY (early stop, checkpoint, threshold, hparams)
+  classifier_train: 0.15      # A/B/C real training component; ASISM proxy real component
+  classifier_val: 0.09        # A/B/C model selection ONLY (early stop, checkpoint, threshold, hparams)
   asism_tuning_heldout: 0.09  # ASISM Go/No-Go evidence + proxy-search evaluation
   final_eval_heldout: 0.09    # Stage 5 only
 

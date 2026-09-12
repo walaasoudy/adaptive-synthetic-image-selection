@@ -13,7 +13,7 @@ Stage 5 compares three conditions on `final_eval_heldout` (`configs/stage4_class
 `conditions: [A, B, C]`): **A** real only, **B** real + all synthetic, **C** real + ASISM-
 selected synthetic. There is no separate weighted-baseline selector or condition — ASISM is the full
 module (`docs/stages2_to_5_plan.md` §4.9), including the Multi-Signal Utility Ranking Network and
-Adaptive Threshold Learning below. Primary comparison: **F vs. B**. See
+Adaptive Threshold Learning below. Primary comparison: **C vs. B**. See
 `docs/stages2_to_5_plan.md` §7.1 for a known limitation of that comparison (no matched-random
 control) still pending a supervisor decision.
 
@@ -37,9 +37,11 @@ python scripts/asism/08b_verify_full_policy_proxy.py --phase run --i-understand-
 python scripts/asism/09_finalize_learned_selection.py
 ```
 
-`scripts/asism/03_tune_freeze_select.py` (the pre-learned weighted-score selector) is retained for
-its shared signal-merge helpers only. Nothing in the Stage 4/5 pipeline consumes its output — do not
-run it as a pipeline step.
+`scripts/asism/03_tune_freeze_select.py` (the pre-learned weighted-score selector) is retained as
+the historical baseline the learned module replaced, and is exercised only by its own tests. Nothing
+imports it and nothing in the Stage 4/5 pipeline consumes its output — do not run it as a pipeline
+step. The shared signal-merge used by the learned stages (04–09) is
+`scripts/asism/candidate_pool.py`, not this script.
 
 ## Environment
 
@@ -60,16 +62,22 @@ pip freeze > environment/requirements-lock.txt
 
 ## Pipeline (Stage 1)
 
-Run from the repo root, in order:
+Run from the repo root, in order. `NS` is the split namespace every later stage is pinned to
+(`dev-<run>` or `production-<run>`):
 
 ```bash
-python scripts/data/00_download_dataset.py      # kagglehub download + link into data/chexpert/raw/ (idempotent)
-python scripts/data/01_verify_download.py      # sanity-check the extracted CheXpert-v1.0-small archive
-python scripts/data/02_build_patient_splits.py  # patient-level gen_train / gen_val / classifier_heldout split
-python scripts/data/03_preprocess_images.py     # frontal-only filter, aspect-preserving resize+pad, quality checks
-python scripts/data/04_generate_captions.py     # structured label-to-text captions (scripts/utils/caption_builder.py)
-bash scripts/train/launch_resumable.sh          # resumable SDXL LoRA training (checks checkpoints/.../latest.json)
+NS=production-thesis-v1
+python scripts/data/00_download_dataset.py                  # kagglehub download + link into data/chexpert/raw/ (idempotent)
+python scripts/data/01_verify_download.py                   # sanity-check the extracted CheXpert-v1.0-small archive
+python scripts/data/02b_build_sixway_splits.py --namespace production --run-id "$NS" --freeze
+python scripts/data/03_preprocess_images.py --namespace "$NS" --splits gen_train gen_val classifier_train classifier_val asism_tuning_heldout final_eval_heldout
+python scripts/data/04_generate_captions.py --namespace "$NS" --splits gen_train gen_val
+bash scripts/train/launch_resumable.sh                      # resumable SDXL LoRA training (checks checkpoints/.../latest.json)
 ```
+
+`scripts/data/02_build_patient_splits.py` is the superseded schema-v1 three-way builder and is not a
+pipeline step; `configs/splits.yaml` replaced it. For the full Stage 1–5 sequence, including the dev
+namespace, see `run_dev_subset.sh` — it is the executable version of this list.
 
 Evaluation/monitoring:
 
@@ -91,7 +99,17 @@ See `docs/stage1_plan.md` §6 for the exact expected structure.
 ```
 data/chexpert/{raw,processed}/   # dataset (gitignored except splits/manifests)
 configs/                         # YAML configs — single source of truth for tunables
-scripts/{data,train,eval,utils}/ # pipeline code
+scripts/data/                    # download, verify, six-way splits, preprocess, captions
+scripts/train/                   # Stage 1 SDXL + LoRA
+scripts/generate/                # Stage 2 label recipes + synthetic generation
+scripts/asism/                   # Stage 3 signals, Go/No-Go, learned ASISM (04–09)
+scripts/classify/                # auxiliary classifier + Stage 4 conditions
+scripts/eval/                    # Stage 1 monitoring + Stage 5 evaluation and analysis
+scripts/smoke/                   # CPU/GPU fixture pipelines (non-scientific by construction)
+scripts/utils/                   # shared config, provenance, labels, splits, metrics, classifier
+tests/                           # contract + unit suites; tests/run_all.py is the STOP gate
+cloud/                           # Modal entry points (Stage 1, benchmarks, GPU probe)
+notebooks/                       # thesis_full_project_code.ipynb — the whole project, one notebook
 checkpoints/stage1_lora_sdxl/    # resumable + inference-ready LoRA checkpoints (gitignored, per-run metadata tracked)
 logs/, outputs/                  # TensorBoard logs, probe sample grids (gitignored)
 docs/                            # proposal, literature review, this stage's design plan

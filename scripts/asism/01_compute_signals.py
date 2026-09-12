@@ -354,7 +354,7 @@ def run_similarity(manifest, images_dir, config, provenance, scores_dir, namespa
         return np.concatenate(outputs, axis=0)
 
     # Real reference pool: a stratified sample of gen_train (the generator's own training data is
-    # the correct realism reference; classifier_train is reserved for A-E).
+    # the correct realism reference; classifier_train is reserved for A/B/C).
     real_frame = load_split("gen_train", namespace, purpose="schema_validation", caller="asism_similarity")
     per_label = int(config.signals.similarity.reference_sample_per_label)
     real_images_dir = Path(stage1_cfg.paths.images_dir) / namespace / "gen_train"

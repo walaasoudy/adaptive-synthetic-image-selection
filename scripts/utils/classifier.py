@@ -3,7 +3,7 @@
 One implementation, three consumers, so they cannot drift apart:
   - the auxiliary reference classifier (Stage 3 prerequisite, docs/stages2_to_5_plan.md §2);
   - the ASISM proxy classifier used to rank candidate configurations (§4.7);
-  - the A-E headline experiment classifiers (§7).
+  - the Stage 4 headline experiment classifiers, conditions A/B/C (§7).
 
 Two design points are load-bearing rather than incidental:
 
@@ -278,7 +278,7 @@ def train_classifier(
     """Train to a FIXED optimizer-step budget. Returns (model, accounting, eval_history).
 
     Deliberately no early stopping inside this function: the ASISM proxy search forbids
-    candidate-specific early stopping (§4.7), and A-E requires an identical protocol across
+    candidate-specific early stopping (§4.7), and A/B/C requires an identical protocol across
     conditions (§7.1). Checkpoint SELECTION (best-on-classifier_val) is applied by the caller that
     is entitled to do it, from the history returned here.
     """

@@ -47,7 +47,7 @@ splits derived as children of classifier_heldout).
 That architecture is superseded by the six-way partition in
 `scripts/data/02b_build_sixway_splits.py` (docs/stages2_to_5_plan.md §1), because it left no
 patient population for a classifier development split, and deriving one from `gen_train` would
-have meant the A-E classifiers' early-stopping and threshold decisions were made on patients the
+have meant the headline classifiers' early-stopping and threshold decisions were made on patients the
 SDXL generator had itself trained on.
 
 These files are RETAINED for provenance and reproducibility of anything already built against
