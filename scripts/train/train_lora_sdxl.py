@@ -7,7 +7,9 @@ Adapted from diffusers' text_to_image_lora_sdxl reference pattern, with:
   - one-time VAE latent + text embedding caching (captions are deterministic-from-labels)
   - EMA of the LoRA adapter weights
   - resumable checkpointing via Accelerate save_state/load_state, all paths under PROJECT_ROOT
-    (expected to be the persistent volume on RunPod — see configs/stage1_lora_sdxl.yaml)
+    (expected to be the persistent volume on RunPod — see configs/stage1_lora_sdxl.yaml).
+    save_model_hook/load_model_hook keep only the LoRA adapter in the resumable state, so a
+    checkpoint is ~11 MB rather than ~9.5 GB of re-serialized frozen SDXL base weights.
   - TensorBoard (+ optional Weights & Biases) logging
 
 Run directly, or via scripts/train/launch_resumable.sh which handles the resume-on-restart logic.
@@ -377,9 +379,14 @@ def save_checkpoint(accelerator, unet, ema, cfg, run_dir: Path, step: int, epoch
     if not accelerator.is_main_process:
         return
 
+    # Resumable state: LoRA adapter + optimizer/scheduler/RNG/EMA. The registered
+    # save_model_hook (see main()) is what keeps the frozen UNet base weights out of this.
     full_checkpoint_dir = run_dir / f"checkpoint-{step}"
     accelerator.save_state(str(full_checkpoint_dir))
 
+    # Separate inference-ready export, kept for every step (keep_all_lora_weight_snapshots) and
+    # pinned by Stage 2's checkpoint.lora_weights_dir. Distinct purpose from the resumable state
+    # above, so both are written even though both now contain the same adapter.
     lora_dir = run_dir / "lora_weights" / f"step_{step}"
     raw_unet = accelerator.unwrap_model(unet)
     state = convert_state_dict_to_diffusers(get_peft_model_state_dict(raw_unet))
@@ -542,6 +549,72 @@ def main() -> int:
     unet, optimizer, train_loader, val_loader, lr_scheduler = accelerator.prepare(
         unet, optimizer, train_loader, val_loader, lr_scheduler
     )
+
+    # Accelerate's save_state serializes every prepared model IN FULL. For a LoRA run that means
+    # ~9.5 GB of FROZEN SDXL UNet base weights written into every checkpoint alongside ~11 MB of
+    # actually-trainable LoRA weights — 99.9% of each checkpoint duplicating weights already pinned
+    # immutably by model.revision in the HF cache. At save_every_n_steps=1000 over 30k steps that is
+    # ~272 GB written and ~27 GB resident (keep_last_n_full_checkpoints=3), plus the GPU sitting idle
+    # through each multi-minute serialization.
+    #
+    # These hooks are the diffusers text_to_image_lora_sdxl reference pattern this script is adapted
+    # from (§docstring); they were the one piece of it that was missing. `weights.pop()` is what
+    # stops Accelerate writing the full model, and the LoRA adapter is written instead, so the
+    # checkpoint stays fully resumable. Optimizer/scheduler/RNG/EMA state are untouched by this and
+    # are still saved by Accelerate as before.
+    def save_model_hook(models, weights, output_dir):
+        if not accelerator.is_main_process:
+            return
+        from diffusers import StableDiffusionXLPipeline
+        from diffusers.utils import convert_state_dict_to_diffusers
+        from peft.utils import get_peft_model_state_dict
+
+        unet_lora_layers = None
+        unet_type = type(accelerator.unwrap_model(unet))
+        for model in models:
+            if not isinstance(accelerator.unwrap_model(model), unet_type):
+                raise ValueError(f"save_model_hook got an unexpected model: {model.__class__.__name__}")
+            unet_lora_layers = convert_state_dict_to_diffusers(get_peft_model_state_dict(model))
+            # Drop the full-model weights Accelerate queued for this model.
+            weights.pop()
+        if unet_lora_layers is None:
+            raise ValueError("save_model_hook received no UNet; refusing to write a checkpoint with no LoRA weights")
+        StableDiffusionXLPipeline.save_lora_weights(
+            str(output_dir), unet_lora_layers=unet_lora_layers, safe_serialization=True
+        )
+
+    def load_model_hook(models, input_dir):
+        from diffusers import StableDiffusionXLPipeline
+        from diffusers.utils import convert_unet_state_dict_to_peft
+        from peft import set_peft_model_state_dict
+
+        unet_type = type(accelerator.unwrap_model(unet))
+        target = None
+        while models:
+            model = models.pop()
+            if not isinstance(accelerator.unwrap_model(model), unet_type):
+                raise ValueError(f"load_model_hook got an unexpected model: {model.__class__.__name__}")
+            target = model
+        if target is None:
+            raise ValueError("load_model_hook received no UNet to load LoRA weights into")
+
+        lora_state_dict, _ = StableDiffusionXLPipeline.lora_state_dict(str(input_dir))
+        unet_state_dict = {
+            key.removeprefix("unet."): value
+            for key, value in lora_state_dict.items()
+            if key.startswith("unet.")
+        }
+        if not unet_state_dict:
+            raise ValueError(f"No UNet LoRA weights found in {input_dir}; cannot resume")
+        incompatible = set_peft_model_state_dict(
+            target, convert_unet_state_dict_to_peft(unet_state_dict), adapter_name="default"
+        )
+        unexpected = getattr(incompatible, "unexpected_keys", None)
+        if unexpected:
+            raise ValueError(f"Unexpected LoRA keys while resuming from {input_dir}: {unexpected}")
+
+    accelerator.register_save_state_pre_hook(save_model_hook)
+    accelerator.register_load_state_pre_hook(load_model_hook)
 
     ema = LoraEMA(accelerator.unwrap_model(unet), cfg.training.ema.decay) if cfg.training.ema.enabled else None
     if ema is not None:
