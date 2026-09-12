@@ -199,7 +199,10 @@ def main() -> int:
     split_paths = {name: split_dir / f"{name}.csv" for name in args.splits}
     missing = [str(path) for path in split_paths.values() if not path.is_file()]
     if missing:
-        raise SystemExit("Missing split files (run 02_build_patient_splits.py first): " + ", ".join(missing))
+        raise SystemExit(
+            f"Missing split files (run 02b_build_sixway_splits.py --namespace {namespace} first): "
+            + ", ".join(missing)
+        )
     images_dir = Path(cfg.paths.images_dir) / namespace
     images_dir.mkdir(parents=True, exist_ok=True)
     for name, path in split_paths.items():

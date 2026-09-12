@@ -242,7 +242,7 @@ def intended_vector_to_labels(intended: dict[str, int]) -> list[str]:
     """The primary disease labels a Stage 2 recipe intends to be positive.
 
     A `No Finding` recipe is the all-zero intended vector over the 11 primary labels (plan §3), so
-    this correctly returns an empty list for it — agreement (§4.5) then scores it as "all 12
-    predicted probabilities should be low."
+    this correctly returns an empty list for it — agreement (§4.5) then scores it as "all 11
+    primary predicted probabilities should be low."
     """
     return [label for label in PRIMARY_ENDPOINT_LABELS if int(intended.get(label, 0)) == 1]

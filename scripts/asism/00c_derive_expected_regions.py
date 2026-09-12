@@ -16,7 +16,10 @@ from scripts.utils.manifest import get_git_commit_hash, write_frozen_json  # noq
 from scripts.utils.splits import load_split  # noqa: E402
 from scripts.utils.artifact_contracts import asism_score_provenance, stage3_paths  # noqa: E402
 
-# Never configurable: see SPLIT DISCIPLINE in the module docstring.
+# SPLIT DISCIPLINE — never configurable. The expected regions are a researcher-facing prior
+# baked into the explainability signal, so deriving them from any decision-bearing split
+# (classifier_*, asism_tuning_heldout, final_eval_heldout) would leak. gen_train is the only
+# admissible source: Stage 1 already trained on it, and no Stage 3-5 decision is measured on it.
 DERIVATION_SPLIT = "gen_train"
 
 
