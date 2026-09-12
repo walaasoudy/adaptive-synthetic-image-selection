@@ -1,3 +1,20 @@
+"""Stage 3a — compute the five ASISM signals (docs/stages2_to_5_plan.md §4.1-§4.5).
+
+Writes FIVE independent versioned parquet artifacts, one per signal:
+    similarity_scores.parquet  iqa_scores.parquet  uncertainty_scores.parquet
+    explainability_scores.parquet  agreement_scores.parquet
+
+Independent artifacts (rather than one shared file) so a signal can be recomputed, audited, or
+EXCLUDED by the Go/No-Go gate (§4.6) without disturbing the others — an excluded-but-valid signal's
+artifact is retained for auditability.
+
+IQA needs no model and runs anywhere. The other four query the frozen auxiliary classifier (§2) or
+an embedding encoder, and fail cleanly at that upstream gate when it is absent.
+
+Usage:
+    python scripts/asism/01_compute_signals.py --signal all
+    python scripts/asism/01_compute_signals.py --signal iqa      # no GPU required
+"""
 from __future__ import annotations
 
 import argparse
@@ -34,7 +51,6 @@ from scripts.utils.splits import load_split  # noqa: E402
 # "distinctiveness" is produced INSIDE run_similarity (it reuses that step's synthetic
 # embeddings, so it costs no extra encoder passes) and is therefore not separately runnable.
 ALL_SIGNALS = ["similarity", "iqa", "uncertainty", "explainability", "agreement"]
-PRODUCED_SIGNALS = ALL_SIGNALS + ["distinctiveness"]
 
 
 def load_config():
@@ -337,7 +353,7 @@ def run_similarity(manifest, images_dir, config, provenance, scores_dir, namespa
         return np.concatenate(outputs, axis=0)
 
     # Real reference pool: a stratified sample of gen_train (the generator's own training data is
-    # the correct realism reference; classifier_train is reserved for A-E).
+    # the correct realism reference; classifier_train is reserved for A/B/C).
     real_frame = load_split("gen_train", namespace, purpose="schema_validation", caller="asism_similarity")
     per_label = int(config.signals.similarity.reference_sample_per_label)
     real_images_dir = Path(stage1_cfg.paths.images_dir) / namespace / "gen_train"

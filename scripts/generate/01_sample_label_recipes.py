@@ -24,7 +24,6 @@ from scripts.utils.manifest import get_git_commit_hash, hash_dict, sha256_file, 
 from scripts.utils.splits import resolve_splits_dir  # noqa: E402
 from scripts.utils.splits import load_split, split_provenance  # noqa: E402
 
-DEVICE_LABEL = "Support Devices"
 
 
 def load_stage2_config():

@@ -20,7 +20,7 @@ question, answered by the pre-specified primary comparison in §8, not asserted 
 The superseded split (`split_manifest.json`, schema v1) allocated `gen_train` 0.70 + `gen_val` 0.10
 + `classifier_heldout` 0.20 = 100% of patients, with `asism_tuning_heldout` and `final_eval_heldout`
 derived as children of `classifier_heldout`. That partition leaves no population for a classifier
-development split, and deriving one from `gen_train` would mean the A–E classifiers' early-stopping
+development split, and deriving one from `gen_train` would mean the headline classifiers' early-stopping
 and threshold decisions were made on patients the generator itself trained on.
 
 **Replacement: six direct, mutually exclusive, patient-level top-level partitions**, drawn from one
@@ -31,7 +31,7 @@ deterministic patient list with one recorded seed. **No split is derived from an
 | Carve `classifier_train`/`classifier_val` from `gen_train` | Classifier development data would be patients the generator trained on — generator/classifier development contamination. |
 | Reuse `asism_tuning_heldout` as `classifier_val` | Collapses ASISM tuning and classifier model selection onto one population. |
 | Reuse `gen_val` as `classifier_val` | `gen_val` is the generator's monitoring split; same contamination argument. |
-| Keep v1 and forgo a classifier development split | Forces A–E model selection onto training data (invalid) or a heldout split (leakage). |
+| Keep v1 and forgo a classifier development split | Forces headline-condition model selection onto training data (invalid) or a heldout split (leakage). |
 
 ### 1.2 Frozen v2 allocation
 
@@ -39,8 +39,8 @@ deterministic patient list with one recorded seed. **No split is derived from an
 |---|---|---|
 | `gen_train` | **0.48** | Stage 1 LoRA training; Stage 3 real-reference pool (§4.1); auxiliary classifier training (§2) |
 | `gen_val` | **0.10** | Stage 1 monitoring; auxiliary classifier validation (§2) |
-| `classifier_train` | **0.15** | Real component of A–E training (§7); real component of ASISM proxy training (§4.7) |
-| `classifier_val` | **0.09** | A–E early stopping, checkpoint selection, threshold selection, hyperparameter/model selection — identical rules across all conditions |
+| `classifier_train` | **0.15** | Real component of A/B/C training (§7); real component of ASISM proxy training (§4.7) |
+| `classifier_val` | **0.09** | A/B/C early stopping, checkpoint selection, threshold selection, hyperparameter/model selection — identical rules across all conditions |
 | `asism_tuning_heldout` | **0.09** | ASISM Go/No-Go evidence (§4.6) and proxy-search evaluation (§4.7) |
 | `final_eval_heldout` | **0.09** | Stage 5 final evaluation only (§8) |
 
@@ -94,7 +94,9 @@ consumed and refuse to mix.
 Schema-v1 artifacts (`splits/*.csv`, `splits/split_manifest.json`) are **retained, not deleted**, and
 marked superseded by `splits/SUPERSEDED_v1.md`. No Stage 2–5 code reads them. New manifests carry
 `manifest_version: 2` and a `split_namespace` field; a mismatch between an artifact's recorded split
-hash and the current frozen manifest is a **hard error** via `validate_upstream_artifact()`.
+hash and the current frozen manifest is a **hard error** via
+`scripts/utils/artifact_contracts.py` (`require_manifest_fields`, `require_score_artifact`,
+`require_generation_complete`).
 
 ### 1.6 `final_eval_heldout` access rule — FROZEN
 
@@ -121,7 +123,7 @@ A; condition A is trained separately, from scratch, on `classifier_train` under 
 
 - **Data:** `gen_train` train / `gen_val` validate. Never `classifier_train`, `classifier_val`, or
   any heldout split. Rationale: the generator's own splits are the correct home for a scorer of the
-  generator's output, and this leaves the entire classifier development pool unspent for A–E.
+  generator's output, and this leaves the entire classifier development pool unspent for A/B/C.
 - **Initialization:** default **ImageNet-pretrained** DenseNet121. A CXR-pretrained checkpoint is
   permitted only with documented training-set provenance proving no overlap with our evaluation
   patients. CheXpert-pretrained checkpoints are **rejected by default** — most publish no
@@ -463,7 +465,7 @@ checkpoint hash.
 **Primary endpoint:** macro-AUROC over `primary_endpoint_label_set` (§5.2) on `final_eval_heldout`.
 
 **Primary comparison: C vs. B** — Learned-ASISM-selected synthetic images vs. all synthetic images
-unselected. **Supporting comparisons:** A vs. B and A vs. F. Implemented in
+unselected. **Supporting comparisons:** A vs. B and A vs. C. Implemented in
 `scripts/eval/compare_conditions.py`:
 
 ```
@@ -503,7 +505,7 @@ component-contribution analysis.
 
 **Execution guards (frozen).** Stage 5 refuses to run unless: the production split manifest is
 frozen; the final split hash matches; the frozen experiment-protocol manifest exists; the ASISM
-freeze manifest exists; all required A–E/D checkpoint hashes exist; the classification-threshold
+freeze manifest exists; all required A/B/C checkpoint hashes exist; the classification-threshold
 policy is frozen; and an explicit final-evaluation run ID is supplied.
 
 **Technical resume vs. methodological re-evaluation.** Predictions are written incrementally and
@@ -546,9 +548,9 @@ a **new pre-specified evaluation run** — reported alongside the original, neve
   proxy search, hyperparameter tuning, early stopping, checkpoint selection, threshold selection,
   model selection, label-exclusion decisions, or search-space reduction.
 - `asism_tuning_heldout` — ASISM Go/No-Go and proxy-search evaluation only.
-- `classifier_train` — A–E real component and ASISM proxy real component.
-- `classifier_val` — A–E model selection only; never ASISM candidate ranking; never trained on.
-- `gen_train` / `gen_val` — Stage 1, auxiliary classifier, ASISM reference pool. Never A–E model
+- `classifier_train` — A/B/C real component and ASISM proxy real component.
+- `classifier_val` — A/B/C model selection only; never ASISM candidate ranking; never trained on.
+- `gen_train` / `gen_val` — Stage 1, auxiliary classifier, ASISM reference pool. Never A/B/C model
   selection, never evaluation.
 - All six splits are patient-disjoint by construction from one deterministic list and one seed.
 - Stage 5 bootstrap resampling is patient-level.

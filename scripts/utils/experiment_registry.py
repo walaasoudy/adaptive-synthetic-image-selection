@@ -86,13 +86,6 @@ def _update_row(registry_path: Path, experiment_id: str, updates: dict[str, Any]
     _atomic_write_parquet(registry_path, df)
 
 
-def read_registry(registry_path: str | Path | None = None) -> pd.DataFrame:
-    path = Path(registry_path) if registry_path is not None else resolve_registry_path()
-    if not path.exists():
-        return pd.DataFrame(columns=REGISTRY_COLUMNS)
-    return pd.read_parquet(path)
-
-
 class ExperimentRun:
     """Context manager registering one experiment-registry row per run.
 

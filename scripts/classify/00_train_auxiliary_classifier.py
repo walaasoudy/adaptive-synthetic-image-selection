@@ -7,7 +7,7 @@ A is a separate experiment trained later, from scratch, on classifier_train unde
 protocol.
 
 Trained on gen_train, validated on gen_val — never classifier_train/classifier_val (those are
-reserved unspent for A-E) and never a heldout split. Using the generator's own splits for a scorer
+reserved unspent for A/B/C) and never a heldout split. Using the generator's own splits for a scorer
 of the generator's output is the point: it keeps the entire classifier development pool free.
 
 Initialization is leakage-safe by construction: CheXpert-pretrained weights are REJECTED in

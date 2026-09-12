@@ -142,15 +142,18 @@ filter (each image in ≥ 3 subsets), ≈ 96 usable `(subset, utility)` pairs re
 equal optimiser-step budget across all conditions and seeds, model selection on `classifier_val`,
 final metric on `final_eval_heldout`:
 
-| Condition | Training data |
-|---|---|
-| **A** | real only (`classifier_train`) |
-| **B** | real + **all** Stage 2 synthetic images |
-| **F** | real + ASISM-selected synthetic (`adaptive_selected_manifest`) |
-| **D** | real + a random synthetic subset with **F's per-class size and composition** |
+Enabled conditions are `configs/stage4_classifier.yaml` → `conditions: [A, B, C]`:
 
-Primary comparison **C vs B**; **D** isolates selection quality from subset size. Confirmatory
-tests use Holm–Bonferroni; exploratory use Benjamini–Hochberg.
+| Condition | Training data | State |
+|---|---|---|
+| **A** | real only (`classifier_train`) | enabled |
+| **B** | real + **all** Stage 2 synthetic images | enabled |
+| **C** | real + ASISM-selected synthetic (`adaptive_selected_manifest`) | enabled |
+| **D** | real + a random synthetic subset with **C's per-class size and composition** | **INACTIVE** — machinery retained and working, not enabled; see §7.1 |
+
+Primary comparison **C vs B**. **D** would isolate selection quality from subset size, which is the
+§7.1 limitation of that comparison — it is not currently run, and re-enabling it requires supervisor
+sign-off. Confirmatory tests use Holm–Bonferroni; exploratory use Benjamini–Hochberg.
 
 ---
 

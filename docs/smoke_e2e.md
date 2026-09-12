@@ -78,8 +78,8 @@ Expected GPU-path outputs:
 | auxiliary | smoke `gen_train`/`gen_val` | two-step resume checkpoint and separate best-validation checkpoint |
 | Stage 3 signals | real generated images | five Parquets and five hash/provenance sidecars |
 | Go/No-Go | score artifacts | `gonogo_report.json` with admitted/excluded signals |
-| Learned ASISM (04–09) | real signals from above | subset feasibility report, measured utility, ranking + threshold-network checkpoints, condition F's `adaptive_selected_manifest.jsonl` |
-| Stage 4 | conditions **A/B/F**, one seed | three two-step best checkpoints and atomic completion records |
+| Learned ASISM (04–09) | real signals from above | subset feasibility report, measured utility, ranking + threshold-network checkpoints, condition C's `adaptive_selected_manifest.jsonl` |
+| Stage 4 | conditions **A/B/C**, one seed | three two-step best checkpoints and atomic completion records |
 | Stage 5 | separate three-patient fixture final split | registered protected context, predictions with sidecars, comparison report/tables |
 
 Cold-cache estimate on one A40 48 GB: approximately 30–60 minutes, dominated by model downloads,
@@ -136,9 +136,10 @@ Current coverage:
 |---|---|---|
 | Unit tests | Every learned-ASISM function in isolation | ✅ `tests/test_learned_asism.py`, 88 tests |
 | CPU integration smoke | `04` → `05` → `06` connect; Go/No-Go feature removal | ✅ verified passing, `01b_learned_asism_cpu_smoke.py` |
-| GPU smoke | `04`–`09` on real generated images, real (tiny) proxy verification, condition **F** trained | ⚠️ built 2026-08-21, **never executed** — no GPU available; see the RunPod GPU phase section above |
+| GPU smoke | `04`–`09` on real generated images, real (tiny) proxy verification, condition **C** trained | ⚠️ built 2026-08-21, **never executed** — no GPU available; see the RunPod GPU phase section above |
 
 Closing the last row needs a GPU-smoke extension of the existing RunPod phase: real (tiny) proxy
 classifiers for `04b`/`07b`/`08b` instead of the CPU tier's fabricated numbers, plus
-`conditions: [A, B, F]` in the GPU overlay. Until it exists, condition F and the thesis's primary
-comparison (F vs. B) have never been run end to end anywhere, including in smoke form.
+`conditions: [A, B, C]` in the GPU overlay (already set there). Until it exists, condition C and
+the thesis's primary comparison (C vs. B) have never been run end to end anywhere, including in
+smoke form.

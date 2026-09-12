@@ -19,7 +19,8 @@ from scripts.utils.manifest import get_git_commit_hash, hash_dict, read_json  # 
 
 
 def preflight_check_candidate_pool_inputs(cfg) -> None:
-   
+    """Fail with one combined report naming every missing upstream artifact and its command,
+    rather than erroring on the first one and hiding the rest."""
     missing: list[str] = []
 
     scores_dir = Path(cfg.paths.scores_dir)
