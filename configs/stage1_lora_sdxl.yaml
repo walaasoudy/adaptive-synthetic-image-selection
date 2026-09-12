@@ -33,7 +33,8 @@ dev_subset:
                             # REVERT to false for the full production-thesis-v1 run.
   target_size: 10000        # approximate output image count; configurable (5k/10k/20k/...).
   seed: 42                  # independent of split_seed so subset draws can vary without perturbing
-                             # the 70/10/20 patient-splitting logic.
+                             # the patient-splitting logic (now the six-way policy in
+                             # configs/splits.yaml, not the superseded v1 70/10/20).
   prevalence_tolerance_pct: 5.0   # report-only threshold; deviations beyond this are WARNINGs, not
                                    # fatal — the subset only needs to be "reasonably representative."
   output_csv: ${paths.processed_dir}/dev_subset/train_subset.csv
@@ -71,16 +72,29 @@ data:
   min_source_resolution: 200  # px, below this an image is flagged/dropped as low quality
 
 split:
-  # Explicit schema-v2 six-way split namespace. There is deliberately no fallback to the
-  # superseded root-level schema-v1 files.
+  # MIXED BLOCK -- read this before changing anything here.
+  #
+  # LIVE keys, read by the current pipeline:
+  #   namespace        -> 03_preprocess_images.py, 04_generate_captions.py, train_lora_sdxl.py
+  #   input_csv        -> 02b_build_sixway_splits.py (default when --input-csv is omitted)
+  #   manifest_version, split_unit -> documentation of the v2 contract
+  #
+  # SUPERSEDED keys, read ONLY by scripts/data/02_build_patient_splits.py (the schema-v1
+  # three-way builder, itself not a pipeline step): gen_train_fraction, gen_val_fraction,
+  # classifier_heldout_fraction, asism_tuning_fraction, heldout_split_seed. The fractions the
+  # pipeline actually uses are the six-way ones in configs/splits.yaml. These are retained, not
+  # deleted, so the v1 artifacts stay reproducible -- but editing them changes nothing in
+  # Stage 1-5.
+  #
+  # There is deliberately no fallback to the superseded root-level schema-v1 split files.
   namespace: dev-10k-v1
   manifest_version: 2
   input_csv: ${dev_subset.output_csv}   # DEV-SUBSET RUN: splits are built from the ~10k
                                           # train_subset.csv produced by 01b_build_dev_subset.py.
                                           # REVERT to ${paths.raw_dir}/train.csv for the full
                                           # ~224k-image production run — a config-only switch, no
-                                          # code change required in 02_build_patient_splits.py or any
-                                          # downstream script.
+                                          # code change required in 02b_build_sixway_splits.py or
+                                          # any downstream script.
   gen_train_fraction: 0.70
   gen_val_fraction: 0.10
   classifier_heldout_fraction: 0.20
