@@ -368,7 +368,62 @@ class LoraEMA:
 # Checkpointing
 # --------------------------------------------------------------------------------------
 
-def save_checkpoint(accelerator, unet, ema, cfg, run_dir: Path, step: int, epoch: int, split_manifest_hash: str, seed: int, keep_last_n: int) -> None:
+def _adamw_8bit_step_works(device: torch.device) -> tuple[bool, str]:
+    """Actually run one AdamW8bit step on `device` before committing the real run to it.
+
+    Constructing bnb.optim.AdamW8bit succeeds whenever the package imports; the 8-bit CUDA kernel
+    is only invoked on .step(). The RunPod pytorch-2.8/cu128 image ships a bitsandbytes build
+    without a matching CUDA binary, so construction passed and training then died at the first
+    optimizer step -- after the latent cache had been built. Probing a real step here moves that
+    failure to before any training and lets the configured "adamw" fallback actually engage
+    (docs/stage1_plan.md §3/§12).
+
+    Deterministic by construction: fixed tensors only, so no RNG draw perturbs the seeded run.
+    """
+    try:
+        import bitsandbytes as bnb
+
+        probe = torch.ones(1, device=device, requires_grad=True)
+        probe_optimizer = bnb.optim.AdamW8bit([probe], lr=1.0e-4, weight_decay=0.0)
+        (probe * probe).sum().backward()
+        probe_optimizer.step()
+        probe_optimizer.zero_grad(set_to_none=True)
+        del probe_optimizer, probe
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        return True, ""
+    except Exception as exc:  # ImportError, CUDA kernel/symbol errors, anything else
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def build_optimizer(cfg, trainable_params, device: torch.device) -> tuple[torch.optim.Optimizer, str]:
+    """Build the configured optimizer, honouring the documented adamw_8bit -> adamw fallback.
+
+    Returns (optimizer, resolved_name) so the checkpoint metadata records which optimizer actually
+    ran rather than which one was requested.
+    """
+    learning_rate, weight_decay = cfg.optimizer.learning_rate, cfg.optimizer.weight_decay
+    if cfg.optimizer.name == "adamw_8bit":
+        works, reason = _adamw_8bit_step_works(device)
+        if works:
+            import bitsandbytes as bnb
+
+            print("optimizer: bitsandbytes AdamW8bit (8-bit step verified on this device).", flush=True)
+            return bnb.optim.AdamW8bit(trainable_params, lr=learning_rate, weight_decay=weight_decay), "adamw_8bit"
+        print(
+            f"optimizer: bitsandbytes AdamW8bit failed its step probe ({reason}); "
+            "falling back to torch.optim.AdamW (docs/stage1_plan.md §3/§12).",
+            flush=True,
+        )
+    elif cfg.optimizer.name != "adamw":
+        raise ValueError(
+            f"Unsupported optimizer.name={cfg.optimizer.name!r}; expected \"adamw_8bit\" or \"adamw\" "
+            "(configs/stage1_lora_sdxl.yaml)."
+        )
+    return torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay), "adamw"
+
+
+def save_checkpoint(accelerator, unet, ema, cfg, run_dir: Path, step: int, epoch: int, split_manifest_hash: str, seed: int, keep_last_n: int, resolved_optimizer_name: str | None = None) -> None:
     from diffusers.utils import convert_state_dict_to_diffusers
     from peft.utils import get_peft_model_state_dict
     from diffusers import StableDiffusionXLPipeline
@@ -406,6 +461,8 @@ def save_checkpoint(accelerator, unet, ema, cfg, run_dir: Path, step: int, epoch
             "source_csv_hash": manifest.get("source_csv_sha256") or (sha256_file(source_csv) if source_csv.is_file() else None),
             "gen_train_csv_hash": sha256_file(split_dir / "gen_train.csv"),
             "gen_val_csv_hash": sha256_file(split_dir / "gen_val.csv"),
+            # What actually ran, which is not always config.optimizer.name -- see build_optimizer.
+            "resolved_optimizer_name": resolved_optimizer_name,
         },
     )
     write_json(full_checkpoint_dir / "metadata.json", metadata)
@@ -519,16 +576,7 @@ def main() -> int:
     unet = models["unet"]
     trainable_params = [p for p in unet.parameters() if p.requires_grad]
 
-    optimizer = None
-    if cfg.optimizer.name == "adamw_8bit":
-        try:
-            import bitsandbytes as bnb
-
-            optimizer = bnb.optim.AdamW8bit(trainable_params, lr=cfg.optimizer.learning_rate, weight_decay=cfg.optimizer.weight_decay)
-        except Exception as e:
-            print(f"bitsandbytes AdamW8bit unavailable ({e}); falling back to torch.optim.AdamW (docs/stage1_plan.md §3/§12).")
-    if optimizer is None:
-        optimizer = torch.optim.AdamW(trainable_params, lr=cfg.optimizer.learning_rate, weight_decay=cfg.optimizer.weight_decay)
+    optimizer, resolved_optimizer_name = build_optimizer(cfg, trainable_params, accelerator.device)
 
     from diffusers.optimization import get_scheduler
 
@@ -609,6 +657,7 @@ def main() -> int:
                     save_checkpoint(
                         accelerator, unet, ema, cfg, run_dir, global_step, epoch,
                         split_manifest_hash, cfg.run.seed, cfg.checkpointing.keep_last_n_full_checkpoints,
+                        resolved_optimizer_name,
                     )
 
                 if global_step % cfg.validation.val_every_n_steps == 0:
@@ -626,6 +675,7 @@ def main() -> int:
     save_checkpoint(
         accelerator, unet, ema, cfg, run_dir, global_step, epoch,
         split_manifest_hash, cfg.run.seed, cfg.checkpointing.keep_last_n_full_checkpoints,
+        resolved_optimizer_name,
     )
     final_dir = run_dir / "final"
     from diffusers.utils import convert_state_dict_to_diffusers
