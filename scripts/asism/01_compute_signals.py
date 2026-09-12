@@ -51,7 +51,6 @@ from scripts.utils.splits import load_split  # noqa: E402
 # "distinctiveness" is produced INSIDE run_similarity (it reuses that step's synthetic
 # embeddings, so it costs no extra encoder passes) and is therefore not separately runnable.
 ALL_SIGNALS = ["similarity", "iqa", "uncertainty", "explainability", "agreement"]
-PRODUCED_SIGNALS = ALL_SIGNALS + ["distinctiveness"]
 
 
 def load_config():

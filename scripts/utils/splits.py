@@ -240,6 +240,12 @@ def build_patient_folds(patient_ids: list[str], fold_count: int, seed: int) -> d
 
 
 def freeze_patient_folds(path: str | Path, patient_ids: list[str], fold_count: int, seed: int, split_manifest_hash: str) -> dict[str, Any]:
+    """Freeze a patient-level fold assignment as an immutable artifact.
+
+    NOT ON THE CURRENT PATH: the only caller is 03_tune_freeze_select.py, the superseded
+    weighted-score selector. The learned stages (04-09) split by subset role instead
+    (learned.split_image_pool), which is image-disjoint by construction.
+    """
     folds = build_patient_folds(patient_ids, fold_count, seed)
     core = {
         "schema_version": 1, "assignment_unit": "patient_id", "fold_count": fold_count,
@@ -250,24 +256,6 @@ def freeze_patient_folds(path: str | Path, patient_ids: list[str], fold_count: i
     core["fold_manifest_hash"] = hash_dict(core, length=64)
     write_frozen_json(path, core)
     return {**core, "frozen": True}
-
-
-def require_frozen_production_splits(config: DictConfig | None = None) -> dict[str, Any]:
-    """Stage 5 precondition (plan §8): the production split manifest must exist AND be frozen."""
-    manifest = read_split_manifest("production", config)
-    if not manifest.get("frozen", False):
-        raise SystemExit(
-            "Production split manifest exists but is not frozen. "
-            "Freeze it before any final evaluation: "
-            "python scripts/data/02b_build_sixway_splits.py --namespace production --freeze"
-        )
-    if not manifest.get("support_check", {}).get("passed", False):
-        raise SystemExit(
-            "Production split manifest is frozen but its support check did not pass — "
-            "final evaluation on splits that fail the frozen support rule is not permitted "
-            "(docs/stages2_to_5_plan.md §1.3)."
-        )
-    return manifest
 
 
 def require_frozen_production_split_run(namespace: str, config: DictConfig | None = None) -> dict[str, Any]:

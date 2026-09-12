@@ -94,7 +94,9 @@ consumed and refuse to mix.
 Schema-v1 artifacts (`splits/*.csv`, `splits/split_manifest.json`) are **retained, not deleted**, and
 marked superseded by `splits/SUPERSEDED_v1.md`. No Stage 2–5 code reads them. New manifests carry
 `manifest_version: 2` and a `split_namespace` field; a mismatch between an artifact's recorded split
-hash and the current frozen manifest is a **hard error** via `validate_upstream_artifact()`.
+hash and the current frozen manifest is a **hard error** via
+`scripts/utils/artifact_contracts.py` (`require_manifest_fields`, `require_score_artifact`,
+`require_generation_complete`).
 
 ### 1.6 `final_eval_heldout` access rule — FROZEN
 

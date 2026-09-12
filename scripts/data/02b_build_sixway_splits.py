@@ -70,6 +70,10 @@ def partition_patients(
 ) -> dict[str, set[str]]:
     """Six direct partitions from ONE shuffle of ONE deterministically ordered patient list.
 
+    SUPERSEDED IN main(): multilabel_partition_patients() is used instead, because unstratified
+    assignment left rare labels short of the frozen 50-negative-patient support rule (§1.3).
+    Retained (and unit-tested) as the unstratified reference this project measures against.
+
     Sorting before shuffling is what makes this reproducible regardless of the row order the source
     CSV happens to arrive in. Remainder patients (from rounding) go to the largest split so the
     partition is exact rather than dropping anyone.

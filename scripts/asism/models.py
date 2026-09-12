@@ -118,6 +118,11 @@ class AdaptiveThresholdNetwork(nn.Module):
 
 
 def soft_selection_gate(scores: torch.Tensor, thresholds: torch.Tensor, temperature: float) -> torch.Tensor:
+    """Differentiable relaxation of thresholding, for a future end-to-end-trained selector.
+
+    NOT ON THE CURRENT PATH: 06/08b threshold hard, so nothing in the pipeline calls this.
+    Retained (and unit-tested) as the entry point an end-to-end variant would need.
+    """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
     return torch.sigmoid((scores - thresholds) / temperature)

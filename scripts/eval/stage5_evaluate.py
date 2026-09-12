@@ -27,7 +27,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import tempfile
@@ -50,14 +49,6 @@ from scripts.utils.splits import (  # noqa: E402
     split_provenance,
 )
 from scripts.utils.artifact_contracts import current_code_identity_hash, stage3_paths, stage4_paths  # noqa: E402
-
-
-def file_hash(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()[:16]
 
 
 def require_smoke_final_eval_authorization(namespace: str, manifest: dict, project_root: Path) -> dict:

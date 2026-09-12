@@ -454,6 +454,10 @@ def duplicate_clusters(
 ) -> list[list[int]]:
     """Group near-identical within-class images into clusters (single-linkage, union-find).
 
+    NOT ON THE CURRENT PATH: selection rejects near-duplicates individually via the
+    similarity_top1 >= near_duplicate_similarity flag, so no caller needs the clusters yet.
+    Retained (and unit-tested) for the cluster-level de-duplication ablation.
+
     Exists because a per-image score cannot break a tie inside a duplicate cluster: three
     near-identical images receive three near-identical scores, so any threshold either admits all
     three or rejects all three. Keeping exactly one representative is a set-level decision, and it

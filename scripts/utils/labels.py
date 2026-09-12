@@ -63,9 +63,6 @@ PRIMARY_ENDPOINT_LABELS: list[str] = [
     if column not in (NO_FINDING_COLUMN, DEVICE_COLUMN, *INSUFFICIENT_SUPPORT_LABELS)
 ]
 
-# Reported, but never part of the primary macro-average.
-SECONDARY_LABELS: list[str] = [NO_FINDING_COLUMN, DEVICE_COLUMN, *INSUFFICIENT_SUPPORT_LABELS]
-
 # Every disease label worth intentionally synthesizing in Stage 2, whether or not it currently has
 # enough REAL-data patient support to be scored as a primary endpoint (module docstring).
 GENERATION_TARGET_LABELS: list[str] = [*PRIMARY_ENDPOINT_LABELS, *INSUFFICIENT_SUPPORT_LABELS]
