@@ -394,7 +394,11 @@ class LoraEMA:
             raise ValueError("EMA checkpoint has no num_updates, so the warmup schedule cannot resume")
         self.decay = float(state["decay"])
         self.num_updates = int(state.get("num_updates", 0))
-        self.shadow = {name: value.float() for name, value in state["shadow"].items()}
+        # state_dict() saves the shadow on CPU; keep each tensor on the device its live counterpart
+        # is on, or the first update after a resume adds CUDA params to CPU shadows and crashes.
+        self.shadow = {
+            name: value.float().to(self.shadow[name].device) for name, value in state["shadow"].items()
+        }
 
 
 # --------------------------------------------------------------------------------------

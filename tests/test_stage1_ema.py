@@ -95,6 +95,18 @@ def test_resume_matches_uninterrupted_run():
     assert torch.allclose(resumed.shadow["lora_B"], uninterrupted.shadow["lora_B"], atol=1e-6)
 
 
+def test_resume_keeps_shadow_on_the_live_device():
+    """state_dict() saves on CPU; a resumed shadow must return to the params' device (CUDA in
+    training). The meta device stands in for CUDA so this runs without a GPU."""
+    state = LoraEMA(TinyAdapter(), decay=0.9999, warmup=True).state_dict()
+    assert state["shadow"]["lora_B"].device.type == "cpu"
+
+    ema = LoraEMA(TinyAdapter(), decay=0.9999, warmup=True)
+    ema.shadow = {name: value.to("meta") for name, value in ema.shadow.items()}
+    ema.load_state_dict(state)
+    assert ema.shadow["lora_B"].device.type == "meta"
+
+
 def test_resume_refuses_legacy_state_without_num_updates():
     legacy = {"decay": 0.9999, "shadow": {"lora_B": torch.zeros(4)}}
     ema = LoraEMA(TinyAdapter(), decay=0.9999, warmup=True)
