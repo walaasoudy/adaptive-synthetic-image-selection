@@ -333,22 +333,40 @@ class CachedSDXLDataset(Dataset):
 
 class LoraEMA:
     """EMA over the UNet's LoRA parameters only (docs/stage1_plan.md §8: cheap since LoRA
-    weights are small; base/frozen weights are never touched)."""
+    weights are small; base/frozen weights are never touched).
 
-    def __init__(self, unet, decay: float):
+    With warmup the decay follows diffusers' EMAModel schedule, min(decay, (1 + k) / (10 + k))
+    for the k-th update after the first (which copies the weights). Without it, a fixed 0.9999
+    started from the zero-initialised (no-op) LoRA keeps 0.9999**n of that init in the shadow:
+    ~82% after 2,000 steps and ~22% after 15,000, so the exported final LoRA is badly diluted."""
+
+    def __init__(self, unet, decay: float, warmup: bool = True):
         self.decay = decay
+        self.warmup = warmup
+        self.num_updates = 0
         self.shadow = {
             name: param.detach().clone().float()
             for name, param in unet.named_parameters()
             if param.requires_grad
         }
 
+    def current_decay(self) -> float:
+        """Decay used by the most recent update (num_updates counts updates already applied)."""
+        if not self.warmup:
+            return self.decay
+        step = self.num_updates - 1
+        if step <= 0:
+            return 0.0
+        return min(self.decay, (1 + step) / (10 + step))
+
     @torch.no_grad()
     def update(self, unet) -> None:
+        self.num_updates += 1
+        decay = self.current_decay()
         for name, param in unet.named_parameters():
             if not param.requires_grad:
                 continue
-            self.shadow[name].mul_(self.decay).add_(param.detach().float(), alpha=1 - self.decay)
+            self.shadow[name].mul_(decay).add_(param.detach().float(), alpha=1 - decay)
 
     @torch.no_grad()
     def copy_to(self, unet) -> None:
@@ -357,12 +375,25 @@ class LoraEMA:
                 param.data.copy_(self.shadow[name].to(param.dtype))
 
     def state_dict(self) -> dict:
-        return {"decay": self.decay, "shadow": {k: v.cpu() for k, v in self.shadow.items()}}
+        return {
+            "decay": self.decay,
+            "warmup": self.warmup,
+            "num_updates": self.num_updates,
+            "shadow": {k: v.cpu() for k, v in self.shadow.items()},
+        }
 
     def load_state_dict(self, state: dict) -> None:
-        self.decay = float(state["decay"])
         if set(state["shadow"]) != set(self.shadow):
             raise ValueError("EMA checkpoint parameters do not match the current LoRA adapter")
+        if bool(state.get("warmup", False)) != self.warmup:
+            raise ValueError(
+                f"EMA checkpoint warmup={state.get('warmup', False)} differs from the configured "
+                f"training.ema.warmup={self.warmup}; refusing to resume with a different EMA schedule"
+            )
+        if self.warmup and "num_updates" not in state:
+            raise ValueError("EMA checkpoint has no num_updates, so the warmup schedule cannot resume")
+        self.decay = float(state["decay"])
+        self.num_updates = int(state.get("num_updates", 0))
         self.shadow = {name: value.float() for name, value in state["shadow"].items()}
 
 
@@ -664,7 +695,10 @@ def main() -> int:
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)
 
-    ema = LoraEMA(accelerator.unwrap_model(unet), cfg.training.ema.decay) if cfg.training.ema.enabled else None
+    ema = (
+        LoraEMA(accelerator.unwrap_model(unet), cfg.training.ema.decay, warmup=bool(cfg.training.ema.warmup))
+        if cfg.training.ema.enabled else None
+    )
     if ema is not None:
         accelerator.register_for_checkpointing(ema)
 
