@@ -21,6 +21,9 @@ Run from the repository root, after prepare_data has finished:
     modal run cloud/modal_clahe_experiment.py::smoke                 # 20 steps, 256 images, <$0.10
     modal run --detach cloud/modal_clahe_experiment.py::experiment   # 6 runs + analysis, ~$2-2.5
     modal run cloud/modal_clahe_experiment.py::analyze               # re-print the report
+
+Unattended (laptop closed): wait for prepare_data, smoke, then the full experiment if it passed:
+    modal run --detach cloud/modal_clahe_experiment.py::after_prepare_data
 """
 
 from __future__ import annotations
@@ -262,6 +265,37 @@ def experiment(max_steps: int = 3000, tag: str = "clahe_v1") -> dict:
     for result in results:
         print(result, flush=True)
     return analyze.remote(tag)
+
+
+@app.function(image=image, volumes={VOL_MOUNT: volume}, cpu=0.25, memory=1024, timeout=10 * 3600)
+def after_prepare_data(max_wait_minutes: int = 180, max_steps: int = 3000, tag: str = "clahe_v1") -> dict:
+    """Unattended chain for when nobody is at the laptop: wait for prepare_data's final volume
+    commit, run the smoke, and launch the full experiment only if the smoke passed."""
+    import time
+
+    captions = PROJECT_ROOT / "data" / "chexpert" / "processed" / "captions" / NAMESPACE / "gen_val_captions.jsonl"
+    auxiliary = PROJECT_ROOT / "checkpoints" / "auxiliary_classifier"
+    deadline = time.time() + max_wait_minutes * 60
+    while True:
+        volume.reload()   # only committed state is visible; the captions file is committed last
+        if captions.is_file():
+            break
+        if time.time() > deadline:
+            raise SystemExit(f"prepare_data did not finish within {max_wait_minutes} min; nothing launched")
+        print("waiting for prepare_data to commit ...", flush=True)
+        time.sleep(120)
+    auxiliary_before = auxiliary.exists()
+
+    print("prepare_data is committed; running the CLAHE smoke", flush=True)
+    smoke_result = run_arm.remote("clahe", 42, max_steps=20, max_samples=256, tag="clahe_smoke")
+    volume.reload()
+    predictions = EXPERIMENTS / "clahe_smoke" / "clahe_seed42" / "gen_val_predictions.npz"
+    if not predictions.is_file():
+        raise SystemExit(f"SMOKE FAILED: {predictions} was not written; full experiment NOT launched")
+    if auxiliary.exists() and not auxiliary_before:
+        raise SystemExit(f"SMOKE FAILED: something was written to {auxiliary}; full experiment NOT launched")
+    print(f"SMOKE PASSED: {smoke_result}; launching the full experiment", flush=True)
+    return experiment.remote(max_steps=max_steps, tag=tag)
 
 
 @app.local_entrypoint()
