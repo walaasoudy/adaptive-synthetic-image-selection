@@ -97,27 +97,34 @@ def compute_clip_score(generated_paths: list[Path], prompts: list[str], device: 
     return float(score.item())
 
 
+def real_reference_dir(cfg, namespace: str) -> Path:
+    """gen_val as written by 03_preprocess_images.py: <images_dir>/<namespace>/gen_val."""
+    return Path(cfg.paths.images_dir) / namespace / "gen_val"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--generated-dir", type=str, required=True, help="Directory with probe_manifest.json (from generate_probe_samples.py)")
     parser.add_argument("--num-real-reference", type=int, default=200)
+    parser.add_argument("--namespace", default=None, help="Split namespace of the real gen_val images (default: split.namespace)")
     args = parser.parse_args()
 
     cfg = load_stage1_config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    namespace = args.namespace or str(cfg.split.namespace)
 
     generated_dir = Path(args.generated_dir)
     manifest = read_json(generated_dir / "probe_manifest.json")
     generated_paths = [Path(r["image_path"]) for r in manifest["records"]]
     prompts = [r["prompt"] for r in manifest["records"]]
 
-    val_images_dir = Path(cfg.paths.images_dir) / "gen_val"
+    val_images_dir = real_reference_dir(cfg, namespace)
     real_paths = sorted(val_images_dir.glob("*.jpg"))[: args.num_real_reference]
     if not real_paths:
         print(f"No real reference images found under {val_images_dir} — run the preprocessing pipeline first.")
         return 1
 
-    results = {"generated_dir": str(generated_dir), "num_real_reference": len(real_paths)}
+    results = {"generated_dir": str(generated_dir), "split_namespace": namespace, "num_real_reference": len(real_paths)}
 
     if cfg.validation.clip_score:
         results["clip_score"] = compute_clip_score(generated_paths, prompts, device)
