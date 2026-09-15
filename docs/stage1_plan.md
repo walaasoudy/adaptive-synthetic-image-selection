@@ -235,7 +235,14 @@ neither asserted present nor absent).**
   forward passes from the training hot loop, trading ~15–20GB disk for faster steps and lower peak
   memory.
 - **EMA:** enabled on LoRA adapter weights only (decay ~0.9999) — cheap since LoRA weights are
-  small; treated as an ablation toggle, not fixed.
+  small; treated as an ablation toggle, not fixed. **Warmup is on** (`training.ema.warmup`): the
+  decay at update k is `min(0.9999, (1+k)/(10+k))`, diffusers' `EMAModel` schedule. A fixed 0.9999
+  from step 1 averages in the zero-initialised LoRA, which does nothing: `0.9999**n` of that no-op
+  init survives in the shadow (~82% at 2,000 steps, ~22% at 15,000), and the exported `final/`
+  LoRA is the shadow. With warmup the shadow tracks roughly the last 10% of steps instead (at
+  15,000 steps the decay is ~0.9994, so the 0.9999 cap is not reached within the planned budget).
+  The update count is saved with the EMA state; resume refuses a checkpoint whose EMA schedule
+  differs from the config. Tested in `tests/test_stage1_ema.py`.
 - **Duration:** step-based, not epoch-based (gen_train is 100k+ images even after frontal-only
   filtering). Initial budget ~15,000–30,000 steps; actual stop point driven by val loss plateau +
   stable qualitative probes (§9), not a pre-decided epoch count.

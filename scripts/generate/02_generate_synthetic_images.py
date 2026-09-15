@@ -193,8 +193,9 @@ def build_pipeline(config, stage1_cfg):
     )
     pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
     pipeline.load_lora_weights(str(lora_path))
-    if torch.cuda.is_available():
-        pipeline = pipeline.to(device="cuda", dtype=dtype)
+    # Cast on CPU too: from_pretrained(torch_dtype=float32) leaves text_encoder_2 in float16 at the
+    # pinned revision, which fails at inference with Half != float.
+    pipeline = pipeline.to(device="cuda" if torch.cuda.is_available() else "cpu", dtype=dtype)
     pipeline.set_progress_bar_config(disable=True)
     return pipeline
 
