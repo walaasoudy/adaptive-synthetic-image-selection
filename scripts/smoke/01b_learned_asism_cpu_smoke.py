@@ -63,15 +63,10 @@ def build_fixture(workspace: Path, env: dict[str, str]) -> None:
     stage3_cfg = load_named_config("stage3_asism.yaml", "stage3")
     s2_paths = stage2_paths(stage2_cfg, NAMESPACE)
     s3_paths = stage3_paths(stage3_cfg, NAMESPACE)
-    # Mirror EXACTLY the config mutation every 0x_*.py script applies before computing provenance
-    # (namespace-resolved absolute paths written back onto cfg.paths, split_namespace pinned) — the
-    # provenance hash below must match what those scripts independently recompute in their own
-    # subprocess, and config_sha256() hashes the WHOLE resolved config, so any unmirrored mutation
-    # here silently produces a different hash and a "Stale/incompatible" false-positive rejection.
-    for key, value in s3_paths.items():
-        if key in stage3_cfg.paths:
-            stage3_cfg.paths[key] = str(value)
-    stage3_cfg.split_namespace = NAMESPACE
+    # stage3_cfg stays exactly as loaded: 01_compute_signals.py and candidate_pool.py both hash the
+    # PRISTINE config (never one with namespace paths written back onto cfg.paths), and
+    # config_sha256() hashes the WHOLE resolved config, so any mutation here produces a different
+    # hash and a "Stale/incompatible" rejection at 04.
     s2_paths["root"].mkdir(parents=True, exist_ok=True)
     s3_paths["scores_dir"].mkdir(parents=True, exist_ok=True)
     s3_paths["asism_dir"].mkdir(parents=True, exist_ok=True)
