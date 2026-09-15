@@ -240,6 +240,8 @@ def full_metric_suite(
             if micro_scores else float("nan")
         ),
         "macro_f1_primary": macro_over("f1", primary),
+        "macro_sensitivity_primary": macro_over("sensitivity", primary),
+        "macro_specificity_primary": macro_over("specificity", primary),
         "mean_brier_primary": macro_over("brier", primary),
         "mean_ece_primary": macro_over("ece", primary),
         "primary_labels": primary,
