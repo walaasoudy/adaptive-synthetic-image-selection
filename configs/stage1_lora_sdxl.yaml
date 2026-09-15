@@ -133,6 +133,12 @@ checkpointing:
 
 validation:
   val_every_n_steps: 1000
+  # Validation loss is a monitoring signal only (checkpoint choice uses probe samples + FID), so it
+  # runs on a fixed seeded subset of gen_val instead of all of it: the full-cohort gen_val is ~19k
+  # images, ~35 min per pass on an A40 and ~17 GPU-hours over 30k steps. null = all of gen_val.
+  max_val_samples: 1000
+  val_seed: 2024            # fixes the subset draw AND each pass's latent/noise/timestep draws, so
+                            # val loss is comparable across steps; training RNG is left untouched
   probe_seed: 123
   fid:
     inception: true
