@@ -18,8 +18,8 @@ bug in this script — it is what "no production evidence yet" is supposed to lo
 
 Full-policy verification (after per-class thresholds are combined across all 11 diseases) is
 PLANNED here (plan_full_policy_verification) but never executed — see
-08b_verify_full_policy_proxy.py, which has its own independent compute budget and the same
-fail-closed --i-understand-this-trains-real-models guard as 07b.
+08b_verify_full_policy_proxy.py, which has the same fail-closed
+--i-understand-this-trains-real-models guard as 07b.
 """
 from __future__ import annotations
 
@@ -143,8 +143,8 @@ def save_checkpoint(model, path: Path, path_label: str, tn_cfg, context_dim: int
 
 def plan_full_policy_verification(per_class_official_method: dict[str, str], full_policy_cfg) -> dict:
     """PLAN ONLY — no execution. Which full-policy variants would need proxy verification once
-    thresholds are combined across all 11 diseases, and the independent GPU-hour cost of doing so.
-    Actual execution is a separate, fail-closed step: 08b_verify_full_policy_proxy.py --phase run."""
+    thresholds are combined across all 11 diseases, and how many proxy runs that is (no GPU-hour
+    cap). Actual execution is a separate, fail-closed step: 08b_verify_full_policy_proxy.py --phase run."""
     variants = sorted(
         {
             "fixed_target_ratio_threshold_distillation_baseline_v1",
@@ -154,23 +154,14 @@ def plan_full_policy_verification(per_class_official_method: dict[str, str], ful
         | set(per_class_official_method.values())
     )
     n_seeds = int(full_policy_cfg.n_seeds)
-    n_runs = len(variants) * n_seeds
-    budget = full_policy_cfg.compute_budget
-    hours_each = float(budget.hours_per_proxy_run_estimate)
-    estimated_hours = n_runs * hours_each
-    max_hours = float(budget.max_gpu_hours)
     return {
         "status": "plan_only_not_executed",
         "policy_variants": variants,
         "n_seeds": n_seeds,
-        "estimated_runs": n_runs,
-        "hours_per_proxy_run_estimate": hours_each,
-        "estimated_gpu_hours": round(estimated_hours, 3),
-        "max_gpu_hours": max_hours,
-        "within_budget": bool(estimated_hours <= max_hours),
+        "estimated_runs": len(variants) * n_seeds,
         "next_step": (
             "python scripts/asism/08b_verify_full_policy_proxy.py --phase run "
-            "--i-understand-this-trains-real-models (only after independent budget sign-off)"
+            "--i-understand-this-trains-real-models"
         ),
     }
 
@@ -359,8 +350,7 @@ def main() -> int:
     print(f"Official path trained: {official_trained} (eligible classes: {sorted(eligible_classes)})")
     print(f"Per-class official method: {per_class_official_method}")
     print(f"hard_proxy_best_thresholds: {hard_proxy_best_thresholds}")
-    print(f"Full-policy verification plan (NOT executed): {full_policy_plan['estimated_runs']} runs, "
-          f"{full_policy_plan['estimated_gpu_hours']}h, within_budget={full_policy_plan['within_budget']}")
+    print(f"Full-policy verification plan (NOT executed): {full_policy_plan['estimated_runs']} runs")
     print(f"-> {cfg.paths.adaptive_threshold_manifest}")
     return 0
 

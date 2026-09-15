@@ -170,11 +170,8 @@ tuning:
     pretrained_source: "imagenet"
   # Compute-budget gate: if the pre-execution estimate exceeds this, the search space must be
   # reduced BEFORE any results are seen — never adjusted afterward.
-  # UNUSED: this gate belongs to 03_tune_freeze_select.py only. The learned pipeline's GPU
-  # gates are learned_asism.compute_budget (04b),
-  # learned_asism.threshold_network.verification_compute_budget (07b), and
-  # learned_asism.threshold_network.full_policy_verification.compute_budget (08b) — none of
-  # which is ever summed with this one.
+  # UNUSED: this gate belongs to 03_tune_freeze_select.py only (kept so that historical script and
+  # its tests still run). The learned pipeline (04b, 07b, 08b) has no GPU-hour gate.
   compute_budget:
     max_gpu_hours: 8.0
     hours_per_proxy_run_estimate: 0.15
@@ -297,14 +294,11 @@ learned_asism:
     # baseline's own ~50%-of-pool operating point.
     top_k_per_context: 2
     verification_quantile_fractions: [0.10, 0.30, 0.50, 0.70, 0.90]
-    verification_compute_budget:
-      max_gpu_hours: 20.0
-      hours_per_proxy_run_estimate: 0.15
     # Full-policy verification (08's plan_full_policy_verification): PLAN ONLY. Trains the ACTUAL
     # final multi-label selected_manifest for each candidate policy (fixed-ratio-baseline,
-    # hard-proxy-best, network-where-eligible, ...) — its OWN independent GPU budget, separate from
-    # verification_compute_budget above, because it is a distinct, separately-approved production
-    # execution step (08b_verify_full_policy_proxy.py --phase run, not run in this pass).
+    # hard-proxy-best, network-where-eligible, ...) — a distinct production execution step
+    # (08b_verify_full_policy_proxy.py --phase run), never summed with 07b's verification runs.
+    # No GPU-hour cap applies to either.
     # n_variants/n_seeds are provisional until 08 has run and the real number of policy variants is
     # known.
     # Training-free FreeMatch-style class-adaptive percentile threshold
@@ -320,9 +314,6 @@ learned_asism:
     full_policy_verification:
       n_variants: 5
       n_seeds: 3
-      compute_budget:
-        max_gpu_hours: 10.0
-        hours_per_proxy_run_estimate: 0.15
       finalization:
         tie_noise_band: 0.002
         simplicity_order:
@@ -347,9 +338,5 @@ learned_asism:
   safety:
     reject_invalid_iqa: true
     reject_near_duplicates: true
-  # Compute-budget gate for 04b_evaluate_utility_subsets.py, mirroring tuning.compute_budget above
-  # but scoped independently: this search evaluates subset_design.total_subsets recipes, not the
-  # weighted baseline's coarse/shortlist trial count.
-  compute_budget:
-    max_gpu_hours: 20.0
-    hours_per_proxy_run_estimate: 0.15
+  # The learned pipeline (04b, 07b, 08b) has no GPU-hour caps: every step runs the search size fixed
+  # above (subset_design, threshold_network, full_policy_verification) before any result is seen.

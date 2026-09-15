@@ -101,18 +101,9 @@ def main() -> int:
             list(design.subset_sizes), int(design.quantile_bins), val_fraction, int(design.seed),
             int(design.total_subsets), thresholds,
         )
-        # Compute-budget failure is evaluated here too so --phase build can gate on ONE report,
-        # not re-derive it — reuses 04b's own estimator so the two scripts never disagree.
-        budget_module = _load_04b()
-        budget_estimate = budget_module.compute_budget_estimate(cfg, int(design.total_subsets))
-        if not budget_estimate["within_budget"]:
-            report["failures"].append(
-                f"compute estimate above cap: {budget_estimate['estimated_gpu_hours']}h > "
-                f"{budget_estimate['max_gpu_hours']}h for {budget_estimate['total_proxy_runs']} "
-                "proxy runs implied by subset_design.total_subsets"
-            )
-            report["passed"] = False
-        report["compute_budget_estimate"] = budget_estimate
+        # Recorded for information only (reuses 04b's own counter so the two scripts never
+        # disagree); the run count never fails feasibility.
+        report["proxy_run_count"] = _load_04b().proxy_run_count(int(design.total_subsets))
         report["config_hash"] = config_hash
         report["surviving_signals"] = sorted(surviving)
         report["active_feature_columns"] = columns

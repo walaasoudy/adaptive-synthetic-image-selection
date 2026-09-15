@@ -26,8 +26,8 @@ on thin evidence.
 not recorded before this code was written — implementation proceeded ahead of the sign-off this
 document itself required. Before treating the learned selector (Stage 4 condition C) as anything
 more than a candidate method for the thesis, get explicit supervisor confirmation of: (a) Option 1
-as the accepted target/claim, (b) the compute budget actually spent (`configs/stage3_asism.yaml` →
-`compute_budget`, `verification_compute_budget`, `full_policy_verification.compute_budget`), and (c)
+as the accepted target/claim, (b) the compute actually spent (the learned pipeline no longer has
+GPU-hour caps; report the proxy-run counts that 04b/07b/08b print and the GPU-hours measured), and (c)
 whether to add the matched-random control described in `docs/stages2_to_5_plan.md` §7.1 — without
 it, a C-over-B result cannot separate ASISM's ranking quality from the effect of using fewer
 synthetic images. This status update records what exists; it is not a substitute for that approval.

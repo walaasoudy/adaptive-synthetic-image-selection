@@ -621,20 +621,12 @@ def test_subset_design_config_hash_changes_with_relevant_fields_only():
     assert module.subset_design_config_hash(design_a) != module.subset_design_config_hash(design_c)
 
 
-def test_compute_budget_gate_raises_when_over_budget_and_passes_when_within():
+def test_04b_counts_runs_without_any_gpu_hour_gate():
     module = _load_script("04b_evaluate_utility_subsets.py")
-    cfg = OmegaConf.create({"learned_asism": {"compute_budget": {
-        "max_gpu_hours": 1.0, "hours_per_proxy_run_estimate": 0.15,
-    }}})
-
-    over_budget = module.compute_budget_estimate(cfg, n_recipes=100)
-    assert over_budget["within_budget"] is False
-    with pytest.raises(SystemExit):
-        module.enforce_compute_budget(cfg, n_recipes=100)
-
-    within_budget = module.compute_budget_estimate(cfg, n_recipes=2)
-    assert within_budget["within_budget"] is True
-    module.enforce_compute_budget(cfg, n_recipes=2)  # must not raise
+    count = module.proxy_run_count(n_recipes=1000)
+    assert count["total_proxy_runs"] == 1001  # 1 shared real-only baseline + 1 per recipe
+    assert not hasattr(module, "enforce_compute_budget")
+    assert "within_budget" not in count and "max_gpu_hours" not in count
 
 
 # ---------------------------------------------------------------------------
@@ -933,25 +925,25 @@ def test_07b_never_opens_threshold_candidate_evaluations_for_writing():
     assert 'open(measurements_path, "a"' in source
 
 
-def test_verification_compute_estimate_is_per_context_only_not_full_policy():
-    """07's budget must NOT include full-policy runs — that has its own independent budget in 08b."""
+def test_verification_run_count_is_per_context_only_not_full_policy():
+    """07's run count must NOT include full-policy runs — those are counted separately in 08b."""
     module = _load_script("07_build_threshold_contexts.py")
-    cfg = OmegaConf.create({"learned_asism": {"threshold_network": {
-        "verification_compute_budget": {"max_gpu_hours": 100.0, "hours_per_proxy_run_estimate": 0.1},
-    }}})
-    estimate = module.verification_compute_estimate(cfg, n_planned=10)
-    assert "n_planned_full_policy_runs" not in estimate
-    assert "total_planned_runs" not in estimate
-    assert estimate["n_planned_threshold_evaluations"] == 10
-    assert estimate["estimated_gpu_hours"] == pytest.approx(1.0)
+    count = module.verification_run_count(n_planned=10)
+    assert "n_planned_full_policy_runs" not in count
+    assert "total_planned_runs" not in count
+    assert count == {"n_planned_threshold_evaluations": 10}
 
 
-def test_plan_full_policy_verification_is_plan_only_with_independent_budget():
+def test_07b_counts_runs_without_any_gpu_hour_gate():
+    module = _load_script("07b_verify_thresholds_proxy.py")
+    count = module.proxy_run_count(n_planned=1100)
+    assert count["total_proxy_runs"] == 1101
+    assert not hasattr(module, "enforce_compute_budget")
+
+
+def test_plan_full_policy_verification_is_plan_only():
     module = _load_script("08_train_threshold_network.py")
-    full_policy_cfg = OmegaConf.create({
-        "n_seeds": 3,
-        "compute_budget": {"max_gpu_hours": 10.0, "hours_per_proxy_run_estimate": 0.15},
-    })
+    full_policy_cfg = OmegaConf.create({"n_seeds": 3})
     per_class_official_method = {"Edema": "adaptive_threshold_network", "Fracture": "hard_proxy_best_among_verified"}
     plan = module.plan_full_policy_verification(per_class_official_method, full_policy_cfg)
     assert "fixed_target_ratio_threshold_distillation_baseline_v1" in plan["policy_variants"]
@@ -960,25 +952,15 @@ def test_plan_full_policy_verification_is_plan_only_with_independent_budget():
     assert "adaptive_threshold_network" in plan["policy_variants"]
     assert plan["status"] == "plan_only_not_executed"
     assert plan["estimated_runs"] == len(plan["policy_variants"]) * 3
-    assert plan["estimated_gpu_hours"] == pytest.approx(plan["estimated_runs"] * 0.15)
+    assert "estimated_gpu_hours" not in plan and "within_budget" not in plan
     assert "08b_verify_full_policy_proxy.py" in plan["next_step"]
 
 
-def test_08b_compute_budget_is_independent_of_07b():
-    """08b's estimate must use full_policy_verification.compute_budget, a config block entirely
-    separate from 07b's verification_compute_budget."""
+def test_08b_counts_runs_without_any_gpu_hour_gate():
     module = _load_script("08b_verify_full_policy_proxy.py")
-    cfg = OmegaConf.create({"learned_asism": {"threshold_network": {"full_policy_verification": {
-        "compute_budget": {"max_gpu_hours": 1.0, "hours_per_proxy_run_estimate": 0.1},
-    }}}})
-    over_budget = module.compute_budget_estimate(cfg, n_variants=5, n_seeds=3)
-    assert over_budget["within_budget"] is False
-    with pytest.raises(SystemExit):
-        module.enforce_compute_budget(cfg, n_variants=5, n_seeds=3)
-
-    within_budget = module.compute_budget_estimate(cfg, n_variants=1, n_seeds=1)
-    assert within_budget["within_budget"] is True
-    module.enforce_compute_budget(cfg, n_variants=1, n_seeds=1)  # must not raise
+    count = module.proxy_run_count(n_variants=5, n_seeds=3)
+    assert count["total_runs"] == 16  # 1 shared real-only baseline + 5 variants x 3 seeds
+    assert not hasattr(module, "enforce_compute_budget")
 
 
 def test_08b_refuses_real_training_without_confirmation_flag(monkeypatch):

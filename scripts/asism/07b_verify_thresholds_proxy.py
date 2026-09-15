@@ -36,32 +36,12 @@ from scripts.utils.manifest import hash_dict, read_json  # noqa: E402
 from scripts.utils.splits import load_split  # noqa: E402
 
 
-def compute_budget_estimate(cfg, n_planned: int) -> dict:
-    budget = cfg.learned_asism.threshold_network.verification_compute_budget
-    hours_each = float(budget.hours_per_proxy_run_estimate)
-    total_runs = 1 + n_planned  # 1 shared real-only baseline + 1 run per planned evaluation
-    estimated_hours = total_runs * hours_each
-    max_hours = float(budget.max_gpu_hours)
+def proxy_run_count(n_planned: int) -> dict:
+    """How many proxy trainings --phase run performs. Informational only: there is no GPU-hour cap."""
     return {
-        "total_proxy_runs": total_runs,
-        "hours_per_proxy_run_estimate": hours_each,
-        "estimated_gpu_hours": round(estimated_hours, 3),
-        "max_gpu_hours": max_hours,
-        "within_budget": bool(estimated_hours <= max_hours),
+        "n_planned_evaluations": n_planned,
+        "total_proxy_runs": 1 + n_planned,  # 1 shared real-only baseline + 1 run per planned evaluation
     }
-
-
-def enforce_compute_budget(cfg, n_planned: int) -> dict:
-    estimate = compute_budget_estimate(cfg, n_planned)
-    if not estimate["within_budget"]:
-        raise SystemExit(
-            "COMPUTE BUDGET GATE: threshold proxy verification exceeds its declared budget.\n"
-            f"  estimated: {estimate['estimated_gpu_hours']}h ({estimate['total_proxy_runs']} runs "
-            f"x {estimate['hours_per_proxy_run_estimate']}h), budget: {estimate['max_gpu_hours']}h\n"
-            "Reduce learned_asism.threshold_network.top_k_per_context or "
-            "n_bootstrap_contexts_per_class and re-run 07_build_threshold_contexts.py."
-        )
-    return estimate
 
 
 def rebuild_hard_subset(context: dict, threshold: float, ranking_scores: dict[str, float], selected_count: int) -> list[str]:
@@ -124,11 +104,10 @@ def main() -> int:
     n_planned = len(plan["planned_evaluations"])
 
     if args.phase == "estimate":
-        estimate = compute_budget_estimate(cfg, n_planned)
-        print(json.dumps(estimate, indent=2))
-        return 0 if estimate["within_budget"] else 2
+        print(json.dumps(proxy_run_count(n_planned), indent=2))
+        return 0
 
-    enforce_compute_budget(cfg, n_planned)
+    print(f"{proxy_run_count(n_planned)['total_proxy_runs']} proxy runs planned", flush=True)
 
     contexts = {row["context_id"]: row for row in read_jsonl(Path(cfg.paths.threshold_contexts))}
     evaluations = read_jsonl(Path(cfg.paths.threshold_candidate_evaluations))  # read-only reference

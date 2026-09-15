@@ -20,38 +20,14 @@ from scripts.utils.manifest import hash_dict  # noqa: E402
 from scripts.utils.splits import load_split  # noqa: E402
 
 
-def compute_budget_estimate(cfg, n_recipes: int) -> dict:
-    """Pre-execution accounting, mirroring 03_tune_freeze_select.py's gate: must be computed and
-    checked BEFORE any proxy run, never reduced after seeing results."""
-    budget = cfg.learned_asism.compute_budget
-    hours_each = float(budget.hours_per_proxy_run_estimate)
-    total_runs = 1 + n_recipes  # 1 real-only baseline (shared across recipes) + 1 run per recipe
-    estimated_hours = total_runs * hours_each
-    max_hours = float(budget.max_gpu_hours)
+def proxy_run_count(n_recipes: int) -> dict:
+    """How many proxy trainings --phase run performs. Informational only: there is no GPU-hour cap.
+    The search size is fixed by subset_design.total_subsets before any result is seen."""
     return {
         "n_recipes": n_recipes,
-        "total_proxy_runs": total_runs,
-        "hours_per_proxy_run_estimate": hours_each,
-        "estimated_gpu_hours": round(estimated_hours, 3),
-        "max_gpu_hours": max_hours,
-        "within_budget": bool(estimated_hours <= max_hours),
+        "total_proxy_runs": 1 + n_recipes,
         "formula": "total = 1 (real-only baseline) + n_recipes",
     }
-
-
-def enforce_compute_budget(cfg, n_recipes: int) -> dict:
-    estimate = compute_budget_estimate(cfg, n_recipes)
-    if not estimate["within_budget"]:
-        raise SystemExit(
-            "COMPUTE BUDGET GATE: learned-ASISM utility-subset evaluation exceeds its declared budget.\n"
-            f"  estimated: {estimate['estimated_gpu_hours']} GPU-hours "
-            f"({estimate['total_proxy_runs']} proxy runs x {estimate['hours_per_proxy_run_estimate']}h)\n"
-            f"  budget:    {estimate['max_gpu_hours']} GPU-hours\n\n"
-            "Reduce learned_asism.subset_design.total_subsets in configs/stage3_asism.yaml (or pass "
-            "--limit) BEFORE running --phase run.\n"
-            "Reducing it after seeing results would let the outcome influence the search design."
-        )
-    return estimate
 
 
 def train_and_score(train_records, eval_records, cfg, seed, checkpoint, tag):
@@ -84,27 +60,17 @@ def main() -> int:
     for key, value in stage2_paths(stage2, namespace).items():
         if key in stage2.paths: stage2.paths[key] = str(value)
     if args.phase == "estimate":
-        # Budget must be checked BEFORE the subsets exist (docs/stages2_to_5_plan.md §4.7's rule:
-        # the search space is sized before any results are seen, never after). Uses the CONFIGURED
-        # total_subsets, not an actual utility_subsets.jsonl — that file need not exist yet.
+        # Uses the CONFIGURED total_subsets, not an actual utility_subsets.jsonl — that file need
+        # not exist yet.
         n_recipes = int(cfg.learned_asism.subset_design.total_subsets)
         if args.limit is not None:
             n_recipes = min(n_recipes, args.limit)
-        estimate = compute_budget_estimate(cfg, n_recipes)
-        print(json.dumps(estimate, indent=2), flush=True)
-        if not estimate["within_budget"]:
-            print(
-                "\nOVER BUDGET — reduce learned_asism.subset_design.total_subsets in "
-                "configs/stage3_asism.yaml (or pass --limit) before running --phase run.",
-                flush=True,
-            )
-            return 2
-        print("\nWithin budget. Proceed: --phase run", flush=True)
+        print(json.dumps(proxy_run_count(n_recipes), indent=2), flush=True)
         return 0
 
     recipes = read_jsonl(Path(cfg.paths.utility_subsets))
     if args.limit is not None: recipes = recipes[:args.limit]
-    enforce_compute_budget(cfg, len(recipes))
+    print(f"{proxy_run_count(len(recipes))['total_proxy_runs']} proxy runs planned", flush=True)
     output = Path(cfg.paths.utility_results); output.parent.mkdir(parents=True, exist_ok=True)
     completed = {(row["subset_id"], int(row["fold"]), int(row["seed"])) for row in read_jsonl(output)} if output.is_file() else set()
     stage1 = load_stage1_config(); image_root = Path(stage1.paths.images_dir) / namespace
