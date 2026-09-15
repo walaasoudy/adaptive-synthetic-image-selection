@@ -189,6 +189,22 @@ def test_split_fractions_sum_to_one():
     assert abs(total - 1.0) < 1e-9, f"frozen fractions must sum to 1.0, got {total}"
 
 
+def test_fid_real_reference_reads_the_namespaced_gen_val_preprocessing_writes():
+    import importlib.util
+    from scripts.utils.config import load_stage1_config
+
+    spec = importlib.util.spec_from_file_location("fid", REPO / "scripts" / "eval" / "compute_fid_clipscore.py")
+    fid = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fid)
+
+    cfg = load_stage1_config()
+    # 03_preprocess_images.py writes <images_dir>/<namespace>/<split>/; the old un-namespaced
+    # <images_dir>/gen_val never exists, so FID found no real reference images.
+    assert fid.real_reference_dir(cfg, "production-thesis-v1") == (
+        Path(cfg.paths.images_dir) / "production-thesis-v1" / "gen_val"
+    )
+
+
 def test_six_way_partition_is_exact_and_disjoint():
     import importlib.util
 
