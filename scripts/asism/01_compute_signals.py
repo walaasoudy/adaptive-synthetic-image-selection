@@ -210,8 +210,13 @@ def run_explainability(manifest, images_dir, config, provenance, scores_dir) -> 
     # Empirically derived expected regions (00c_derive_expected_regions.py) take precedence per
     # label over the hand-entered config boxes. Absent, the config boxes still apply -- so this is
     # an upgrade, not a new hard dependency.
+    #
+    # config.paths.asism_dir is never rewritten to a namespaced path here (config stays pristine so
+    # asism_config_sha256 above matches what every consumer recomputes from a freshly-loaded
+    # config) -- so the namespaced dir is derived via stage3_paths(), same as
+    # load_auxiliary_classifier() above already does with provenance["split_namespace"].
     derived_regions, regions_source = {}, "config_hand_entered"
-    regions_path = Path(config.paths.asism_dir) / "expected_regions.json"
+    regions_path = stage3_paths(config, provenance["split_namespace"])["asism_dir"] / "expected_regions.json"
     if regions_path.is_file():
         derived_payload = read_json(regions_path)
         derived_regions = dict(derived_payload.get("regions", {}))
