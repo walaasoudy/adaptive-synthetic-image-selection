@@ -135,13 +135,21 @@ and every test passes.
    python -u scripts/generate/02_generate_synthetic_images.py --mode full --namespace production-thesis-v1
    ```
 
-6. Auxiliary classifier and Stage 3 signals (GPU except generic IQA):
+6. Auxiliary classifier, derived explainability regions, and Stage 3 signals (GPU except generic IQA):
 
    ```bash
    python scripts/classify/00_train_auxiliary_classifier.py --namespace production-thesis-v1 --max-steps 8000
+   python scripts/asism/00c_derive_expected_regions.py --namespace production-thesis-v1
    python scripts/asism/01_compute_signals.py --signal all --namespace production-thesis-v1
    python scripts/asism/02_gonogo.py --namespace production-thesis-v1
    ```
+
+   `00c` measures, per pathology, where a classifier trained on REAL data actually attends
+   (Grad-CAM on gen_train positives), and writes `expected_regions.json`. The explainability signal
+   (`01`) prefers these measured regions over the hand-entered boxes in `stage3_asism.yaml` when the
+   file exists — running `00c` first means the primary explainability signal is empirically derived,
+   not just the config's prior. It refuses to overwrite an existing `expected_regions.json`, and it
+   depends only on the auxiliary classifier, not on `01`'s output, so it must run between them.
 
    STOP after Go/No-Go. Review which signals were admitted before continuing: the learned-ASISM
    feature set is derived from exactly those signals, and every stage below is frozen against them.

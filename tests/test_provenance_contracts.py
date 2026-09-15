@@ -173,6 +173,28 @@ def test_split_builder_initializes_out_dir_before_use():
     assert assignment < first_use < terminal
 
 
+def test_explainability_reads_the_namespaced_expected_regions_path():
+    """01_compute_signals.py's `config` is never rewritten with namespaced paths (it must stay
+    pristine so asism_config_sha256 matches every consumer's freshly-loaded hash), so
+    config.paths.asism_dir is always the un-namespaced default. run_explainability() must derive
+    the namespaced asism_dir via stage3_paths(), the same way it already does for the auxiliary
+    classifier checkpoint, or 00c_derive_expected_regions.py's output is silently never found."""
+    from scripts.utils.artifact_contracts import stage3_paths
+    from scripts.utils.config import load_named_config
+
+    config = load_named_config("stage3_asism.yaml", "stage3")
+    namespace = "production-thesis-v1"
+    assert namespace not in str(config.paths.asism_dir), (
+        "config.paths.asism_dir must stay pristine/un-namespaced in this script"
+    )
+    assert namespace in Path(stage3_paths(config, namespace)["asism_dir"]).parts
+
+    source = (REPO / "scripts/asism/01_compute_signals.py").read_text(encoding="utf-8")
+    body = source[source.index("def run_explainability") : source.index("def ", source.index("def run_explainability") + 1)]
+    assert "regions_path = Path(config.paths.asism_dir)" not in body
+    assert 'regions_path = stage3_paths(config, provenance["split_namespace"])["asism_dir"]' in body
+
+
 if __name__ == "__main__":
     import traceback
     tests = [(name, value) for name, value in sorted(globals().items()) if name.startswith("test_")]
