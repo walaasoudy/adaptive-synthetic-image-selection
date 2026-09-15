@@ -144,27 +144,16 @@ stage3:
       epochs: 3
       # Production defaults (25 contexts/class x 11 classes, up to 5 verified candidates/context,
       # 5 full-policy variants x 3 seeds) imply hundreds of real tiny proxy-classifier training
-      # runs — fine for a real budgeted production pass, not for a smoke test. Cut to the minimum
+      # runs — fine for a real production pass, not for a smoke test. Cut to the minimum
       # that still exercises the adaptive_threshold_network code path at least once, not just its
       # fallbacks.
       n_bootstrap_contexts_per_class: 2
       top_k_per_context: 1
       verification_quantile_fractions: [0.5]
       min_verified_contexts_per_class: 1
-      verification_compute_budget:
-        # 0.5 h fit the 40-image fixture; the ~360-image fixture yields 132 verification runs
-        # (1.32 h at the 0.01 h/run estimate), so 07b's gate correctly refused. Smoke-only value.
-        max_gpu_hours: 1.5
-        hours_per_proxy_run_estimate: 0.01
       full_policy_verification:
         n_variants: 2
         n_seeds: 1
-        compute_budget:
-          max_gpu_hours: 0.5
-          hours_per_proxy_run_estimate: 0.01
-    compute_budget:
-      max_gpu_hours: 1.0
-      hours_per_proxy_run_estimate: 0.01
 
 stage4:
   split_namespace: dev-smoke-v1

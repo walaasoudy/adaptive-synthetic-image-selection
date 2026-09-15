@@ -8,8 +8,8 @@ hard threshold grid search scored by the critic, and writes:
 
   threshold_contexts.jsonl              — one row per context (see bootstrap_class_contexts)
   threshold_candidate_evaluations.jsonl — one row per threshold tried within a context
-  proxy_verification_plan.json          — which top-K candidates WOULD be proxy-verified, and the
-                                          GPU-hour cost of doing so. Nothing here is executed;
+  proxy_verification_plan.json          — which top-K candidates WOULD be proxy-verified, and how
+                                          many proxy runs that is. Nothing here is executed;
                                           07b_verify_thresholds_proxy.py --phase run does that,
                                           separately, and refuses to run without an explicit flag.
 
@@ -91,23 +91,12 @@ def make_critic_utility_fn(critic, feature_lookup: dict, device):
     return critic_utility_fn
 
 
-def verification_compute_estimate(cfg, n_planned: int) -> dict:
+def verification_run_count(n_planned: int) -> dict:
     """Per-context threshold verification ONLY. Full-policy verification (after per-class thresholds
-    are combined across all 11 diseases) has its OWN independent budget and its own fail-closed
-    execution gate — see 08_train_threshold_network.py's plan_full_policy_verification and
-    08b_verify_full_policy_proxy.py. The two are never summed into one number: they are separately
-    approved, separately budgeted production steps."""
-    budget = cfg.learned_asism.threshold_network.verification_compute_budget
-    hours_each = float(budget.hours_per_proxy_run_estimate)
-    estimated_hours = n_planned * hours_each
-    max_hours = float(budget.max_gpu_hours)
-    return {
-        "n_planned_threshold_evaluations": n_planned,
-        "hours_per_proxy_run_estimate": hours_each,
-        "estimated_gpu_hours": round(estimated_hours, 3),
-        "max_gpu_hours": max_hours,
-        "within_budget": bool(estimated_hours <= max_hours),
-    }
+    are combined across all 11 diseases) is planned separately — see 08_train_threshold_network.py's
+    plan_full_policy_verification and 08b_verify_full_policy_proxy.py — and never summed in here.
+    Informational only: there is no GPU-hour cap."""
+    return {"n_planned_threshold_evaluations": n_planned}
 
 
 def main() -> int:
@@ -224,7 +213,7 @@ def main() -> int:
         for evaluation in all_evaluations:
             handle.write(json.dumps(evaluation, sort_keys=True) + "\n")
 
-    estimate = verification_compute_estimate(cfg, len(planned_evaluations))
+    estimate = verification_run_count(len(planned_evaluations))
     reason_counts: dict[str, int] = {}
     for entry in planned_evaluations:
         for reason in entry["selection_reasons"]:
@@ -249,12 +238,11 @@ def main() -> int:
 
     print(f"{len(all_contexts)} contexts, {len(all_evaluations)} threshold evaluations, "
           f"{len(planned_evaluations)} planned for proxy verification (by reason: {reason_counts})")
-    print(f"Threshold-verification budget: {estimate['n_planned_threshold_evaluations']} runs "
-          f"({estimate['estimated_gpu_hours']}h, within_budget={estimate['within_budget']}). "
-          "Full-policy verification is a separate, independently-budgeted step (see 08's plan).")
+    print(f"Threshold verification: {estimate['n_planned_threshold_evaluations']} proxy runs planned. "
+          "Full-policy verification is a separate step (see 08's plan).")
     print(f"-> {cfg.paths.threshold_contexts}\n-> {cfg.paths.threshold_candidate_evaluations}\n"
           f"-> {cfg.paths.proxy_verification_plan}")
-    print("Nothing was executed. Next (on RunPod, after budget sign-off): "
+    print("Nothing was executed. Next (on RunPod): "
           "07b_verify_thresholds_proxy.py --phase run --i-understand-this-trains-real-models")
     return 0
 

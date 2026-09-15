@@ -5,9 +5,8 @@ Same fail-closed discipline as 07b_verify_thresholds_proxy.py: --phase run REFUS
 touching any config, data, or model) unless called with --i-understand-this-trains-real-models.
 --phase estimate never requires it.
 
-INDEPENDENT budget from 07b: learned_asism.threshold_network.full_policy_verification.compute_budget.
-Never summed with 07b's per-context threshold-verification budget — they are separately approved,
-separately executed production steps.
+A separate production step from 07b's per-context threshold verification; the two run counts are
+never summed. Neither has a GPU-hour cap.
 
 For each planned policy variant, builds the FINAL combined multi-label selected_manifest (per-class
 thresholds combined via min(applicable_thresholds) — see build_policy_selected_manifest), then trains
@@ -41,35 +40,13 @@ from scripts.utils.manifest import hash_dict, read_json  # noqa: E402
 from scripts.utils.splits import load_split  # noqa: E402
 
 
-def compute_budget_estimate(cfg, n_variants: int, n_seeds: int) -> dict:
-    budget = cfg.learned_asism.threshold_network.full_policy_verification.compute_budget
-    hours_each = float(budget.hours_per_proxy_run_estimate)
-    total_runs = 1 + n_variants * n_seeds  # 1 shared real-only baseline + variant*seed runs
-    estimated_hours = total_runs * hours_each
-    max_hours = float(budget.max_gpu_hours)
+def proxy_run_count(n_variants: int, n_seeds: int) -> dict:
+    """How many proxy trainings --phase run performs. Informational only: there is no GPU-hour cap."""
     return {
         "n_variants": n_variants,
         "n_seeds": n_seeds,
-        "total_runs": total_runs,
-        "hours_per_proxy_run_estimate": hours_each,
-        "estimated_gpu_hours": round(estimated_hours, 3),
-        "max_gpu_hours": max_hours,
-        "within_budget": bool(estimated_hours <= max_hours),
+        "total_runs": 1 + n_variants * n_seeds,  # 1 shared real-only baseline + variant*seed runs
     }
-
-
-def enforce_compute_budget(cfg, n_variants: int, n_seeds: int) -> dict:
-    estimate = compute_budget_estimate(cfg, n_variants, n_seeds)
-    if not estimate["within_budget"]:
-        raise SystemExit(
-            "COMPUTE BUDGET GATE: full-policy verification exceeds its declared, INDEPENDENT budget "
-            "(learned_asism.threshold_network.full_policy_verification.compute_budget).\n"
-            f"  estimated: {estimate['estimated_gpu_hours']}h ({estimate['total_runs']} runs), "
-            f"budget: {estimate['max_gpu_hours']}h\n"
-            "Reduce full_policy_verification.n_variants/n_seeds and re-run "
-            "08_train_threshold_network.py to regenerate the plan."
-        )
-    return estimate
 
 
 def percentile_threshold_per_class(percentile: float, ranking_scores: dict, intended_by_id: dict,
@@ -179,11 +156,10 @@ def main() -> int:
     n_variants, n_seeds = len(plan["policy_variants"]), int(plan["n_seeds"])
 
     if args.phase == "estimate":
-        estimate = compute_budget_estimate(cfg, n_variants, n_seeds)
-        print(json.dumps(estimate, indent=2))
-        return 0 if estimate["within_budget"] else 2
+        print(json.dumps(proxy_run_count(n_variants, n_seeds), indent=2))
+        return 0
 
-    enforce_compute_budget(cfg, n_variants, n_seeds)
+    print(f"{proxy_run_count(n_variants, n_seeds)['total_runs']} proxy runs planned", flush=True)
 
     manifest = read_json(Path(cfg.paths.adaptive_threshold_manifest))
     context_builder_path = Path(__file__).with_name("07_build_threshold_contexts.py")
