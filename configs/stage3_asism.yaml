@@ -41,7 +41,7 @@ paths:
   full_policy_verification_plan: ${paths.synthetic_root}/asism/learned/full_policy_verification_plan.json
   full_policy_verification_results: ${paths.synthetic_root}/asism/learned/full_policy_verification_results.jsonl
 
-split_namespace: "dev-smoke-v1"
+split_namespace: "production-thesis-v1"  # the smoke overlay sets dev-smoke-v1
 
 auxiliary_classifier:
   checkpoint_path: ${paths.project_root}/checkpoints/auxiliary_classifier/auxiliary_classifier.pt

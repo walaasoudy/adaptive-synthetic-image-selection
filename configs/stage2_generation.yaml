@@ -14,7 +14,7 @@ paths:
   pilot_dir: ${paths.synthetic_root}/pilot
   pilot_approval_manifest: ${paths.synthetic_root}/pilot/pilot_approval_manifest.json
 
-split_namespace: "dev-smoke-v1"  # immutable run ID; production IDs use production-<version>
+split_namespace: "production-thesis-v1"  # immutable run ID; the smoke overlay sets dev-smoke-v1
 
 checkpoint:
   # Explicit LoRA checkpoint — NOT "latest". Generation must be reproducible and decoupled from
