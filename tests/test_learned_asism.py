@@ -1539,3 +1539,51 @@ def test_learned_stage_uses_cli_namespace_not_config_default(script, monkeypatch
     assert config_default != requested, "test needs a namespace different from the YAML default"
     assert str(captured["cfg"].split_namespace) == requested
     assert Path(captured["cfg"].paths.scores_dir).parts[-2] == requested
+
+
+# ---------------------------------------------------------------------------
+# Technical safety gate in load_candidate_pool (applies to every learned stage 04-09)
+# ---------------------------------------------------------------------------
+
+def test_safety_gate_rejects_invalid_iqa_and_near_duplicates():
+    from scripts.asism.candidate_pool import unsafe_candidates
+
+    ids = ["clean", "bad_iqa", "memorized", "both"]
+    iqa = pd.DataFrame({"image_id": ids, "iqa_valid": [True, False, True, False]})
+    similarity = pd.DataFrame({"image_id": ids, "novelty_is_near_duplicate": [False, False, True, True]})
+    assert unsafe_candidates(ids, iqa, similarity) == {
+        "bad_iqa": "invalid_iqa_safety_gate",
+        "memorized": "near_duplicate_safety_gate",
+        "both": "invalid_iqa_safety_gate",
+    }
+
+
+def test_safety_gate_fails_closed_on_missing_rows_and_values():
+    from scripts.asism.candidate_pool import unsafe_candidates
+
+    ids = ["scored", "no_iqa_row", "no_similarity_row", "nan_duplicate"]
+    iqa = pd.DataFrame({"image_id": ["scored", "no_similarity_row", "nan_duplicate"], "iqa_valid": [True, True, True]})
+    similarity = pd.DataFrame({"image_id": ["scored", "no_iqa_row", "nan_duplicate"],
+                               "novelty_is_near_duplicate": [False, False, None]})
+    assert unsafe_candidates(ids, iqa, similarity) == {
+        "no_iqa_row": "invalid_iqa_safety_gate",
+        "no_similarity_row": "near_duplicate_safety_gate",
+        "nan_duplicate": "near_duplicate_safety_gate",
+    }
+
+
+def test_safety_gate_check_is_skipped_only_when_its_flag_is_off():
+    from scripts.asism.candidate_pool import unsafe_candidates
+
+    ids = ["a", "b"]
+    similarity = pd.DataFrame({"image_id": ids, "novelty_is_near_duplicate": [True, False]})
+    assert unsafe_candidates(ids, None, similarity) == {"a": "near_duplicate_safety_gate"}
+    assert unsafe_candidates(ids, None, None) == {}
+
+
+def test_safety_gate_does_not_depend_on_go_no_go_admission():
+    """The gate reads iqa/similarity artifacts itself; it must not look for columns in the merged
+    pool, which only holds signals that survived Go/No-Go."""
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "asism" / "candidate_pool.py").read_text(encoding="utf-8")
+    assert '_safety_frame(cfg, "iqa", "iqa_valid", expected)' in source
+    assert '_safety_frame(cfg, "similarity", "novelty_is_near_duplicate", expected)' in source

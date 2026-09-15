@@ -136,6 +136,10 @@ def build_fixture(workspace: Path, env: dict[str, str]) -> None:
     signal_frames["uncertainty"]["uncertainty_band"] = rng.choice(
         ["low", "moderate", "extreme"], size=N_CANDIDATES, p=[0.4, 0.45, 0.15]
     )
+    # Safety-gate columns load_candidate_pool() requires: a few invalid and memorized candidates so
+    # the smoke shows the gate removing images before 04.
+    signal_frames["iqa"]["iqa_valid"] = rng.random(N_CANDIDATES) >= 0.01
+    signal_frames["similarity"]["novelty_is_near_duplicate"] = rng.random(N_CANDIDATES) < 0.01
     for signal, signal_frame in signal_frames.items():
         write_score_artifact(
             signal_frame, s3_paths["scores_dir"] / f"{signal}_scores.parquet", signal, provenance
