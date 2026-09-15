@@ -183,13 +183,33 @@ def validate_training_inputs(cfg) -> None:
         raise ValueError(f"Caption/preprocessing provenance is stale or incompatible: {mismatches}. Rerun preprocessing and captions.")
 
 
-def build_or_load_cache(cfg, models, split_name: str, device: torch.device, max_samples: int | None = None):
+def select_subset_indices(n_records: int, max_samples: int | None, seed: int) -> list[int] | None:
+    """Sorted indices of a seeded random subset of `max_samples` records, or None for all of them.
+
+    Sorted so the subset keeps the caption file's order, and drawn with its own generator so the
+    choice depends only on (n_records, max_samples, seed), never on the global RNG state.
+    """
+    if max_samples is None or max_samples >= n_records:
+        return None
+    if max_samples < 1:
+        raise ValueError(f"max_val_samples must be positive or null, got {max_samples}")
+    generator = torch.Generator().manual_seed(seed)
+    return sorted(torch.randperm(n_records, generator=generator)[:max_samples].tolist())
+
+
+def build_or_load_cache(
+    cfg, models, split_name: str, device: torch.device, max_samples: int | None = None,
+    subset_size: int | None = None, subset_seed: int = 0,
+):
     """One-time VAE latent + text embedding cache per split (docs/stage1_plan.md §8).
 
     Latents are cached per image (as encoder-distribution moments, so a fresh sample is still
     drawn each epoch). Text embeddings are cached per unique caption string across all
     paraphrase variants of all images, since many images share the low-cardinality caption
     vocabulary.
+
+    `subset_size` keeps a seeded random subset of the records (see select_subset_indices) before
+    anything is encoded, so only that subset is cached; the cache key covers the kept image ids.
     """
     namespace = str(cfg.split.namespace)
     images_dir = Path(cfg.paths.images_dir) / namespace
@@ -201,6 +221,9 @@ def build_or_load_cache(cfg, models, split_name: str, device: torch.device, max_
         if max_samples < 1:
             raise ValueError("--max-samples-per-split must be positive")
         records = records[:max_samples]
+    subset = select_subset_indices(len(records), subset_size, subset_seed)
+    if subset is not None:
+        records = [records[i] for i in subset]
     if not records:
         raise FileNotFoundError(
             f"No caption records found at {captions_path} — run 03_preprocess_images.py and "
@@ -602,7 +625,10 @@ def main() -> int:
     models = build_models(cfg, weight_dtype)
 
     train_latent_cache, train_prompt_cache, train_records = build_or_load_cache(cfg, models, "gen_train", accelerator.device, args.max_samples_per_split)
-    val_latent_cache, val_prompt_cache, val_records = build_or_load_cache(cfg, models, "gen_val", accelerator.device, args.max_samples_per_split)
+    val_latent_cache, val_prompt_cache, val_records = build_or_load_cache(
+        cfg, models, "gen_val", accelerator.device, args.max_samples_per_split,
+        subset_size=cfg.validation.max_val_samples, subset_seed=int(cfg.validation.val_seed),
+    )
     # Training reads only the caches from here on; validation and the final export use the UNet
     # alone. Drop the VAE and both text encoders (~2 GB of host RAM) for the rest of the run.
     for frozen_only in ("vae", "text_encoder_one", "text_encoder_two"):
@@ -772,7 +798,7 @@ def main() -> int:
                     )
 
                 if global_step % cfg.validation.val_every_n_steps == 0:
-                    val_loss = run_validation(accelerator, unet, val_loader, noise_scheduler, weight_dtype)
+                    val_loss = run_validation(accelerator, unet, val_loader, noise_scheduler, weight_dtype, int(cfg.validation.val_seed))
                     if trackers:
                         accelerator.log({"val/loss": val_loss}, step=global_step)
                     print(f"[step {global_step}] val_loss={val_loss:.4f}")
@@ -813,7 +839,21 @@ def main() -> int:
 
 
 @torch.no_grad()
-def run_validation(accelerator, unet, val_loader, noise_scheduler, weight_dtype) -> float:
+def run_validation(accelerator, unet, val_loader, noise_scheduler, weight_dtype, seed: int) -> float:
+    """Mean noise-prediction loss over val_loader, identical draws on every call.
+
+    The latent samples (drawn in CachedSDXLDataset), noise and timesteps all come from the global
+    RNGs, so each pass reseeds them inside fork_rng: repeated passes see the same draws, and the
+    training RNG stream resumes exactly where it was, as if validation had never run.
+    """
+    device = accelerator.device
+    fork_devices = [device] if device.type == "cuda" else []
+    with torch.random.fork_rng(devices=fork_devices), torch.no_grad():
+        torch.manual_seed(seed)
+        return _validation_loss(accelerator, unet, val_loader, noise_scheduler, weight_dtype)
+
+
+def _validation_loss(accelerator, unet, val_loader, noise_scheduler, weight_dtype) -> float:
     unet.eval()
     total_loss = 0.0
     n_batches = 0
