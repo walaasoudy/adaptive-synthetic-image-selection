@@ -151,9 +151,10 @@ and every test passes.
    weighted-baseline condition to produce. The script is retained for reference only; do not run it.
 
 6b. Learned ASISM — set-utility model, ranking network, adaptive threshold network
-   (`docs/stages2_to_5_plan.md` §4.9). Each `--phase estimate` prints a GPU-hour estimate against
-   `configs/stage3_asism.yaml`'s compute-budget gates; `--phase run` is refused without the explicit
-   confirmation flag, so nothing here can accidentally launch paid GPU time:
+   (`docs/stages2_to_5_plan.md` §4.9). Each `--phase estimate` prints how many proxy runs the step
+   will train; there is no GPU-hour cap, so every step runs its full configured search. `--phase run`
+   of 07b/08b is still refused without the explicit confirmation flag, so nothing here can
+   accidentally launch paid GPU time:
 
    ```bash
    python scripts/asism/04_build_utility_subsets.py --phase feasibility --namespace production-thesis-v1
