@@ -321,6 +321,19 @@ def training_plan(stage4_cfg) -> dict:
     }
 
 
+def protocol_matches_existing(existing: dict, protocol: dict) -> bool:
+    """Whether a previously frozen protocol still matches, for resuming Stage 4 across sessions.
+
+    git_commit_hash is excluded: it changes on every commit, including a docs-only one landed
+    between two runs of the same multi-day, resumable Stage 4 protocol, and would otherwise refuse
+    a resume that changed nothing about the experiment. code_identity_sha256 (a hash of scripts/,
+    configs/ and environment/) is the actual guard against a methodology change — a doc edit does
+    not touch those trees, so it must not block a resume either way.
+    """
+    ignored = {"git_commit_hash"}
+    return {k: v for k, v in existing.items() if k not in ignored} == {k: v for k, v in protocol.items() if k not in ignored}
+
+
 def build_records(condition: str, draw_ids: list[str] | None, cfgs, namespace: str):
     from scripts.utils.classifier import records_from_split, records_from_synthetic_manifest
 
@@ -513,7 +526,7 @@ def main() -> int:
     protocol_path = Path(stage4_cfg.paths.protocol_manifest)
     if protocol_path.exists():
         existing = read_json(protocol_path)
-        if existing != protocol:
+        if not protocol_matches_existing(existing, protocol):
             raise SystemExit("Frozen experiment protocol already exists with different content; use a new versioned protocol/run ID")
     else:
         write_frozen_json(protocol_path, protocol)

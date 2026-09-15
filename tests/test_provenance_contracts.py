@@ -173,6 +173,36 @@ def test_split_builder_initializes_out_dir_before_use():
     assert assignment < first_use < terminal
 
 
+def _load_train_conditions():
+    spec = importlib.util.spec_from_file_location(
+        "train_conditions", REPO / "scripts" / "classify" / "01_train_conditions.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_stage4_protocol_resume_ignores_git_commit_hash():
+    """A docs-only commit landed mid-run must not block resuming Stage 4 (§9): only
+    git_commit_hash may differ between the frozen protocol and a freshly rebuilt one."""
+    module = _load_train_conditions()
+    frozen = {"stage": "stage4_frozen_protocol", "frozen": True, "git_commit_hash": "abc123",
+              "code_identity_sha256": "same", "seeds": [42, 43, 44]}
+    rebuilt_after_docs_commit = {**frozen, "git_commit_hash": "def456"}
+    assert module.protocol_matches_existing(frozen, rebuilt_after_docs_commit) is True
+
+
+def test_stage4_protocol_resume_still_refuses_a_real_methodology_change():
+    module = _load_train_conditions()
+    frozen = {"stage": "stage4_frozen_protocol", "frozen": True, "git_commit_hash": "abc123",
+              "code_identity_sha256": "same", "seeds": [42, 43, 44]}
+    changed_seeds = {**frozen, "git_commit_hash": "def456", "seeds": [42, 43, 44, 45]}
+    assert module.protocol_matches_existing(frozen, changed_seeds) is False
+
+    changed_code = {**frozen, "git_commit_hash": "def456", "code_identity_sha256": "different"}
+    assert module.protocol_matches_existing(frozen, changed_code) is False
+
+
 if __name__ == "__main__":
     import traceback
     tests = [(name, value) for name, value in sorted(globals().items()) if name.startswith("test_")]
