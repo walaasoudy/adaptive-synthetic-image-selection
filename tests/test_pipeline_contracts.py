@@ -269,6 +269,19 @@ def test_stage5_analysis_layer_on_fixtures():
     for label, entry in suite["per_label"].items():
         assert "effective_n" in entry, f"{label} must report effective N"
 
+    # A strong signal at the default 0.5 threshold should separate classes better than chance.
+    assert suite["macro_sensitivity_primary"] > 0.5
+    assert suite["macro_specificity_primary"] > 0.5
+    weak_suite = full_metric_suite(weak, targets, masks)
+    assert suite["macro_f1_primary"] > weak_suite["macro_f1_primary"]
+
+    # A per-label threshold changes sensitivity/specificity for exactly that label.
+    lenient = full_metric_suite(strong, targets, masks, thresholds={"Edema": 0.05})
+    assert lenient["per_label"]["Edema"]["sensitivity"] >= suite["per_label"]["Edema"]["sensitivity"]
+    assert lenient["per_label"]["Edema"]["threshold"] == 0.05
+    other_label = [label for label in CLASSIFIER_TARGET_LABELS if label != "Edema"][0]
+    assert lenient["per_label"][other_label]["threshold"] == 0.5
+
     from scripts.utils.metrics import auroc, paired_bootstrap_difference
 
     def macro(probabilities, rows):

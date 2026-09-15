@@ -8,6 +8,9 @@ sys.dont_write_bytecode = True
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
@@ -16,6 +19,7 @@ from scripts.utils.artifact_contracts import (
     ArtifactContractError, require_manifest_fields, require_score_artifact, stage2_paths,
     stage3_paths, validate_namespace_run_id,
 )
+from scripts.utils.labels import CLASSIFIER_TARGET_LABELS
 from scripts.utils.manifest import sha256_file
 from scripts.utils.splits import FinalEvalAccessViolation, load_split, validate_final_eval_context
 from fixture_workspace import fixture_workspace
@@ -171,6 +175,62 @@ def test_split_builder_initializes_out_dir_before_use():
     first_use = source.index("if out_dir.exists()")
     terminal = source.index("raise SystemExit(main())")
     assert assignment < first_use < terminal
+
+
+def _load_compare_conditions():
+    spec = importlib.util.spec_from_file_location(
+        "compare_conditions", REPO / "scripts" / "eval" / "compare_conditions.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_load_frozen_thresholds_refuses_a_missing_file():
+    module = _load_compare_conditions()
+    with fixture_workspace("compare-conditions-missing-thresholds") as workspace:
+        try:
+            module.load_frozen_thresholds(workspace)
+        except SystemExit as exc:
+            assert "frozen_threshold_values.json" in str(exc)
+        else:
+            raise AssertionError("a missing frozen_threshold_values.json was accepted")
+
+
+def test_load_frozen_thresholds_reads_the_values_written_by_stage5_evaluate():
+    module = _load_compare_conditions()
+    with fixture_workspace("compare-conditions-thresholds") as workspace:
+        payload = {"frozen": True, "selected_on": "classifier_val",
+                   "values": {"A_seed42": {"Edema": 0.4}, "B_seed42": {"Edema": 0.6}}}
+        (workspace / "frozen_threshold_values.json").write_text(json.dumps(payload), encoding="utf-8")
+        assert module.load_frozen_thresholds(workspace) == payload["values"]
+
+
+def test_aggregate_threshold_averages_across_runs_and_falls_back_when_missing():
+    module = _load_compare_conditions()
+    by_tag = {"A_seed42": {"Edema": 0.4}, "A_seed43": {"Edema": 0.6}, "A_seed44": {}}
+    result = module.aggregate_threshold(by_tag, ["A_seed42", "A_seed43", "A_seed44"], ["Edema"])
+    # (0.4 + 0.6 + 0.5-fallback-for-the-missing-run) / 3
+    assert result["Edema"] == pytest.approx((0.4 + 0.6 + 0.5) / 3)
+
+
+def test_load_predictions_tags_each_frame_with_its_own_run_id():
+    """compare_conditions.py must key each prediction frame by its own tag (e.g. 'A_seed42'), the
+    same key stage5_evaluate.py uses in frozen_threshold_values.json — never a shared default."""
+    module = _load_compare_conditions()
+    with fixture_workspace("compare-conditions-load-predictions") as workspace:
+        predictions_dir = workspace / "predictions"
+        predictions_dir.mkdir()
+        frame = pd.DataFrame({"image_id": ["img1"], "patient_id": ["p1"],
+                              **{label: [0.5] for label in CLASSIFIER_TARGET_LABELS}})
+        path = predictions_dir / "A_seed42.parquet"
+        frame.to_parquet(path, index=False)
+        (path.with_suffix(".complete.json")).write_text(
+            json.dumps({"prediction_sha256": sha256_file(path)}), encoding="utf-8"
+        )
+        by_condition, reference = module.load_predictions(workspace)
+        assert reference.attrs["tag"] == "A_seed42"
+        assert by_condition["A"][0].attrs["seed"] == 42
 
 
 if __name__ == "__main__":

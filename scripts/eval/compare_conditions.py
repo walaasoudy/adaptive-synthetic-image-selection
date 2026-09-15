@@ -82,6 +82,7 @@ def load_predictions(run_dir: Path) -> tuple[dict[str, list[pd.DataFrame]], pd.D
             raise SystemExit(f"Prediction hash mismatch: {path}")
         frame = pd.read_parquet(path)
         frame.attrs.update(info)
+        frame.attrs["tag"] = path.stem  # matches stage5_evaluate.py's frozen_threshold_values.json key
         by_condition[info["condition"]].append(frame)
         reference = frame if reference is None else reference
 
@@ -119,6 +120,28 @@ def build_truth(run_dir: Path, reference: pd.DataFrame) -> tuple[np.ndarray, np.
     return raw, targets, masks
 
 
+def load_frozen_thresholds(run_dir: Path) -> dict[str, dict[str, float]]:
+    """tag -> {label: threshold}, written once by stage5_evaluate.py (selected on classifier_val,
+    one threshold per run/seed — never on final_eval_heldout)."""
+    path = run_dir / "frozen_threshold_values.json"
+    if not path.is_file():
+        raise SystemExit(
+            f"Missing {path}; re-run stage5_evaluate.py first (it writes frozen_threshold_values.json "
+            "alongside the predictions this script reads)."
+        )
+    return read_json(path)["values"]
+
+
+def aggregate_threshold(thresholds_by_tag: dict[str, dict[str, float]], tags: list[str], labels: list[str]) -> dict[str, float]:
+    """Mean of each label's per-seed (per-run) threshold across `tags` — the operating point used
+    to score the seed-averaged condition probabilities. A tag/label missing its own threshold
+    (should not happen for a complete run) falls back to 0.5 rather than skewing the mean."""
+    return {
+        label: float(np.mean([thresholds_by_tag.get(tag, {}).get(label, 0.5) for tag in tags]))
+        for label in labels
+    }
+
+
 def macro_auroc_for(probabilities: np.ndarray, targets: np.ndarray, masks: np.ndarray,
                     rows: np.ndarray) -> float:
     """Masked macro-AUROC over the 11 primary labels for a subset of rows."""
@@ -151,6 +174,7 @@ def main() -> int:
     patient_ids = reference["patient_id"].to_numpy()
 
     label_columns = CLASSIFIER_TARGET_LABELS
+    thresholds_by_tag = load_frozen_thresholds(run_dir)
 
     # Per-condition mean probabilities across seeds (and, for D, across draws AND seeds).
     condition_probabilities: dict[str, np.ndarray] = {}
@@ -161,30 +185,44 @@ def main() -> int:
 
         per_run_macro = []
         for frame in frames:
-            value = macro_auroc_for(
-                frame[label_columns].to_numpy(), targets, masks, np.arange(len(frame))
-            )
-            per_run_macro.append(
-                {"draw": frame.attrs.get("draw"), "seed": frame.attrs.get("seed"),
-                 "macro_auroc": value}
-            )
-        values = [entry["macro_auroc"] for entry in per_run_macro if not np.isnan(entry["macro_auroc"])]
+            tag = frame.attrs["tag"]
+            probs = frame[label_columns].to_numpy()
+            auroc_value = macro_auroc_for(probs, targets, masks, np.arange(len(frame)))
+            # Each run scored with ITS OWN classifier_val-selected threshold — never a shared or
+            # default one — so sensitivity/specificity/F1 reflect that run's actual operating point.
+            run_suite = full_metric_suite(probs, targets, masks, thresholds_by_tag.get(tag, {}), label_columns)
+            per_run_macro.append({
+                "tag": tag, "draw": frame.attrs.get("draw"), "seed": frame.attrs.get("seed"),
+                "macro_auroc": auroc_value,
+                "macro_sensitivity": run_suite["macro_sensitivity_primary"],
+                "macro_specificity": run_suite["macro_specificity_primary"],
+                "macro_f1": run_suite["macro_f1_primary"],
+            })
+
+        def spread_stats(metric: str) -> dict[str, float]:
+            values = [entry[metric] for entry in per_run_macro if not np.isnan(entry[metric])]
+            return {
+                f"mean_{metric}": float(np.mean(values)) if values else float("nan"),
+                f"std_{metric}": float(np.std(values, ddof=1)) if len(values) > 1 else float("nan"),
+                f"min_{metric}": float(np.min(values)) if values else float("nan"),
+                f"max_{metric}": float(np.max(values)) if values else float("nan"),
+            }
+
         condition_spread[condition] = {
             "n_runs": len(frames),
             "per_run": per_run_macro,
-            "mean_macro_auroc": float(np.mean(values)) if values else float("nan"),
-            "std_macro_auroc": float(np.std(values, ddof=1)) if len(values) > 1 else float("nan"),
-            "min_macro_auroc": float(np.min(values)) if values else float("nan"),
-            "max_macro_auroc": float(np.max(values)) if values else float("nan"),
+            **spread_stats("macro_auroc"),
+            **spread_stats("macro_sensitivity"),
+            **spread_stats("macro_specificity"),
+            **spread_stats("macro_f1"),
         }
 
-    # Full metric suite per condition.
+    # Full metric suite per condition, scored at the MEAN of the contributing runs' own thresholds
+    # (never a shared/default one) — the aggregate operating point for the seed-averaged probabilities.
     per_condition_metrics = {}
     for condition, probabilities in condition_probabilities.items():
-        thresholds_path = next(
-            (run_dir / "predictions").glob(f"{condition}*seed*.thresholds.json"), None
-        )
-        thresholds = read_json(thresholds_path)["thresholds"] if thresholds_path else {}
+        tags = [frame.attrs["tag"] for frame in by_condition[condition]]
+        thresholds = aggregate_threshold(thresholds_by_tag, tags, label_columns)
         suite = full_metric_suite(probabilities, targets, masks, thresholds, label_columns)
 
         bootstrap = patient_level_bootstrap(
@@ -279,6 +317,9 @@ def main() -> int:
     write_json(run_dir / "stage5_comparison_report.json", report)
 
     # Human-readable tables.
+    def rounded_or_none(value: float, digits: int = 4):
+        return round(value, digits) if not np.isnan(value) else None
+
     rows = []
     for condition in sorted(per_condition_metrics):
         suite = per_condition_metrics[condition]
@@ -291,15 +332,20 @@ def main() -> int:
                 "ci_lower": round(bootstrap["ci_lower"], 4),
                 "ci_upper": round(bootstrap["ci_upper"], 4),
                 "across_run_mean": round(spread["mean_macro_auroc"], 4),
-                "across_run_std": (
-                    round(spread["std_macro_auroc"], 4)
-                    if not np.isnan(spread["std_macro_auroc"]) else None
-                ),
+                "across_run_std": rounded_or_none(spread["std_macro_auroc"]),
                 "n_runs": spread["n_runs"],
                 "macro_auprc": round(suite["macro_auprc_primary"], 4),
                 "micro_auroc": round(suite["micro_auroc_primary"], 4),
                 "mean_brier": round(suite["mean_brier_primary"], 4),
                 "mean_ece": round(suite["mean_ece_primary"], 4),
+                # Each run's own classifier_val-selected threshold, then mean +/- SD across the
+                # condition's seeds (draws too, for D) — never a single shared threshold.
+                "sensitivity_mean": rounded_or_none(spread["mean_macro_sensitivity"]),
+                "sensitivity_std": rounded_or_none(spread["std_macro_sensitivity"]),
+                "specificity_mean": rounded_or_none(spread["mean_macro_specificity"]),
+                "specificity_std": rounded_or_none(spread["std_macro_specificity"]),
+                "f1_mean": rounded_or_none(spread["mean_macro_f1"]),
+                "f1_std": rounded_or_none(spread["std_macro_f1"]),
             }
         )
     condition_table = pd.DataFrame(rows)
