@@ -78,14 +78,47 @@ and every test passes.
 4. Stage 1 smoke and explicit resume test (GPU). Both use the same immutable namespace:
 
    ```bash
-   bash scripts/train/launch_resumable.sh split.namespace=production-thesis-v1 training.max_train_steps=20 training.checkpointing_steps=10
+   bash scripts/train/launch_resumable.sh split.namespace=production-thesis-v1 training.max_train_steps=20 checkpointing.save_every_n_steps=10 validation.val_every_n_steps=10
    # wait for step 10+, stop the worker once, then repeat the identical command and verify continuity
-   bash scripts/train/launch_resumable.sh split.namespace=production-thesis-v1 training.max_train_steps=20 training.checkpointing_steps=10
+   bash scripts/train/launch_resumable.sh split.namespace=production-thesis-v1 training.max_train_steps=20 checkpointing.save_every_n_steps=10 validation.val_every_n_steps=10
    ```
 
-   STOP and inspect loss, samples, checkpoint metadata, and resume continuity. Then start the frozen
-   full Stage 1 configuration with `split.namespace=production-thesis-v1`. Select one explicit LoRA
-   checkpoint only after probe review; record its path in `configs/stage2_generation.yaml`.
+   The checkpoint interval key is `checkpointing.save_every_n_steps`; an unknown key such as
+   `training.checkpointing_steps` is silently added to the config and ignored, so no step-10
+   checkpoint would exist and the resume test would test nothing. The first launch builds the
+   full gen_train latent cache (~3 h on an A40) before step 1; the full run reuses it.
+
+   STOP and inspect loss, samples, checkpoint metadata, and resume continuity. Then retire the smoke
+   run pointer — otherwise `launch_resumable.sh` resumes the finished 20-step smoke run instead of
+   starting the full one:
+
+   ```bash
+   rm checkpoints/stage1_lora_sdxl/latest_run.json
+   bash scripts/train/launch_resumable.sh
+   ```
+
+   The full run takes the frozen config as-is (`training.max_train_steps: 30000`, ~22–27 h on an
+   A40). Training does not stop early on its own, and the cosine LR schedule is built from
+   `max_train_steps`, so relaunch every resume with the **identical** command and no step
+   overrides. Select one explicit LoRA checkpoint only after probe review; record its path in
+   `configs/stage2_generation.yaml` and commit it **before** step 5 (see "Code freeze" below).
+
+   **Code freeze before step 5.** From `01_sample_label_recipes.py` onward every artifact records
+   `code_identity_sha256`, the hash of every file under `scripts/`, `configs/` and `environment/`
+   (`scripts/utils/manifest.py::code_identity`, committed or not), and every later consumer refuses
+   artifacts made under a different hash. After step 5 starts, any edit to those trees — a YAML
+   tweak, a `git pull`, or `pip freeze > environment/requirements-lock.txt` — invalidates the
+   synthetic images and everything downstream. So, before step 5:
+
+   - commit `checkpoint.lora_weights_dir` in `configs/stage2_generation.yaml`;
+   - settle the §7.1 matched-random-control decision (step 7) and commit any
+     `configs/stage4_classifier.yaml` change;
+   - capture `pip freeze` outside the repo trees (e.g. `/workspace/pip_freeze.txt`).
+
+   If a later gate needs a config change anyway (for example step 6b's feasibility report failing on
+   `subset_sizes`), put the change in a YAML file outside the repo and point `THESIS_CONFIG_OVERLAY`
+   at it (sections `stage2`/`stage3`/`stage4`, as in `configs/smoke_e2e.yaml`) instead of editing
+   `configs/`; export the same overlay for every later command.
 
 5. Stage 2 recipes, pilot, manual gate, and full generation (GPU; potentially tens of GPU-hours and
    tens of GB depending on recipe count):
