@@ -1,0 +1,47 @@
+# HAM10000 Stage 1 tunables — the dermoscopy counterpart of stage1_lora_sdxl.yaml's `data:` block.
+#
+# Separate file, not an edit to the CheXpert config: the two datasets must be able to run side by
+# side without one's settings silently reaching the other.
+#
+# Currently carries only what preprocessing needs; the LoRA training block will be added to this
+# same file when Stage 1 is ported.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  data_root: ${paths.project_root}/data/ham10000
+  raw_dir: ${paths.data_root}/raw
+  processed_dir: ${paths.data_root}/processed
+  images_dir: ${paths.processed_dir}/images
+  splits_dir: ${paths.processed_dir}/splits
+  captions_dir: ${paths.processed_dir}/captions
+
+data:
+  # RGB, ALWAYS. Colour is the primary diagnostic cue in dermoscopy — pigment network hue,
+  # blue-white veil, regression structures, vascular patterns are all colour phenomena. The CheXpert
+  # path converts to "L" because a radiograph is achromatic and colour there is a defect; doing the
+  # same here would delete the signal the classifier is supposed to read. There is deliberately no
+  # config switch to turn this off.
+  colour_mode: "RGB"
+
+  # 512, not 768/1024. HAM10000's source images are 600x450, so a larger canvas would upscale past
+  # the information actually present: it manufactures no detail and costs VRAM and time in every
+  # later stage. Raise this only if the source images are replaced with a higher-resolution release.
+  resolution: 512
+
+  # Aspect-preserving resize onto a padded square. NEVER centre-crop: a crop can cut a lesion that
+  # sits off-centre or extends to the frame edge, silently removing the thing being classified.
+  # Padding costs a border of dead pixels instead, which is recoverable and measurable — and the
+  # explainability signal specifically watches for attention landing on it.
+  aspect_mode: "letterbox"
+  # Mid-grey rather than black: black padding is easily confused with the dark circular vignette
+  # that real dermatoscopes produce, which would blur the distinction between "our padding" and "a
+  # real scope edge" for both the generator and the explainability check.
+  pad_colour: [128, 128, 128]
+
+  jpeg_quality: 95
+  # Below this, the source image is too small to be a usable dermoscopy frame.
+  min_source_resolution: 100
+
+  # NOTE, deliberately absent: `view_filter`. CheXpert filters lateral radiographs because it trains
+  # on frontal views only. HAM10000 has no view concept at all — every image is a dermatoscopic
+  # close-up — so there is nothing to filter and no equivalent key here.
