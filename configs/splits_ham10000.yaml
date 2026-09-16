@@ -1,0 +1,67 @@
+# Six-way LESION-level split policy for HAM10000 — the dermoscopy counterpart of splits.yaml.
+#
+# Same six partitions, same one-seed one-deterministic-list construction, and the same rule that no
+# split is derived from another. Only two things change from the CheXpert policy, and both are
+# forced by the dataset rather than chosen for convenience:
+#
+#   1. split_unit is lesion_id, not patient_id. HAM10000 ships no patient identifier at all, so a
+#      lesion is the strictest grouping available. Several images can show the SAME lesion, so
+#      splitting per-image would place two photographs of one lesion on both sides of a split and
+#      quietly inflate the final numbers. Grouping by lesion_id removes that specific leak; it does
+#      NOT remove the (unmeasurable, because unrecorded) case of one patient contributing two
+#      different lesions to two different splits. The thesis has to state that limit, not hide it.
+#
+#   2. min_positive_groups is 10, not 50. With 115 dermatofibroma images (~100 lesions) in the whole
+#      dataset, no fraction assignment can put 50 positive lesions in each of four decision-bearing
+#      splits — the arithmetic simply does not allow it. The gate is lowered to a number this
+#      dataset can actually meet and still fails closed below it, rather than being kept at an
+#      unreachable 50 and quietly disabled. The scarcity itself is not a defect to engineer around:
+#      it is precisely the class imbalance this thesis generates synthetic images to address.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  data_root: ${paths.project_root}/data/ham10000
+  raw_dir: ${paths.data_root}/raw
+  processed_dir: ${paths.data_root}/processed
+  splits_root: ${paths.processed_dir}/splits
+
+manifest_version: 2
+
+# Six DIRECT partitions from one deterministic lesion list and one seed. Must sum to exactly 1.0.
+#
+# Weighted toward gen_train relative to the CheXpert policy: the generator is what the rare classes
+# are actually scarce for, and every synthetic image in the thesis is generated from this split
+# alone. gen_val is deliberately small — it only monitors Stage 1 training loss and never makes a
+# selection decision.
+fractions:
+  gen_train: 0.50             # Stage 1 LoRA training; ASISM real-reference pool
+  gen_val: 0.06               # Stage 1 monitoring only
+  classifier_train: 0.16      # A/B/C real training component; ASISM proxy real component
+  classifier_val: 0.09        # A/B/C model selection ONLY (early stop, checkpoint, threshold)
+  asism_tuning_heldout: 0.09  # ASISM Go/No-Go evidence + proxy-search evaluation
+  final_eval_heldout: 0.10    # Stage 5 only
+
+split_seed: 42
+split_unit: "lesion_id"
+
+# Minimum-support rule. LESION counts, not image counts, decide eligibility — the same reasoning as
+# the CheXpert policy, one level down the identifier hierarchy.
+#
+# Only min_positive_groups binds in practice. Under the one-hot encoding every other class counts
+# as a negative for a given class, so negatives are abundant for all seven; it is the positives that
+# are scarce, and only for df / vasc / akiec.
+support_rule:
+  min_positive_groups: 10
+  min_negative_groups: 50
+  decision_bearing_splits:
+    - classifier_train
+    - classifier_val
+    - asism_tuning_heldout
+    - final_eval_heldout
+
+namespaces:
+  production:
+    require_full_cohort: true
+    full_cohort_row_tolerance_pct: 1.0
+  dev:
+    require_full_cohort: false
