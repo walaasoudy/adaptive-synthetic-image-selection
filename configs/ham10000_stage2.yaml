@@ -1,0 +1,52 @@
+# HAM10000 Stage 2 — synthetic dermoscopy generation. The dermoscopy counterpart of
+# stage2_generation.yaml (CheXpert), which HAM10000 code never reads.
+#
+# Conditioning is `intended_label_vector` / `dx`: what the generator was ASKED for, never ground
+# truth. Stage 3 measures whether the pixels agree.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  stage2_root: ${paths.project_root}/outputs/ham10000/stage2    # <stage2_root>/<split_namespace>/...
+  splits_root: ${paths.project_root}/data/ham10000/processed/splits
+
+split_namespace: "ham-stratified-v1"
+
+checkpoint:
+  # EXPLICIT LoRA weights directory — never "latest". e.g.
+  #   checkpoints/ham10000/stage1_lora_sdxl/<run_id>/lora_weights/step_4000   (or .../final)
+  # Its metadata.json must name this split namespace, split manifest hash, train_split=gen_train
+  # and the same base model + revision below, or generation refuses to start.
+  lora_weights_dir: null
+  base_model_id: "stabilityai/stable-diffusion-xl-base-1.0"
+  revision: "462165984030d82259a11f4367a4eed129e94a7b"
+
+generation:
+  # Must equal ham10000_stage1.yaml geometry.generation_size (asserted): unpadded native 4:3.
+  width: 768
+  height: 576
+  num_inference_steps: 40
+  guidance_scale: 7.0
+  scheduler: "DPMSolverMultistep"
+  batch_size: 4               # images per pipeline call; each image keeps its own seeded generator
+  seed: 20260917              # base seed; per-image seed = sha256(seed:recipe_id)
+  negative_prompt: ""
+  jpeg_quality: 95
+
+recipes:
+  source_split: "gen_train"   # asserted; quotas and prompt context come from gen_train only
+  # Per-class candidate quota: base_quota * (median_count / class_count) ** rarity_exponent, clipped.
+  base_quota: 400
+  rarity_exponent: 0.5
+  min_per_class: 100
+  max_per_class: 1500
+  context_seed: 7             # seeds the draw of age/sex/site context from same-class gen_train rows
+
+pilot:
+  num_images_per_class: 5     # small spanning batch for human review before full generation
+  checks:
+    min_valid_image_fraction: 0.95
+    max_near_uniform_fraction: 0.02
+    blank_std_threshold: 5.0
+    # Generated images refused by the geometry contract (wrong size / self-drawn padding). A high
+    # rate means the LoRA learned bars, which invalidates the content-box contract.
+    max_geometry_rejected_fraction: 0.05

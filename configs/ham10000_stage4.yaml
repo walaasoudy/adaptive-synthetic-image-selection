@@ -1,0 +1,70 @@
+# HAM10000 Stage 4 — classifier conditions A/B/C. Single-label, 7-class, softmax + CrossEntropy.
+#
+# Dedicated file: stage4_classifier.yaml is the CheXpert (multi-label, BCE) protocol and is never
+# read by the HAM10000 path. Everything except the training DATA is identical across conditions.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  splits_root: ${paths.project_root}/data/ham10000/processed/splits
+  images_root: ${paths.project_root}/data/ham10000/processed/images
+  results_dir: ${paths.project_root}/outputs/ham10000/stage4
+  checkpoints_dir: ${paths.project_root}/checkpoints/ham10000/stage4
+
+dataset: "ham10000"
+split_namespace: "ham-stratified-v1"
+
+# Asserted in code: any other value makes the entry point refuse to start.
+loss: "cross_entropy"
+classes: ["nv", "mel", "bkl", "bcc", "akiec", "vasc", "df"]   # must equal CLASSIFIER_TARGET_LABELS
+
+# Where each condition's training data comes from. The real component is the same split for all
+# three; B and C add standardised synthetic candidates (image_id, image_path, dx) whose geometry went
+# through ham10000_standardize_generated.py.
+real_train_split: "classifier_train"
+conditions:
+  A:
+    synthetic_manifest: null
+  B:
+    synthetic_manifest: ${paths.project_root}/outputs/ham10000/stage2/${split_namespace}/all_candidates.csv   # written by ham10000_generate_synthetic_images.py --mode full
+  C:
+    synthetic_manifest: ${paths.project_root}/outputs/ham10000/stage3/asism_selected.csv
+
+# Model selection / validation ONLY. final_eval_heldout is refused here in code: it belongs to
+# Stage 5 and is never read by Stage 4.
+selection_split: "classifier_val"
+selection_metric: "balanced_accuracy"
+
+model:
+  architecture: "densenet121"
+  pretrained_source: "imagenet"
+  dropout_p: 0.2
+  # 512 = the preprocessing canvas; DenseNet121's final feature map is then 16x16, so the letterbox
+  # content box (0.125 / 0.875) falls exactly on CAM-cell boundaries for Grad-CAM.
+  resolution: 512
+
+# Equal OPTIMIZER STEPS across conditions and seeds (not equal epochs): at fixed epochs the larger
+# B dataset would silently receive more gradient updates than A or C.
+training:
+  max_steps: 3000
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  eval_every_n_steps: 500
+  # OPEN METHODOLOGY DECISION (the experimenter's, not the code's): "none" or "inverse_frequency".
+  #   none               plain mean CrossEntropy; loss share follows class frequency (nv ~66%).
+  #                      Matches the CheXpert Stage 4 (unweighted BCE). Synthetic data is the ONLY
+  #                      rebalancing intervention, so A vs B vs C isolates its effect.
+  #   inverse_frequency  CrossEntropyLoss(weight=w), w_c = (1/n_c) / mean(1/n); every class then
+  #                      contributes ~1/7 of the loss. A second rebalancing mechanism layered on top
+  #                      of the synthetic data.
+  class_weighting: "none"
+  # Only read when class_weighting=inverse_frequency. WHICH counts the weights come from:
+  #   real_train_split        n_c from the real classifier_train images only -> the SAME weight
+  #                           vector for A, B and C (the fairness rule: only the data differs).
+  #   condition_training_set  n_c from each condition's own training set (real + synthetic). The
+  #                           weights then change per condition: on ham-stratified-v1 the df/nv
+  #                           weight ratio is 43x for A but 1.3x for B, so weighting would cancel
+  #                           most of what the synthetic images add. Kept only for sensitivity work.
+  class_weight_basis: "real_train_split"
+
+seeds: [42, 43, 44]

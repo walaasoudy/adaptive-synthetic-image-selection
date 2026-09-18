@@ -18,7 +18,15 @@ WHAT THE AUDIT DOES AND DOES NOT COVER
             ruled them out; `leakage_audit.json` records that limitation explicitly so a reader of
             the thesis is not left with a false guarantee.
 
+STRATIFICATION
+  Lesions are partitioned separately within each diagnosis (every lesion has exactly one), with
+  exact largest-remainder counts. An unstratified permutation left df and vasc below the support
+  minimum in several evaluation splits on the real data; stratification removes that sampling
+  variance, and the feasibility gate proves BEFORE assignment that the configured fractions can
+  meet the rule at all.
+
 Usage:
+    python scripts/data/ham10000/01_build_splits.py --run-id production-thesis-v1 --check-feasibility
     python scripts/data/ham10000/01_build_splits.py --namespace production --run-id production-thesis-v1 --freeze
     python scripts/data/ham10000/01_build_splits.py --namespace dev --run-id dev-smoke-v1
 """
@@ -81,6 +89,94 @@ def partition_groups(groups: list[str], fractions: dict[str, float], seed: int) 
     return assignment
 
 
+def lesion_classes(frame: pd.DataFrame, group_column: str = "lesion_id", diagnosis_column: str = "dx") -> dict[str, str]:
+    """lesion_id -> normalised diagnosis. Refuses a lesion carrying two diagnoses, because a lesion
+    cannot then be placed in one class stratum without contradicting some of its images."""
+    normalized = frame.assign(_dx=frame[diagnosis_column].map(normalize_diagnosis))
+    per_lesion = normalized.groupby(normalized[group_column].astype(str))["_dx"].unique()
+    conflicting = [lesion for lesion, values in per_lesion.items() if len(values) > 1]
+    if conflicting:
+        raise SystemExit(f"{len(conflicting)} lesion(s) carry more than one diagnosis, e.g. {conflicting[:5]}")
+    return {lesion: str(values[0]) for lesion, values in per_lesion.items()}
+
+
+def stratified_allocation(lesion_count: int, fractions: dict[str, float]) -> dict[str, int]:
+    """Exact integer lesion counts for ONE class stratum, by largest remainder.
+
+    Every split receives at least floor(lesion_count * fraction) lesions and the counts sum exactly
+    to lesion_count. Ties in the remainder are broken by SPLIT_NAMES order, so the allocation is a
+    pure function of (lesion_count, fractions) — no randomness enters the counts.
+    """
+    total = sum(fractions.values())
+    if abs(total - 1.0) > 1e-9:
+        raise SystemExit(f"split fractions must sum to 1.0, got {total}")
+    ideal = {name: lesion_count * fractions[name] for name in SPLIT_NAMES}
+    counts = {name: int(np.floor(ideal[name] + 1e-9)) for name in SPLIT_NAMES}
+    leftover = lesion_count - sum(counts.values())
+    order = sorted(SPLIT_NAMES, key=lambda name: (-(ideal[name] - counts[name]), SPLIT_NAMES.index(name)))
+    for name in order[:leftover]:
+        counts[name] += 1
+    return counts
+
+
+def feasibility_report(
+    lesions_per_class: dict[str, int],
+    fractions: dict[str, float],
+    min_positive_groups: int,
+    min_negative_groups: int,
+    decision_bearing_splits: list[str],
+) -> dict:
+    """Decide, BEFORE any lesion is assigned, whether these fractions can satisfy the support rule.
+
+    Uses the exact stratified allocation, so a PASS here guarantees the written splits pass the
+    support check. Also reports the minimum fraction any decision-bearing split would need
+    (min_positive_groups / lesions of the scarcest class): that number comes from the data, and is
+    what the fractions in splits_ham10000.yaml are derived from.
+    """
+    allocation = {label: stratified_allocation(count, fractions) for label, count in lesions_per_class.items()}
+    failures = []
+    for split in decision_bearing_splits:
+        split_total = sum(allocation[label][split] for label in lesions_per_class)
+        for label in lesions_per_class:
+            positives = allocation[label][split]
+            negatives = split_total - positives
+            if positives < min_positive_groups:
+                failures.append({"split": split, "label": label, "positive_groups": positives, "min_positive_groups": min_positive_groups})
+            if negatives < min_negative_groups:
+                failures.append({"split": split, "label": label, "negative_groups": negatives, "min_negative_groups": min_negative_groups})
+    binding_label = min(lesions_per_class, key=lambda label: lesions_per_class[label])
+    return {
+        "feasible": not failures,
+        "failures": failures,
+        "allocation_lesions": allocation,
+        "binding_class": binding_label,
+        "binding_class_lesions": int(lesions_per_class[binding_label]),
+        "minimum_fraction_per_decision_split": min_positive_groups / lesions_per_class[binding_label],
+        "decision_bearing_fraction_total": sum(fractions[name] for name in decision_bearing_splits),
+    }
+
+
+def partition_groups_stratified(lesion_to_class: dict[str, str], fractions: dict[str, float], seed: int) -> dict[str, set[str]]:
+    """Class-stratified lesion partition: each diagnosis stratum is split separately.
+
+    Within a stratum, lesions are sorted, permuted by an RNG seeded with (seed, class position), and
+    sliced by `stratified_allocation`. Sorting first makes the result independent of file order;
+    seeding per class makes adding or reordering one class unable to reshuffle another. Every
+    lesion lands in exactly one split, and all images of a lesion follow it.
+    """
+    assignment: dict[str, set[str]] = {name: set() for name in SPLIT_NAMES}
+    for class_position, label in enumerate(DIAGNOSIS_CLASSES):
+        stratum = sorted(lesion for lesion, value in lesion_to_class.items() if value == label)
+        rng = np.random.default_rng([int(seed), class_position])
+        permuted = [stratum[i] for i in rng.permutation(len(stratum))]
+        counts = stratified_allocation(len(stratum), fractions)
+        start = 0
+        for name in SPLIT_NAMES:
+            assignment[name].update(permuted[start : start + counts[name]])
+            start += counts[name]
+    return assignment
+
+
 def audit_splits(frames: dict[str, pd.DataFrame], group_column: str, image_id_column: str) -> dict:
     """Prove the written splits are disjoint at both the lesion and image level.
 
@@ -93,8 +189,10 @@ def audit_splits(frames: dict[str, pd.DataFrame], group_column: str, image_id_co
         for i, left in enumerate(names):
             for right in names[i + 1 :]:
                 shared = set(frames[left][column]) & set(frames[right][column])
-                overlaps[key][f"{left} ∩ {right}"] = sorted(shared)[:10]
-                overlaps[key][f"{left} ∩ {right} count"] = len(shared)
+                # ASCII " & ", not U+2229: a Windows cp1252 console cannot encode the set symbol
+                # and the audit print crashed on it before writing anything.
+                overlaps[key][f"{left} & {right}"] = sorted(shared)[:10]
+                overlaps[key][f"{left} & {right} count"] = len(shared)
 
     failed = [
         pair
@@ -155,6 +253,11 @@ def main() -> int:
     parser.add_argument("--namespace", choices=["production", "dev"], default="production")
     parser.add_argument("--run-id", required=True, help="Immutable split run id, e.g. production-thesis-v1")
     parser.add_argument("--freeze", action="store_true", help="Mark the written manifest frozen")
+    parser.add_argument(
+        "--check-feasibility",
+        action="store_true",
+        help="Only compute and print the feasibility gate for the configured fractions; write nothing",
+    )
     args = parser.parse_args()
 
     dataset_cfg = load_named_config("dataset_ham10000.yaml", "ham_dataset")
@@ -187,6 +290,42 @@ def main() -> int:
                 f"rows, got {len(frame)} ({deviation:.2f}% deviation, tolerance {tolerance}%)."
             )
 
+    fractions = {name: float(splits_cfg.fractions[name]) for name in SPLIT_NAMES}
+    support_rule = splits_cfg.support_rule
+    decision_splits = [str(name) for name in support_rule.decision_bearing_splits]
+    if "final_eval_heldout" not in decision_splits:
+        raise SystemExit("final_eval_heldout must be a decision-bearing split for the support rule")
+    if str(splits_cfg.stratify_by) != diagnosis_column:
+        raise SystemExit(f"stratify_by must be {diagnosis_column!r}; got {splits_cfg.stratify_by!r}")
+
+    lesion_to_class = lesion_classes(frame, group_column, diagnosis_column)
+    lesions_per_class = {label: sum(1 for v in lesion_to_class.values() if v == label) for label in DIAGNOSIS_CLASSES}
+    feasibility = feasibility_report(
+        lesions_per_class,
+        fractions,
+        int(support_rule.min_positive_groups),
+        int(support_rule.min_negative_groups),
+        decision_splits,
+    )
+    print("\nFEASIBILITY GATE (computed from real lesion counts before assignment)", flush=True)
+    print(f"  lesions per class: {lesions_per_class}", flush=True)
+    print(
+        f"  binding class: {feasibility['binding_class']} ({feasibility['binding_class_lesions']} lesions) -> "
+        f"each decision-bearing split needs fraction >= {feasibility['minimum_fraction_per_decision_split']:.4f}",
+        flush=True,
+    )
+    print("  lesions allocated per class (rows) x split (columns):", flush=True)
+    print("    " + " " * 7 + "".join(f"{name:>22s}" for name in SPLIT_NAMES), flush=True)
+    for label in DIAGNOSIS_CLASSES:
+        print("    " + f"{label:7s}" + "".join(f"{feasibility['allocation_lesions'][label][name]:22d}" for name in SPLIT_NAMES), flush=True)
+    for failure in feasibility["failures"]:
+        print(f"  !!! {failure}", flush=True)
+    print(f"  FEASIBLE: {feasibility['feasible']}", flush=True)
+    if not feasibility["feasible"]:
+        raise SystemExit("Refusing to assign lesions: the configured fractions cannot meet the support rule. Nothing written.")
+    if args.check_feasibility:
+        return 0
+
     out_dir = Path(splits_cfg.paths.splits_root) / args.run_id
     if out_dir.exists() and any(out_dir.iterdir()):
         raise SystemExit(
@@ -194,12 +333,7 @@ def main() -> int:
             "A split assignment is immutable once written: choose a new --run-id."
         )
 
-    fractions = {name: float(splits_cfg.fractions[name]) for name in SPLIT_NAMES}
-    assignment = partition_groups(
-        sorted(frame[group_column].astype(str).unique()),
-        fractions,
-        int(splits_cfg.split_seed),
-    )
+    assignment = partition_groups_stratified(lesion_to_class, fractions, int(splits_cfg.split_seed))
 
     frame[group_column] = frame[group_column].astype(str)
     frames = {
@@ -216,7 +350,6 @@ def main() -> int:
 
     # Support check BEFORE writing anything, so a split that cannot support the rare classes never
     # reaches disk and gets used by accident.
-    support_rule = splits_cfg.support_rule
     support_report = {}
     support_failed = []
     for name in [str(n) for n in support_rule.decision_bearing_splits]:
@@ -268,6 +401,14 @@ def main() -> int:
         "namespace_class": args.namespace,
         "dataset": "ham10000",
         "split_unit": str(splits_cfg.split_unit),
+        "stratify_by": str(splits_cfg.stratify_by),
+        "partition_method": "class_stratified_lesion_largest_remainder_v1",
+        "feasibility": {
+            "lesions_per_class": lesions_per_class,
+            "allocation_lesions": feasibility["allocation_lesions"],
+            "binding_class": feasibility["binding_class"],
+            "minimum_fraction_per_decision_split": feasibility["minimum_fraction_per_decision_split"],
+        },
         "split_seed": int(splits_cfg.split_seed),
         "fractions": fractions,
         "source_metadata_sha256": hashlib.sha256(metadata_path.read_bytes()).hexdigest(),

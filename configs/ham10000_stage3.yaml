@@ -1,0 +1,71 @@
+# HAM10000 Stage 3 (ASISM) signal settings — the dermoscopy counterpart of stage3_asism.yaml.
+#
+# Separate file: stage3_asism.yaml is the CheXpert configuration and is not modified. HAM10000 code
+# reads THIS file; nothing here reaches the CheXpert path.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  outputs_dir: ${paths.project_root}/outputs/ham10000/stage3
+
+signals:
+  iqa:
+    # Carried over unchanged from the CheXpert values and NOT yet recalibrated. On real gen_train
+    # images (first smoke run) they flagged: near-uniform 0.0%, low-contrast 3.3%, border 5.8%,
+    # clipping 0.0%. Kept until a separate decision; only the blur threshold is recalibrated here.
+    blank_std_threshold: 5.0
+    low_contrast_std: 15.0
+    clipping_percentile: 0.995
+
+    # BORDER ARTIFACT — deliberately LEFT AS INHERITED pending the experimenter's decision.
+    #
+    # Evidence on real gen_train (3,586 letterboxed 512 px canvases, ham-stratified-v1):
+    #   * 60% of the scored border band is padding this pipeline added.
+    #   * Flagged images have border mean luminance 128.3 (the pad grey) vs 141.4 unflagged, and edge
+    #     content 129.9 vs 164.0: the flag fires when the image's edge brightness happens to equal
+    #     the padding grey, not when the image has a border defect. Darker mel/bkl images do that
+    #     more often (11.5% / 11.8% flagged vs nv 4.6%).
+    #   * Visual review of flagged mel and bkl images found normal, well-textured dermoscopy.
+    #   * Measured on the CONTENT box instead, the upper-2% rule flags a disjoint set (overlap 0),
+    #     dominated by smooth low-texture skin — also not obviously defective.
+    # Changing either `border_region` or enabling `border_calibration` changes which images are
+    # penalised; that is a methodology choice and is not made here.
+    border_region: "canvas"            # "canvas" (inherited behaviour) | "content_box"
+    border_uniform_fraction: 0.30      # inherited constant; used only while calibration is disabled
+    border_calibration:
+      enabled: false
+      source_split: "gen_train"
+      rule: "upper_quantile"           # flag only the most uniform (1 - quantile) of real gen_train
+      quantile: 0.98
+      region: "content_box"            # must equal border_region when enabled
+      artifact_filename: "iqa_border_calibration.json"
+
+    # DELIBERATELY NULL. The CheXpert value (40.0) flagged 31.9% of real, clinically accepted
+    # gen_train images as blurry (nv 35%, df 13%): it was measuring how smooth dermoscopy naturally
+    # is, not a defect. compute_iqa_scores refuses to run until this is filled from the gen_train
+    # calibration artifact via resolve_iqa_config — there is no fallback constant.
+    laplacian_blur_threshold: null
+
+    blur_calibration:
+      # RULE: the threshold is the `quantile` lower quantile of Laplacian-variance sharpness over
+      # the PREPROCESSED gen_train images (same 512 px letterbox canvas every scored image uses).
+      #
+      # RATIONALE: every HAM10000 image passed clinical curation, so the gen_train distribution is
+      # the reference for "acceptably sharp dermoscopy". An image is flagged only when it is blurrier
+      # than all but `quantile` of those real images. By construction the rule rejects ~quantile of
+      # real gen_train images, so the flag rate is a chosen, reported number instead of an accident
+      # of a threshold inherited from radiographs. One POOLED threshold (not per class): synthetic
+      # candidates of every class must meet the same technical bar, and per-class thresholds would
+      # accept blurrier images for exactly the classes whose real images happen to be blurrier.
+      # Per-class rejection rates are still reported so any class imbalance in the flag is visible.
+      #
+      # SOURCE: gen_train only. asism_tuning_heldout and final_eval_heldout must never inform it;
+      # calibrate_blur_threshold checks image ids against both and refuses any overlap.
+      source_split: "gen_train"
+      rule: "lower_quantile"
+      quantile: 0.02
+      artifact_filename: "iqa_blur_calibration.json"
+
+  explainability:
+    border_fraction: 0.12
+    mass_fraction: 0.80
+    min_reference_size: 20

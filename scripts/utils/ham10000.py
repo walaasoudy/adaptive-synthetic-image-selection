@@ -287,15 +287,37 @@ DIAGNOSIS_PHRASE: dict[str, str] = {
 }
 
 # Four paraphrase variants, matching the pipeline's configured num_paraphrase_variants. All four use
-# exactly the {diagnosis}, {site_clause}, {age_bucket}, {sex} placeholders.
+# exactly the {diagnosis}, {site_clause}, {age_bucket}, {sex} and article placeholders.
 TEMPLATES = [
-    "A dermoscopic image of {diagnosis}{site_clause} in a {age_bucket} {sex} patient.",
+    "A dermoscopic image of {diagnosis}{site_clause} in {age_article} {age_bucket} {sex} patient.",
     "Dermoscopy of {diagnosis}{site_clause}, {age_bucket} {sex} patient.",
-    "A {age_bucket} {sex} patient with {diagnosis}{site_clause}, dermoscopic view.",
+    "{Age_article} {age_bucket} {sex} patient with {diagnosis}{site_clause}, dermoscopic view.",
     "Dermoscopic image, {age_bucket} {sex} patient, showing {diagnosis}{site_clause}.",
 ]
 
-TEMPLATE_VERSION = "ham-v1"
+# ham-v2 fixes the indefinite article before the age bucket ("a 80-89-year-old" -> "an
+# 80-89-year-old", "a adult" -> "an adult"). Stage 1 and Stage 2 both assert this version against the
+# config, so captions written by an older version cannot be reused for training or generation: the
+# generator must be conditioned on the same phrasing generation will later use.
+TEMPLATE_VERSION = "ham-v2"
+
+
+def indefinite_article(phrase: str) -> str:
+    """"a" or "an" for `phrase`, decided by how the phrase is READ ALOUD, not by its first letter.
+
+    The age bucket is the only variable article site in these templates, and it starts with a digit:
+    "80-89-year-old" is read "eighty...", which takes "an", while "40-49-year-old" ("forty") takes
+    "a". Numbers whose spoken form begins with a vowel are the 8s (eight/eighty) and 11/18
+    (eleven/eighteen). The word fallback ("adult") uses the usual vowel-letter rule.
+    """
+    text = str(phrase).strip().lower()
+    if not text:
+        return "a"
+    first = text.replace("-", " ").split()[0]
+    if first.isdigit():
+        number = int(first)
+        return "an" if first[0] == "8" or number in (11, 18) else "a"
+    return "an" if first[0] in "aeiou" else "a"
 
 
 def site_phrase(localization) -> str:
@@ -321,10 +343,14 @@ def build_caption(row: dict, variant_index: int = 0, age_bucket_width_years: int
     than emitting a placeholder token into the prompt.
     """
     template = TEMPLATES[variant_index % len(TEMPLATES)]
+    age_bucket = bucket_age(row.get("age"), age_bucket_width_years)
+    article = indefinite_article(age_bucket)
     return template.format(
         diagnosis=DIAGNOSIS_PHRASE[normalize_diagnosis(row.get("dx"))],
         site_clause=site_phrase(row.get("localization")),
-        age_bucket=bucket_age(row.get("age"), age_bucket_width_years),
+        age_bucket=age_bucket,
+        age_article=article,
+        Age_article=article.capitalize(),
         sex=sex_phrase(row.get("sex")),
     )
 
@@ -356,6 +382,7 @@ __all__ = [
     "DIAGNOSIS_PHRASE",
     "RARE_CLASSES",
     "TEMPLATE_VERSION",
+    "indefinite_article",
     "normalize_diagnosis",
     "validate_metadata",
     "class_index_targets",

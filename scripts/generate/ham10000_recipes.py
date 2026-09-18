@@ -64,6 +64,34 @@ def rarity_quotas(
     return quotas
 
 
+GENERATION_SOURCE_SPLIT = "gen_train"
+
+
+def quotas_from_gen_train(split_dir, **quota_kwargs) -> tuple[dict[str, int], dict[str, int]]:
+    """(quotas, real class counts) derived from `<split_dir>/gen_train.csv` and NOTHING else.
+
+    Quotas are a generation decision, so they may only see the split the generator is trained on.
+    Deriving them from the full metadata — as the first smoke test did — lets validation and
+    final-eval class frequencies shape what gets generated. The numerical effect happens to be
+    small for HAM10000 (quotas depend only on class ratios), but the rule is not negotiable on the
+    size of the leak. Reads by explicit filename, so no other split file is ever opened.
+
+    Fails closed on a class with zero gen_train images: rarity_quotas would otherwise assign it
+    max_per_class, i.e. ask the generator for many images of a class it never saw.
+    """
+    import pandas as pd
+    from pathlib import Path
+
+    path = Path(split_dir) / f"{GENERATION_SOURCE_SPLIT}.csv"
+    if not path.is_file():
+        raise FileNotFoundError(f"generation quotas require the frozen {GENERATION_SOURCE_SPLIT} split: {path}")
+    counts = class_counts(pd.read_csv(path))
+    empty = [label for label, count in counts.items() if count == 0]
+    if empty:
+        raise ValueError(f"{GENERATION_SOURCE_SPLIT} has no real images for {empty}; refusing to assign generation quotas")
+    return rarity_quotas(counts, **quota_kwargs), counts
+
+
 def build_recipes(quotas: dict[str, int], seed: int = 42) -> list[dict]:
     """One recipe per requested image. Each carries exactly one diagnosis — never a combination.
 
@@ -87,4 +115,69 @@ def build_recipes(quotas: dict[str, int], seed: int = 42) -> list[dict]:
     return recipes
 
 
-__all__ = ["class_counts", "rarity_quotas", "build_recipes"]
+def derive_image_seed(base_seed: int, recipe_id: str) -> int:
+    """Deterministic per-image seed from (base seed, recipe id) — the CheXpert Stage 2 rule, so a
+    resumed or re-run generation reproduces exactly the image an uninterrupted run would have."""
+    import hashlib
+
+    return int(hashlib.sha256(f"{int(base_seed)}:{recipe_id}".encode("utf-8")).hexdigest()[:8], 16)
+
+
+RECIPE_COLUMNS = [
+    "recipe_id", "dx", "class_index", "intended_label_vector", "prompt", "caption_variant_index",
+    "context_image_id", "age", "sex", "localization", "seed", "source_split",
+]
+
+
+def build_contextual_recipes(gen_train, quotas: dict[str, int], recipe_cfg, base_seed: int, captions_cfg):
+    """Stage 2 recipes whose prompts use the SAME caption template the LoRA was trained on.
+
+    Each recipe is one diagnosis. Its non-diagnostic context (age, sex, body site) is copied from a
+    real gen_train image OF THE SAME CLASS, drawn with a class-seeded RNG, so the prompt distribution
+    matches what the generator saw during training instead of a bare "an image of X" it never saw.
+    The paraphrase variant is chosen by the same hash rule as training. Only gen_train rows are ever
+    passed in; the caller proves that (quotas_from_gen_train + id isolation).
+    """
+    import json
+
+    import pandas as pd
+
+    from scripts.utils.ham10000 import build_caption, select_variant_index
+
+    frame = gen_train.copy()
+    frame["dx_norm"] = frame["dx"].map(normalize_diagnosis)
+    rows = []
+    for class_position, label in enumerate(CLASSIFIER_TARGET_LABELS):
+        pool = frame[frame["dx_norm"] == label].sort_values("image_id").reset_index(drop=True)
+        count = int(quotas.get(label, 0))
+        if count and pool.empty:
+            raise ValueError(f"no gen_train images of {label!r} to draw recipe context from")
+        rng = np.random.default_rng([int(recipe_cfg.context_seed), class_position])
+        picks = rng.integers(0, len(pool), size=count) if count else []
+        for index, pick in enumerate(picks):
+            context = pool.iloc[int(pick)].to_dict()
+            recipe_id = f"syn_{label}_{index:05d}"
+            variant = select_variant_index(recipe_id, 0, int(captions_cfg.num_paraphrase_variants))
+            rows.append(
+                {
+                    "recipe_id": recipe_id,
+                    "dx": label,
+                    "class_index": class_position,
+                    "intended_label_vector": json.dumps({name: int(name == label) for name in CLASSIFIER_TARGET_LABELS}),
+                    "prompt": build_caption({**context, "dx": label}, variant, int(captions_cfg.age_bucket_width_years)),
+                    "caption_variant_index": variant,
+                    "context_image_id": str(context["image_id"]),
+                    "age": context.get("age"),
+                    "sex": context.get("sex"),
+                    "localization": context.get("localization"),
+                    "seed": derive_image_seed(base_seed, recipe_id),
+                    "source_split": GENERATION_SOURCE_SPLIT,
+                }
+            )
+    return pd.DataFrame(rows, columns=RECIPE_COLUMNS)
+
+
+__all__ = [
+    "class_counts", "rarity_quotas", "quotas_from_gen_train", "build_recipes", "GENERATION_SOURCE_SPLIT",
+    "derive_image_seed", "build_contextual_recipes", "RECIPE_COLUMNS",
+]

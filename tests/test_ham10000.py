@@ -152,6 +152,40 @@ def test_variants_are_paraphrases_of_the_same_fact_not_different_facts():
         assert "lower extremity" in caption
 
 
+def test_caption_uses_the_right_indefinite_article_before_the_age_bucket():
+    """Regression: 'a 80-89-year-old' / 'a adult'. The article follows how the phrase is READ, and
+    the generator is conditioned on this text, so it has to be right before Stage 1 trains."""
+    from scripts.utils.ham10000 import TEMPLATES, build_caption, indefinite_article
+
+    assert indefinite_article("80-89-year-old") == "an" and indefinite_article("adult") == "an"
+    assert indefinite_article("40-49-year-old") == "a" and indefinite_article("10-19-year-old") == "a"
+
+    for variant in range(len(TEMPLATES)):
+        old = build_caption({"dx": "mel", "age": 85, "sex": "male", "localization": "back"}, variant)
+        young = build_caption({"dx": "mel", "age": 45, "sex": "male", "localization": "back"}, variant)
+        unknown_age = build_caption({"dx": "mel", "age": None, "sex": "male", "localization": "back"}, variant)
+        for caption in (old, young, unknown_age):
+            assert " a 8" not in caption and " a adult" not in caption and not caption.startswith("A adult")
+            assert not caption.startswith("A 8"), caption
+        # Variants 1 and 3 carry no article before the bucket at all; where one IS used it must agree.
+        if "-year-old" in old and ("in a" in old or old[:2] in ("A ", "An")):
+            assert ("an 80-89-year-old" in old) or old.startswith("An 80-89-year-old"), old
+            assert ("a 40-49-year-old" in young) or young.startswith("A 40-49-year-old"), young
+            assert ("an adult" in unknown_age) or unknown_age.startswith("An adult"), unknown_age
+
+
+def test_caption_template_version_is_bumped_and_matches_the_config():
+    """A caption-text change must change the version, or Stage 1/2 would happily reuse captions
+    written with the old phrasing."""
+    from omegaconf import OmegaConf
+
+    from scripts.utils.ham10000 import TEMPLATE_VERSION
+
+    assert TEMPLATE_VERSION == "ham-v2"
+    config = OmegaConf.load(REPO / "configs" / "ham10000_stage1.yaml")
+    assert str(config.captions.template_version) == TEMPLATE_VERSION
+
+
 def test_every_class_has_a_caption_phrase():
     for label in DIAGNOSIS_CLASSES:
         caption = build_caption({"dx": label, "age": 50, "sex": "male", "localization": "back"})
@@ -253,6 +287,127 @@ def test_audit_records_that_visual_near_duplicates_are_out_of_scope():
     frames = {name: frame.iloc[i::6].reset_index(drop=True) for i, name in enumerate(module.SPLIT_NAMES)}
     report = module.audit_splits(frames, "lesion_id", "image_id")
     assert "near-duplicate" in report["not_covered_by_this_audit"].lower()
+
+
+# ---------------------------------------------------------------- stratified split + feasibility gate
+
+REAL_LESIONS_PER_CLASS = {"nv": 5403, "mel": 614, "bkl": 727, "bcc": 327, "akiec": 228, "vasc": 98, "df": 73}
+DECISION_SPLITS = ["classifier_train", "classifier_val", "asism_tuning_heldout", "final_eval_heldout"]
+
+
+def _config_fractions() -> dict[str, float]:
+    from omegaconf import OmegaConf
+
+    config = OmegaConf.load(REPO / "configs" / "splits_ham10000.yaml")
+    return {name: float(value) for name, value in config.fractions.items()}
+
+
+def test_allocation_is_exact_and_never_below_the_floor():
+    module = _load_split_builder()
+    fractions = _config_fractions()
+    for count in (0, 1, 7, 73, 98, 5403):
+        allocation = module.stratified_allocation(count, fractions)
+        assert sum(allocation.values()) == count
+        for name, value in allocation.items():
+            assert value >= int(np.floor(count * fractions[name] + 1e-9))
+
+
+def test_committed_fractions_pass_the_feasibility_gate_on_the_real_lesion_counts():
+    """The fractions in splits_ham10000.yaml must satisfy min 10 lesions per class in every
+    decision-bearing split, for the actual HAM10000 lesion counts."""
+    module = _load_split_builder()
+    report = module.feasibility_report(REAL_LESIONS_PER_CLASS, _config_fractions(), 10, 50, DECISION_SPLITS)
+    assert report["feasible"], report["failures"]
+    assert report["binding_class"] == "df"
+    assert abs(report["minimum_fraction_per_decision_split"] - 10 / 73) < 1e-12
+    for split in DECISION_SPLITS:
+        assert min(report["allocation_lesions"][label][split] for label in REAL_LESIONS_PER_CLASS) >= 10
+
+
+def test_feasibility_gate_FAILS_for_the_original_fractions():
+    """Regression: gen_train 0.50 with 0.09 evaluation splits cannot hold 10 df lesions even when
+    perfectly stratified (73 * 0.09 = 6.6). The gate must refuse, not the support check afterwards."""
+    module = _load_split_builder()
+    original = {
+        "gen_train": 0.50, "gen_val": 0.06, "classifier_train": 0.16,
+        "classifier_val": 0.09, "asism_tuning_heldout": 0.09, "final_eval_heldout": 0.10,
+    }
+    report = module.feasibility_report(REAL_LESIONS_PER_CLASS, original, 10, 50, DECISION_SPLITS)
+    assert report["feasible"] is False
+    failing = {(f["split"], f["label"]) for f in report["failures"] if "positive_groups" in f}
+    assert ("classifier_val", "df") in failing and ("final_eval_heldout", "df") in failing
+
+
+def test_the_support_floor_is_ten_not_lowered():
+    from omegaconf import OmegaConf
+
+    config = OmegaConf.load(REPO / "configs" / "splits_ham10000.yaml")
+    assert int(config.support_rule.min_positive_groups) == 10
+    assert "final_eval_heldout" in list(config.support_rule.decision_bearing_splits)
+    assert str(config.stratify_by) == "dx"
+
+
+def _stratified_metadata() -> pd.DataFrame:
+    rows = []
+    for label, lesions in {"nv": 400, "mel": 90, "bkl": 90, "bcc": 80, "akiec": 80, "vasc": 75, "df": 73}.items():
+        for lesion in range(lesions):
+            for image in range(1 + lesion % 3):  # 1-3 photographs per lesion
+                rows.append({"lesion_id": f"{label}_{lesion:04d}", "image_id": f"{label}_{lesion:04d}_{image}", "dx": label})
+    return pd.DataFrame(rows)
+
+
+def test_stratified_partition_keeps_lesions_whole_is_disjoint_and_meets_support():
+    module = _load_split_builder()
+    frame = _stratified_metadata()
+    lesion_to_class = module.lesion_classes(frame)
+    assignment = module.partition_groups_stratified(lesion_to_class, _config_fractions(), seed=42)
+
+    assigned = [lesion for lesions in assignment.values() for lesion in lesions]
+    assert sorted(assigned) == sorted(lesion_to_class), "every lesion exactly once"
+    frames = {name: frame[frame["lesion_id"].isin(ids)].reset_index(drop=True) for name, ids in assignment.items()}
+    assert module.audit_splits(frames, "lesion_id", "image_id")["status"] == "PASS"
+    assert sum(len(f) for f in frames.values()) == len(frame), "no image dropped"
+    for split in DECISION_SPLITS:
+        support = group_level_support(frames[split])
+        passed, failures = check_support_rule(support, min_positive_groups=10, min_negative_groups=50)
+        assert passed, (split, failures)
+
+
+def test_stratified_partition_is_reproducible_and_seed_sensitive():
+    module = _load_split_builder()
+    lesion_to_class = module.lesion_classes(_stratified_metadata())
+    fractions = _config_fractions()
+    first = module.partition_groups_stratified(lesion_to_class, fractions, seed=42)
+    shuffled = dict(reversed(list(lesion_to_class.items())))  # file order must not matter
+    assert module.partition_groups_stratified(shuffled, fractions, seed=42) == first
+    assert module.partition_groups_stratified(lesion_to_class, fractions, seed=7) != first
+
+
+def test_a_lesion_with_two_diagnoses_is_refused_before_stratifying():
+    module = _load_split_builder()
+    frame = pd.DataFrame({"lesion_id": ["L1", "L1"], "image_id": ["a", "b"], "dx": ["nv", "mel"]})
+    try:
+        module.lesion_classes(frame)
+    except SystemExit:
+        return
+    raise AssertionError("a lesion with conflicting diagnoses was stratified")
+
+
+def test_audit_output_is_ascii_safe_for_windows_consoles():
+    """Regression: the audit printed U+2229 and crashed on a cp1252 console before writing splits."""
+    module = _load_split_builder()
+    frame = _metadata(n_lesions=14, images_per_lesion=1)
+    frames = {name: frame.iloc[i::6].reset_index(drop=True) for i, name in enumerate(module.SPLIT_NAMES)}
+    report = module.audit_splits(frames, "lesion_id", "image_id")
+    import contextlib
+    import io
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        module.print_audit(report)
+    buffer.getvalue().encode("cp1252")  # raises UnicodeEncodeError on any non-cp1252 character
+    source = (REPO / "scripts" / "data" / "ham10000" / "01_build_splits.py").read_text(encoding="utf-8")
+    assert "∩" not in source
 
 
 if __name__ == "__main__":

@@ -11,15 +11,22 @@
 #   HAM10000  7 diagnoses, mutually exclusive. Each image carries exactly ONE diagnosis in `dx`,
 #             and there is no uncertain state in the label itself.
 #
-# The pipeline downstream of the data layer (classifier, masked metrics, every ASISM signal, the
-# ranking and threshold networks) is written against the CheXpert shape: an (n_images, n_labels)
-# target array with a companion boolean mask. Rather than fork all of that, HAM10000's single
-# diagnosis is encoded as a ONE-HOT row over the 7 classes, with the mask all-True (nothing is
-# uncertain here). That keeps every downstream stage byte-identical in behaviour and turns
-# per-label AUROC into one-vs-rest AUROC, which is the standard reporting choice for an imbalanced
-# multi-class problem anyway. The one thing it does NOT do is enforce mutual exclusivity at the
-# loss (independent sigmoids can predict two classes at once); that is a deliberate, recorded
-# trade-off in exchange for reusing a tested pipeline, and it is reported, never hidden.
+# HOW HAM10000 IS MODELLED (single-label, multi-class — NOT the CheXpert multi-label path)
+#
+#   Classifier   softmax over the 7 classes, trained with CrossEntropyLoss on integer class-index
+#                targets (scripts/utils/ham10000_classifier.py). Independent sigmoids + BCE are NOT
+#                used anywhere on the HAM10000 path: they can assign P(mel)=0.8 and P(nv)=0.7 to one
+#                image, a state the ground truth can never occupy. This is a methodological choice
+#                about what the model may represent, not a speed trade-off.
+#   Stage 4      scripts/classify/ham10000_train_conditions.py + configs/ham10000_stage4.yaml, a
+#                dedicated entry point that refuses any loss other than cross_entropy. The CheXpert
+#                Stage 4 (01_train_conditions.py, BCE) is never used for HAM10000.
+#   Metrics      argmax decision: accuracy, balanced accuracy, macro-F1, confusion matrix, per-class
+#                precision/recall/F1, plus one-vs-rest AUROC / AP from the softmax probabilities
+#                (scripts/utils/ham10000_metrics.py).
+#   Encodings    class_index_targets() is the training target. build_label_arrays() (one-hot + an
+#                all-True mask) exists only as an EVALUATION-side view for one-vs-rest reporting;
+#                both derive from the same `dx` column and cannot disagree.
 
 source:
   provider: "kaggle"

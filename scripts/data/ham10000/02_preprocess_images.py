@@ -37,6 +37,7 @@ from tqdm.auto import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from scripts.utils.config import load_named_config  # noqa: E402
+from scripts.utils.ham10000_geometry import letterbox_geometry, letterbox_with_content_box, write_content_boxes  # noqa: E402
 from scripts.utils.manifest import read_json, write_json  # noqa: E402
 
 SPLIT_NAMES = [
@@ -57,18 +58,31 @@ BLANK_STD_THRESHOLD = 5.0
 def letterbox_resize_rgb(image: Image.Image, target_size: int, pad_colour: tuple[int, int, int]) -> Image.Image:
     """Aspect-preserving resize onto a padded square canvas, in RGB throughout.
 
-    Deliberately duplicated rather than imported from scripts/data/03_preprocess_images.py: that
-    module is the CheXpert path, its filename starts with a digit (so importing it needs importlib
-    gymnastics), and coupling the two datasets' preprocessing through a shared helper is exactly how
-    a CheXpert-specific change would later leak into this one.
+    Not imported from scripts/data/03_preprocess_images.py (the CheXpert path), so no CheXpert change
+    can leak in. It delegates to ham10000_geometry.letterbox_with_content_box — the one function
+    synthetic candidates also go through — so real and synthetic canvases share a single layout.
     """
-    width, height = image.size
-    scale = target_size / max(width, height)
-    new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
-    resized = image.resize(new_size, Image.Resampling.BICUBIC)
-    canvas = Image.new("RGB", (target_size, target_size), tuple(pad_colour))
-    canvas.paste(resized, ((target_size - new_size[0]) // 2, (target_size - new_size[1]) // 2))
+    canvas, _row = letterbox_with_content_box(image, "", target_size, pad_colour)
     return canvas
+
+
+def content_box_row(image_id: str, width: int, height: int, target_size: int) -> dict:
+    """The persisted content-box record for one output image.
+
+    Computed from the SAME `letterbox_geometry` call `letterbox_resize_rgb` uses, from the source
+    dimensions, so the persisted box is the layout that was actually applied — never a value
+    re-estimated from the (JPEG-noisy) padding pixels.
+    """
+    x0, y0, x1, y1 = letterbox_geometry(width, height, target_size)["content_box"]
+    return {
+        "image_id": image_id,
+        "source_width": int(width),
+        "source_height": int(height),
+        "x0": x0,
+        "y0": y0,
+        "x1": x1,
+        "y1": y1,
+    }
 
 
 def validate_processed_jpeg(path: Path, resolution: int) -> tuple[bool, str | None]:
@@ -132,6 +146,10 @@ def expected_manifest(stage1_cfg, dataset_cfg, namespace: str, split_name: str, 
             "jpeg_quality": int(data.jpeg_quality),
             "min_source_resolution": int(data.min_source_resolution),
         },
+        # Per-image letterbox layout, consumed by explainability (peripheral_mass). Normalised
+        # (x0, y0, x1, y1) of the output canvas, half-open, exact multiples of 1/resolution.
+        "content_box_file": f"{split_name}_content_boxes.csv",
+        "content_box_convention": "normalised_xyxy_half_open_exact_from_letterbox_geometry",
         "source_image_directories": [str(name) for name in dataset_cfg.source.image_directories],
     }
 
@@ -154,6 +172,7 @@ def process_split(
 
     log_path = out_root / f"{split_name}_preprocessing_log.jsonl"
     counts = Counter(processed=0, skipped_existing=0, filtered=0, failed=0)
+    content_boxes: list[dict] = []
 
     fd, temporary_name = tempfile.mkstemp(prefix=f".{log_path.name}.", suffix=".tmp", dir=out_root)
     try:
@@ -170,8 +189,16 @@ def process_split(
                 detail: str | None = None
 
                 valid, validation_reason = validate_processed_jpeg(destination, resolution)
+                box_row: dict | None = None
                 if valid:
                     action, reason = "skipped_existing", "validated_existing"
+                    source = resolve_source(raw_dir, image_id, image_directories)
+                    if source is None:
+                        # An output whose source is gone cannot have its layout proven; not kept.
+                        action, reason = "failed", "source_file_missing_for_existing_output"
+                    else:
+                        with Image.open(source) as source_image:  # header only: size, no decode
+                            box_row = content_box_row(image_id, *source_image.size, resolution)
                 else:
                     source = resolve_source(raw_dir, image_id, image_directories)
                     if source is None:
@@ -192,11 +219,14 @@ def process_split(
                                         quality,
                                     )
                                     action = "processed"
+                                    box_row = content_box_row(image_id, width, height, resolution)
                                     detail = validation_reason and f"replaced_{validation_reason}"
                         except Exception as exc:
                             action, reason, detail = "failed", "corrupt_or_unreadable", f"{type(exc).__name__}: {exc}"
 
                 counts[action] += 1
+                if action in ("processed", "skipped_existing"):
+                    content_boxes.append(box_row)
                 log.write(
                     json.dumps(
                         {
@@ -205,6 +235,9 @@ def process_split(
                             "action": action,
                             "reason": reason,
                             "detail": detail,
+                            "content_box": (
+                                [box_row["x0"], box_row["y0"], box_row["x1"], box_row["y1"]] if box_row else None
+                            ),
                         },
                         ensure_ascii=False,
                     )
@@ -218,9 +251,14 @@ def process_split(
     finally:
         Path(temporary_name).unlink(missing_ok=True)
 
+    # Written for EVERY kept image, including ones skipped as already valid, so the table covers
+    # exactly the images present in out_dir for this run.
+    content_box_path = out_root / f"{split_name}_content_boxes.csv"
+    write_content_boxes(content_box_path, content_boxes)
+
     print(
         f"[{split_name}] processed={counts['processed']} skipped-existing={counts['skipped_existing']} "
-        f"filtered={counts['filtered']} failed={counts['failed']} log={log_path}",
+        f"filtered={counts['filtered']} failed={counts['failed']} log={log_path} content_boxes={content_box_path}",
         flush=True,
     )
     return counts
