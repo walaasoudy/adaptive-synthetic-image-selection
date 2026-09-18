@@ -69,3 +69,50 @@ signals:
     border_fraction: 0.12
     mass_fraction: 0.80
     min_reference_size: 20
+
+# ---------------------------------------------------------------------------------------------
+# ASISM auxiliary classifier — the real-only model this stage scores WITH, never scores.
+#
+# Its first role is the Grad-CAM reference: the gen_train explainability distribution is built from
+# this model's attention. Reusing it later for the uncertainty and agreement signals is permitted
+# only while those signals pin this SAME cam_model_id and the same reference sets; a signal that
+# needs a different model needs its own identity, not a redefinition of this one.
+# ---------------------------------------------------------------------------------------------
+auxiliary_classifier:
+  checkpoint_dir: ${paths.project_root}/checkpoints/ham10000/asism_auxiliary
+
+  # NOT gen_train — that is the explainability REFERENCE split. A model trained on it has memorised
+  # the very images whose attention would define the reference, so the reference would be its own
+  # training attention. cam_model_identity refuses the combination outright; this is the
+  # experimenter's chosen option 2 in docs/ham10000_gradcam_calibration.md: a dedicated model on
+  # classifier_train rather than a reused condition-A run.
+  train_split: "classifier_train"
+
+  # MEASURED ON, NOT SELECTED ON. train_classifier runs a fixed optimizer-step budget and returns
+  # the final model — there is no best-checkpoint selection here, exactly as in Stage 4. The split
+  # is scored once after training so the manifest records what the frozen model actually does.
+  selection_split: "classifier_val"
+
+  architecture: "densenet121"
+  pretrained_source: "imagenet"     # CheXpert-pretrained is rejected in build_model
+  dropout_p: 0.2
+
+  # 512 = the preprocessing canvas. DenseNet121's last dense block is then 16x16, so the letterbox
+  # content box (0.125 / 0.875) falls exactly on CAM-cell boundaries — the property
+  # ham10000_explainability.gradcam and content_weights both assume.
+  resolution: 512
+
+  # ONE seed, deliberately: a calibration reference must name a single model, and cam_model_id is
+  # one value. Multi-seed averaging would need a different reference contract.
+  seed: 42
+
+  # Same budget shape as Stage 4 so the reference model is trained the way the experiment's models
+  # are trained.
+  max_steps: 3000
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+
+  # The reference describes where a plain model looks, not how well a tuned one scores. Reweighting
+  # would change the attention this stage calls "normal".
+  class_weighting: "none"
