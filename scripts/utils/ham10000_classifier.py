@@ -170,27 +170,89 @@ def train_classifier(
     return model, history
 
 
+def _softmax_passes(model, records: list[dict], resolution: int, device: str, n_passes: int) -> np.ndarray:
+    """(n_passes, n_images, n_classes) softmax outputs. The loader order is fixed, so pass p and
+    pass q describe the same images in the same order and can be compared element-wise."""
+    torch = require_torch()
+    from torch.utils.data import DataLoader
+
+    settings = _loader_settings(device, None)
+    loader = DataLoader(
+        LesionRecordDataset(records, resolution),
+        batch_size=32,
+        shuffle=False,
+        # Each pass iterates the loader again; keep the workers alive across passes.
+        persistent_workers=settings.get("num_workers", 0) > 0 and n_passes > 1,
+        **settings,
+    )
+    non_blocking = bool(settings.get("pin_memory"))
+
+    passes = []
+    with torch.no_grad():
+        for _ in range(n_passes):
+            outputs = []
+            for batch in loader:
+                logits = model(batch["image"].to(device, non_blocking=non_blocking))
+                outputs.append(torch.softmax(logits, dim=1).cpu().numpy())
+            passes.append(
+                np.concatenate(outputs, axis=0) if outputs else np.zeros((0, len(CLASSIFIER_TARGET_LABELS)))
+            )
+    return np.stack(passes, axis=0)
+
+
 def predict_probabilities(model, records: list[dict], resolution: int, device: str | None = None) -> np.ndarray:
     """(n_images, n_classes) SOFTMAX probabilities — each row sums to 1.
 
     The sibling CheXpert function applies `sigmoid` per label; this one applies softmax across
     classes, which is the whole point of the different head.
+
+    Deterministic, and it returns a bare array. MC Dropout lives in a SEPARATE function rather than
+    behind a `passes` argument here, because the CheXpert sibling switches its return type from an
+    array to a (mean, std) tuple depending on that argument — and both callers of this one
+    (Stage 4's conditions and the ASISM auxiliary classifier) index the array directly.
     """
     torch = require_torch()
-    from torch.utils.data import DataLoader
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device).eval()
+    return _softmax_passes(model, records, resolution, device, 1)[0]
 
-    settings = _loader_settings(device, None)
-    loader = DataLoader(LesionRecordDataset(records, resolution), batch_size=32, shuffle=False, **settings)
 
-    outputs = []
-    with torch.no_grad():
-        for batch in loader:
-            logits = model(batch["image"].to(device, non_blocking=True))
-            outputs.append(torch.softmax(logits, dim=1).cpu().numpy())
-    return np.concatenate(outputs, axis=0) if outputs else np.zeros((0, len(CLASSIFIER_TARGET_LABELS)))
+def predict_probabilities_mc_dropout(
+    model, records: list[dict], resolution: int, passes: int, device: str | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """(mean, std) over `passes` stochastic forward passes — the Stage 3 uncertainty signal.
+
+    Dropout only is switched back on, via the shared `enable_mc_dropout`: calling `model.train()`
+    would also put BatchNorm into batch-statistics mode, which changes the predictions themselves
+    instead of sampling over dropout masks, and the resulting spread would not be the epistemic
+    uncertainty this measures.
+
+    Refuses rather than degenerating:
+      * a model with no dropout modules would make every pass identical and the signal a constant;
+      * fewer than two passes gives a standard deviation that is exactly zero by construction.
+    """
+    torch = require_torch()
+    from scripts.utils.classifier import enable_mc_dropout
+
+    if int(passes) < 2:
+        raise ValueError(
+            f"mc_dropout_passes={passes}: the spread over a single pass is identically zero, "
+            "so the uncertainty signal would be a constant rather than a measurement"
+        )
+
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
+    if enable_mc_dropout(model) == 0:
+        raise ValueError(
+            "MC Dropout requested but the model contains no dropout modules — every pass would be "
+            "identical and the uncertainty signal would silently degenerate to a constant. Check "
+            "the classifier's dropout_p."
+        )
+
+    stacked = _softmax_passes(model, records, resolution, device, int(passes))
+    model.eval()  # leave the model as it was handed over, not half in training mode
+    return stacked.mean(axis=0), stacked.std(axis=0)
 
 
 def true_class_indices(records: list[dict]) -> np.ndarray:
@@ -203,5 +265,6 @@ __all__ = [
     "class_weights_from_records",
     "train_classifier",
     "predict_probabilities",
+    "predict_probabilities_mc_dropout",
     "true_class_indices",
 ]
