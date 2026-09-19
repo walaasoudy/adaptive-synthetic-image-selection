@@ -613,6 +613,90 @@ def build_reference_distribution(
     )
 
 
+# ----------------------------------------------------------------------------------------------
+# Persisting a reference — and rebuilding it through the same guards, never around them
+# ----------------------------------------------------------------------------------------------
+#
+# The reference is computed on a GPU run and consumed by later runs, so it has to survive as a file.
+# The risk that creates is that a loader becomes a second, unguarded constructor: a JSON file could
+# name any split, carry any image ids and claim any cam_model_id. `references_from_artifact`
+# therefore does not reconstruct ReferenceDistribution objects directly — it calls
+# `build_reference_distribution` again, with the CURRENT final_eval_heldout id list, so a stored
+# reference is re-checked for leakage on every load rather than trusted because it was checked once.
+
+REFERENCE_STATISTICS = ("explainability_peripheral_mass", "explainability_focus_area")
+
+
+def reference_artifact_payload(references: dict, extra: dict | None = None) -> dict:
+    """Serialise {(statistic, diagnosis): ReferenceDistribution} into a JSON-safe artifact."""
+    entries = []
+    model_ids = set()
+    for (statistic, diagnosis), reference in sorted(references.items()):
+        if reference.statistic != statistic or reference.diagnosis != diagnosis:
+            raise ValueError(
+                f"reference keyed ({statistic}, {diagnosis}) holds "
+                f"({reference.statistic}, {reference.diagnosis})"
+            )
+        model_ids.add(reference.cam_model_id)
+        entries.append(
+            {
+                "statistic": reference.statistic,
+                "diagnosis": reference.diagnosis,
+                "split_name": reference.split_name,
+                "scientific": bool(reference.scientific),
+                "n": reference.size,
+                "values": [float(value) for value in reference.values],
+                "image_ids": list(reference.image_ids),
+            }
+        )
+    if len(model_ids) != 1:
+        raise ValueError(
+            f"a reference artifact must name exactly one CAM model, got {sorted(model_ids)}"
+        )
+    return {
+        "artifact": "ham10000_explainability_reference",
+        "schema_version": 1,
+        "cam_model_id": model_ids.pop(),
+        "statistics": list(REFERENCE_STATISTICS),
+        "references": entries,
+        **(extra or {}),
+    }
+
+
+def references_from_artifact(
+    payload: dict, final_eval_image_ids, min_size: int = MIN_REFERENCE_SIZE
+) -> dict:
+    """{diagnosis: {statistic: ReferenceDistribution}} — re-verified, not merely deserialised.
+
+    Every entry goes back through `build_reference_distribution`, so a stored reference that names a
+    forbidden split, overlaps final_eval_heldout, or falls below `min_size` fails HERE, at load
+    time, rather than silently calibrating a selection feature.
+
+    `min_size` is an argument rather than whatever the build run happened to use, because the
+    consumer is the one that has to live with a thin reference: a smoke run may lower it
+    deliberately, and a production run must not inherit a lowered value from the file it is reading.
+    """
+    if payload.get("artifact") != "ham10000_explainability_reference":
+        raise ValueError(f"not a HAM10000 explainability reference artifact: {payload.get('artifact')!r}")
+    cam_model_id = str(payload["cam_model_id"])
+
+    references: dict[str, dict] = {}
+    for entry in payload["references"]:
+        reference = build_reference_distribution(
+            entry["values"],
+            entry["image_ids"],
+            str(entry["split_name"]),
+            str(entry["diagnosis"]),
+            str(entry["statistic"]),
+            final_eval_image_ids,
+            cam_model_id=cam_model_id,
+            cam_model_trained=bool(entry["scientific"]),
+            min_size=int(min_size),
+        )
+        references.setdefault(reference.diagnosis, {})[reference.statistic] = reference
+    return references
+
+
 def cam_model_identity(run_manifest: dict, model_path: Path, reference_split: str = "gen_train") -> dict:
     """Validate the classifier whose Grad-CAMs will build a calibration reference; return its identity.
 
@@ -1149,6 +1233,9 @@ __all__ = [
     "build_reference_distribution",
     "calibrate_against_reference",
     "cam_model_identity",
+    "REFERENCE_STATISTICS",
+    "reference_artifact_payload",
+    "references_from_artifact",
     "tie_report",
     "calibrate_explainability",
     "assert_selection_features_allowed",
