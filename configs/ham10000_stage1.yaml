@@ -1,0 +1,151 @@
+# HAM10000 Stage 1 tunables — the dermoscopy counterpart of stage1_lora_sdxl.yaml's `data:` block.
+#
+# Separate file, not an edit to the CheXpert config: the two datasets must be able to run side by
+# side without one's settings silently reaching the other.
+#
+# Carries preprocessing, the real/synthetic geometry contract, and Stage 1 LoRA training.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  data_root: ${paths.project_root}/data/ham10000
+  raw_dir: ${paths.data_root}/raw
+  processed_dir: ${paths.data_root}/processed
+  images_dir: ${paths.processed_dir}/images
+  splits_dir: ${paths.processed_dir}/splits
+  captions_dir: ${paths.processed_dir}/captions
+  # Stage 1 LoRA. `paths.hf_cache_dir` is the key the shared build_models() reads.
+  lora_inputs_dir: ${paths.processed_dir}/lora_inputs     # unpadded native-aspect images + captions
+  lora_cache_dir: ${paths.processed_dir}/lora_cache       # VAE latent + text embedding caches
+  checkpoints_dir: ${paths.project_root}/checkpoints/ham10000/stage1_lora_sdxl
+  logs_dir: ${paths.project_root}/logs/ham10000/stage1_lora_sdxl
+  hf_cache_dir: ${paths.project_root}/.cache/huggingface
+
+data:
+  # RGB, ALWAYS. Colour is the primary diagnostic cue in dermoscopy — pigment network hue,
+  # blue-white veil, regression structures, vascular patterns are all colour phenomena. The CheXpert
+  # path converts to "L" because a radiograph is achromatic and colour there is a defect; doing the
+  # same here would delete the signal the classifier is supposed to read. There is deliberately no
+  # config switch to turn this off.
+  colour_mode: "RGB"
+
+  # 512, not 768/1024. HAM10000's source images are 600x450, so a larger canvas would upscale past
+  # the information actually present: it manufactures no detail and costs VRAM and time in every
+  # later stage. Raise this only if the source images are replaced with a higher-resolution release.
+  resolution: 512
+
+  # Aspect-preserving resize onto a padded square. NEVER centre-crop: a crop can cut a lesion that
+  # sits off-centre or extends to the frame edge, silently removing the thing being classified.
+  # Padding costs a border of dead pixels instead, which is recoverable and measurable — and the
+  # explainability signal specifically watches for attention landing on it.
+  aspect_mode: "letterbox"
+  # Mid-grey rather than black: black padding is easily confused with the dark circular vignette
+  # that real dermatoscopes produce, which would blur the distinction between "our padding" and "a
+  # real scope edge" for both the generator and the explainability check.
+  pad_colour: [128, 128, 128]
+
+  jpeg_quality: 95
+  # Below this, the source image is too small to be a usable dermoscopy frame.
+  min_source_resolution: 100
+
+  # NOTE, deliberately absent: `view_filter`. CheXpert filters lateral radiographs because it trains
+  # on frontal views only. HAM10000 has no view concept at all — every image is a dermatoscopic
+  # close-up — so there is nothing to filter and no equivalent key here.
+
+# ------------------------------------------------------------------------------------------------
+# Geometry contract shared by REAL and SYNTHETIC images
+# ------------------------------------------------------------------------------------------------
+# Every image the classifier or ASISM scores is a `data.resolution` square produced by
+# scripts/utils/ham10000_geometry.letterbox_with_content_box, with its exact content box persisted
+# alongside. Real images get there through 02_preprocess_images.py; synthetic candidates through
+# standardize_generated_image. Neither path ever falls back to an estimated box or the generic band.
+#
+# Why synthetic images are NOT generated as padded squares: a generator that learned padded
+# squares would draw grey bars at positions the pipeline does not know, and explainability would
+# then have no exact content box for them. So:
+#   * Stage 1 must train the LoRA on UNPADDED images at the native aspect ratio (aspect-preserving
+#     resize to `lora_training_size`), never on the letterboxed canvases in images_dir;
+#   * Stage 2 must generate at `generation_size` with no padding;
+#   * the standardisation step refuses (UnknownPaddingError) any generated image at another size or
+#     with a flat border strip, instead of guessing where its content is.
+geometry:
+  source_aspect: [4, 3]           # every HAM10000 source image is 600x450 (verified on all 10015)
+  lora_training_size: [768, 576]  # 4:3, both multiples of 8 for the SDXL VAE; unpadded
+  generation_size: [768, 576]     # 4:3, unpadded; standardised afterwards exactly like real images
+  generated_min_edge_std: 2.0     # a border strip flatter than this is refused as unknown padding
+
+# ================================================================================================
+# Stage 1 LoRA training (scripts/train/ham10000_train_lora_sdxl.py)
+# ================================================================================================
+# Model/LoRA/optimizer/EMA mechanics are the CheXpert Stage 1 implementation, imported unchanged
+# (build_models, LoraEMA, build_optimizer, run_validation). Everything data-facing is HAM10000's own.
+# Every value below can be overridden on the command line as an OmegaConf dotlist, e.g.
+#   training.max_train_steps=4000 optimizer.learning_rate=5e-5
+
+run:
+  seed: 42
+
+split:
+  namespace: "ham-stratified-v1"
+  # DATA ROLES. These two names are asserted in code and cannot be pointed anywhere else: the
+  # generator learns from gen_train only, and gen_val is a loss monitor only. The four classifier /
+  # ASISM / final-eval splits are additionally checked BY IMAGE ID to be absent from both.
+  train_split: "gen_train"
+  monitor_split: "gen_val"
+
+model:
+  base_model_id: "stabilityai/stable-diffusion-xl-base-1.0"
+  revision: "462165984030d82259a11f4367a4eed129e94a7b"   # same pinned revision as the CheXpert run
+  vae_upcast_fp32: true
+  use_refiner: false
+
+lora:
+  rank: 32
+  alpha: 32
+  dropout: 0.0
+  target_modules: ["to_q", "to_k", "to_v", "to_out.0"]
+  train_text_encoders: false
+
+optimizer:
+  name: "adamw_8bit"          # verified by a real step probe; falls back to "adamw"
+  learning_rate: 1.0e-4
+  lr_scheduler: "cosine"
+  lr_warmup_steps: 250
+  weight_decay: 1.0e-2
+  max_grad_norm: 1.0
+
+captions:
+  template_version: "ham-v2"  # must equal scripts/utils/ham10000.TEMPLATE_VERSION (v2 fixes "a/an")
+  num_paraphrase_variants: 4
+  age_bucket_width_years: 10
+
+training:
+  precision: "bf16"
+  train_batch_size: 8
+  gradient_accumulation_steps: 2
+  gradient_checkpointing: true
+  ema:
+    enabled: true
+    decay: 0.9999
+    warmup: true
+  # STARTING VALUES, NOT TUNED. gen_train is 3,586 images (vs ~150k on CheXpert): at an effective
+  # batch of 16 one epoch is ~224 steps, so 8,000 steps is ~36 epochs. The rare classes are tiny
+  # (df 38 images from 26 lesions), so memorisation is the main risk; choose the step from
+  # gen_val loss + pilot samples, not from max_train_steps.
+  max_train_steps: 8000
+  min_train_steps: 2000
+
+checkpointing:
+  save_every_n_steps: 500
+  keep_last_n_full_checkpoints: 3
+  keep_all_lora_weight_snapshots: true
+
+validation:
+  val_every_n_steps: 500
+  max_val_samples: null       # gen_val is only 388 images: use all of it
+  val_seed: 2024
+
+logging:
+  tensorboard: true
+  wandb:
+    enabled: false
+    project: "ham10000-sdxl-lora-stage1"

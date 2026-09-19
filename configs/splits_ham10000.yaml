@@ -1,0 +1,77 @@
+# Six-way LESION-level split policy for HAM10000 — the dermoscopy counterpart of splits.yaml.
+#
+# Same six partitions, same one-seed one-deterministic-list construction, and the same rule that no
+# split is derived from another. Only two things change from the CheXpert policy, and both are
+# forced by the dataset rather than chosen for convenience:
+#
+#   1. split_unit is lesion_id, not patient_id. HAM10000 ships no patient identifier at all, so a
+#      lesion is the strictest grouping available. Several images can show the SAME lesion, so
+#      splitting per-image would place two photographs of one lesion on both sides of a split and
+#      quietly inflate the final numbers. Grouping by lesion_id removes that specific leak; it does
+#      NOT remove the (unmeasurable, because unrecorded) case of one patient contributing two
+#      different lesions to two different splits. The thesis has to state that limit, not hide it.
+#
+#   2. min_positive_groups is 10, not 50. HAM10000 has 115 dermatofibroma images from only 73
+#      lesions, so no fraction assignment can put 50 positive lesions in each of four
+#      decision-bearing splits. 10 is the floor this thesis will not go below; the FRACTIONS are
+#      what gets adjusted to meet it (see below), never the floor.
+#
+#   3. The split is CLASS-STRATIFIED at lesion level (every lesion carries exactly one diagnosis,
+#      verified at build time). The first real-data run used an unstratified lesion permutation
+#      with gen_train 0.50 / evaluation splits 0.09-0.10: the support gate refused it (df 4-9,
+#      vasc 5-6 lesions), and even perfect stratification could not have rescued those fractions
+#      (73 * 0.09 = 6.6 df lesions).
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  data_root: ${paths.project_root}/data/ham10000
+  raw_dir: ${paths.data_root}/raw
+  processed_dir: ${paths.data_root}/processed
+  splits_root: ${paths.processed_dir}/splits
+
+manifest_version: 2
+
+# Six DIRECT partitions, one seed, class-stratified. Must sum to exactly 1.0.
+#
+# HOW THESE NUMBERS WERE DERIVED (from the real metadata, not guessed)
+#   lesions per class: nv 5403, bkl 727, mel 614, bcc 327, akiec 228, vasc 98, df 73.
+#   The binding class is df: a decision-bearing split needs fraction >= 10/73 = 0.137 to hold 10 df
+#   lesions (stratified floor(73 * f) >= 10). Every decision-bearing split is set to >= 0.14, which
+#   gives df 10-12 lesions per split; the four of them take 0.60 of the data. 01_build_splits.py
+#   recomputes this gate from the metadata on every run (--check-feasibility) and refuses to write
+#   if the fractions below ever stop satisfying it.
+#   gen_val keeps 0.04 (Stage 1 loss monitoring only, never a selection decision) and gen_train takes
+#   the remaining 0.36.
+fractions:
+  gen_train: 0.36             # Stage 1 LoRA training; ASISM real-reference pool; IQA blur calibration
+  gen_val: 0.04               # Stage 1 monitoring only
+  classifier_train: 0.16      # A/B/C real training component; ASISM proxy real component
+  classifier_val: 0.14        # A/B/C model selection ONLY (early stop, checkpoint, threshold)
+  asism_tuning_heldout: 0.14  # ASISM Go/No-Go evidence + proxy-search evaluation
+  final_eval_heldout: 0.16    # Stage 5 only — no calibration, tuning or selection ever reads it
+
+split_seed: 42
+split_unit: "lesion_id"
+stratify_by: "dx"
+
+# Minimum-support rule. LESION counts, not image counts, decide eligibility — the same reasoning as
+# the CheXpert policy, one level down the identifier hierarchy.
+#
+# Only min_positive_groups binds in practice. For a given class every other class counts as a
+# negative, so negatives are abundant for all seven; it is the positives that are scarce, and only
+# for df and vasc.
+support_rule:
+  min_positive_groups: 10
+  min_negative_groups: 50
+  decision_bearing_splits:
+    - classifier_train
+    - classifier_val
+    - asism_tuning_heldout
+    - final_eval_heldout
+
+namespaces:
+  production:
+    require_full_cohort: true
+    full_cohort_row_tolerance_pct: 1.0
+  dev:
+    require_full_cohort: false

@@ -1,0 +1,94 @@
+# HAM10000 schema and acquisition reference (the dermoscopy counterpart of dataset_config.yaml).
+#
+# Kept separate from the pipeline's tunables for the same reason the CheXpert one is: this
+# describes the *dataset itself*, and a change here means "the dataset changed", which is a much
+# bigger event than a hyperparameter edit.
+#
+# WHY THIS DATASET DIFFERS STRUCTURALLY FROM CheXpert, and what that costs downstream:
+#
+#   CheXpert  14 observations, each independently {1, 0, -1, blank}. One image can carry several
+#             positive findings at once, and "uncertain" is a real, recorded third state.
+#   HAM10000  7 diagnoses, mutually exclusive. Each image carries exactly ONE diagnosis in `dx`,
+#             and there is no uncertain state in the label itself.
+#
+# HOW HAM10000 IS MODELLED (single-label, multi-class — NOT the CheXpert multi-label path)
+#
+#   Classifier   softmax over the 7 classes, trained with CrossEntropyLoss on integer class-index
+#                targets (scripts/utils/ham10000_classifier.py). Independent sigmoids + BCE are NOT
+#                used anywhere on the HAM10000 path: they can assign P(mel)=0.8 and P(nv)=0.7 to one
+#                image, a state the ground truth can never occupy. This is a methodological choice
+#                about what the model may represent, not a speed trade-off.
+#   Stage 4      scripts/classify/ham10000_train_conditions.py + configs/ham10000_stage4.yaml, a
+#                dedicated entry point that refuses any loss other than cross_entropy. The CheXpert
+#                Stage 4 (01_train_conditions.py, BCE) is never used for HAM10000.
+#   Metrics      argmax decision: accuracy, balanced accuracy, macro-F1, confusion matrix, per-class
+#                precision/recall/F1, plus one-vs-rest AUROC / AP from the softmax probabilities
+#                (scripts/utils/ham10000_metrics.py).
+#   Encodings    class_index_targets() is the training target. build_label_arrays() (one-hot + an
+#                all-True mask) exists only as an EVALUATION-side view for one-vs-rest reporting;
+#                both derive from the same `dx` column and cannot disagree.
+
+source:
+  provider: "kaggle"
+  # Downloaded via kagglehub.dataset_download() by scripts/data/ham10000/00_download_dataset.py.
+  kaggle_dataset_slug: "kmader/skin-cancer-mnist-ham10000"
+  expected_metadata_rows: 10015
+  # The Kaggle mirror ships the images in two directories; both are required.
+  image_directories:
+    - "HAM10000_images_part_1"
+    - "HAM10000_images_part_2"
+  metadata_filename: "HAM10000_metadata.csv"
+
+schema:
+  image_id_column: "image_id"          # e.g. ISIC_0027419 (no extension; files are <image_id>.jpg)
+  # GROUPING KEY FOR EVERY SPLIT. One lesion can be photographed several times, so splitting on
+  # image_id would put two photographs of the SAME lesion on both sides of a split and inflate the
+  # final numbers. HAM10000 has no patient_id at all, so lesion_id is the strictest grouping the
+  # dataset actually supports, and that limitation is stated in the thesis rather than glossed over.
+  group_column: "lesion_id"            # e.g. HAM_0000118
+  diagnosis_column: "dx"               # one of the 7 class codes below
+  diagnosis_method_column: "dx_type"   # histo | follow_up | consensus | confocal
+  age_column: "age"
+  sex_column: "sex"                    # male | female | unknown
+  localization_column: "localization"  # body site, e.g. "back", "lower extremity"
+
+  # The 7 diagnoses, in the canonical serialization order used everywhere else. Ordered by real
+  # prevalence (most common first) purely so reports read predictably; nothing keys off the order
+  # other than column position, which must stay stable once any artifact has been written.
+  diagnosis_classes:
+    - "nv"       # melanocytic nevi                       ~6705 images
+    - "mel"      # melanoma                               ~1113
+    - "bkl"      # benign keratosis-like lesions          ~1099
+    - "bcc"      # basal cell carcinoma                   ~514
+    - "akiec"    # actinic keratoses / Bowen's disease    ~327
+    - "vasc"     # vascular lesions                       ~142
+    - "df"       # dermatofibroma                         ~115
+
+expected_directory_structure: |
+  data/ham10000/raw/
+    HAM10000_metadata.csv
+    HAM10000_images_part_1/
+      ISIC_0027419.jpg
+      ...
+    HAM10000_images_part_2/
+      ISIC_0029306.jpg
+      ...
+
+integrity_checks:
+  # Executed by scripts/data/ham10000/00_download_dataset.py.
+  - "metadata row count within 1% of expected_metadata_rows"
+  - "every dx value is one of diagnosis_classes"
+  - "image_id is unique across the metadata"
+  - "lesion_id is present and non-null for every row"
+  - "spot-check N random images open correctly and have plausible dimensions"
+
+licence:
+  spdx: "CC-BY-NC-SA-4.0"
+  note: >
+    Non-commercial share-alike. Fine for academic thesis use; the citation below is required in any
+    publication, and the official held-out ISIC test server (not this file) is what published
+    numbers are supposed to be compared on.
+  citation: >
+    Tschandl, P., Rosendahl, C. & Kittler, H. The HAM10000 dataset, a large collection of
+    multi-source dermatoscopic images of common pigmented skin lesions. Sci. Data 5, 180161 (2018).
+    doi:10.1038/sdata.2018.161
