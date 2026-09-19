@@ -220,3 +220,118 @@ gonogo:
   selection_fraction: 0.5
   # Overlap at or above this means the signal moved essentially nothing.
   usefulness_jaccard_max: 0.99
+
+# ---------------------------------------------------------------------------------------------
+# Learned selection — the Multi-Objective Ranking Network (ham10000_03/04) and, downstream of it,
+# Adaptive Threshold Learning. This is the thesis's proposed method; the weighted composite remains
+# as the baseline it is compared against, and neither replaces the other.
+# ---------------------------------------------------------------------------------------------
+learned_asism:
+  enabled: true
+  seed: 42
+  checkpoint_dir: ${paths.project_root}/checkpoints/ham10000/asism_learned
+
+  # BALANCED ACCURACY, not accuracy. Plain accuracy on a two-thirds-nv, seven-class problem is
+  # maximised by a model that never predicts a rare class — the exact failure the synthetic data
+  # exists to fix, so a subset that helps df and akiec would be scored as useless. Balanced accuracy
+  # averages recall over the seven classes, so every class counts the same regardless of how many
+  # images it has. macro_f1 is the supported alternative; whichever is chosen is recorded in every
+  # artifact, because a utility measured under one and compared under the other is not a comparison.
+  utility_metric: "balanced_accuracy"
+
+  # The real component of every proxy training run. NOT gen_train (the generator's own training
+  # images) and never final_eval_heldout.
+  real_train_split: "classifier_train"
+
+  # The columns the learned models may see, in this order. Each must have a registered owner in
+  # ham10000_ranking.FEATURE_COLUMNS_BY_SIGNAL, and a column whose signal did not survive Go/No-Go is
+  # dropped before training — implementation is not admission, and that rule binds the learned
+  # selector exactly as it binds the weighted one.
+  feature_columns:
+    - similarity_knn_mean
+    - similarity_top1
+    - similarity_topk_spread
+    - iqa_composite
+    - iqa_sharpness
+    - iqa_contrast_std
+    - uncertainty_mutual_information
+    - uncertainty_predictive_entropy
+    - explainability_calibrated_typicality
+    - agreement_score
+    - agreement_margin
+
+  # Technical safety, applied to the candidate pool BEFORE anything is learned from it, and read
+  # from the iqa/similarity artifacts directly whatever the Go/No-Go gate decided about those
+  # signals. A memorised near-copy of a real patient's lesion must not become selectable because the
+  # similarity signal happened to be redundant with another one.
+  safety:
+    reject_invalid_iqa: true
+    reject_near_duplicates: true
+
+  subset_design:
+    # Kept small relative to the candidate pool so that a single-signal subset — which draws
+    # entirely from ONE quantile band of ONE feature, within ONE role pool — is still drawable
+    # without replacement. --phase feasibility computes exactly that against the real pool and
+    # refuses the build if it does not hold.
+    subset_sizes: [60, 120, 180]
+    total_subsets: 80
+    random_fraction: 0.20
+    single_signal_fraction: 0.30
+    mixed_fraction: 0.50
+    quantile_bins: 3
+    # An image measured in fewer subsets than this gets no distilled target: a marginal contribution
+    # averaged over one or two subsets is noise. Reported at build time, enforced at training time.
+    minimum_image_exposures: 3
+    val_pool_fraction: 0.20
+    seed: 42
+    # --phase build refuses unless the newest feasibility report matches this config and shows zero
+    # failures. No size or ratio is ever adjusted automatically to make a failing report pass.
+    feasibility_thresholds:
+      min_candidates_per_class: 20
+      min_candidates_per_quantile_band: 20
+      min_val_subsets: 8
+
+  # The proxy classifier whose balanced accuracy IS the measured utility. Deliberately cheaper than
+  # the Stage 4 protocol — 224 px and 300 steps against Stage 4's 512 px and 3000 — because it is
+  # run once per subset and its job is to RANK subsets, not to estimate the final numbers. Every
+  # subset is measured under identical settings and one fixed step budget, so the comparison between
+  # them is fair even though none of them is a Stage 4 run. Nothing measured here is ever reported
+  # as a result.
+  proxy:
+    resolution: 224
+    max_steps: 300
+    batch_size: 32
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-4
+    dropout_p: 0.2
+    pretrained_source: "imagenet"
+    seed: 42
+
+  set_utility_network:
+    image_hidden_dims: [128, 64]
+    utility_hidden_dims: [32]
+    epochs: 100
+    batch_size: 8
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-5
+    utility_mse_weight: 1.0
+    pairwise_ranking_weight: 0.5
+    early_stopping_patience: 12
+
+  ranking_network:
+    hidden_dims: [128, 64, 32]
+    dropout: 0.20
+    epochs: 100
+    batch_size: 128
+    learning_rate: 1.0e-4
+    # ONE target, TWO loss terms over it: Smooth-L1 for the value and this pairwise term for the
+    # order. Not a second objective — both terms score the same distilled quantity.
+    pairwise_ranking_weight: 0.5
+    # A single noisy proxy measurement can produce an outlier marginal value that dominates the
+    # regression term. Standardising bounds its influence; the transform is order-preserving, so the
+    # pairwise term is untouched.
+    target_normalization: "standardize"   # "standardize" | "rank" | "none"
+    target_winsorize_quantile: 0.0
+    # Below this many distilled targets the ranker is fitting noise, and it refuses rather than
+    # producing a model whose scores would look ordinary.
+    min_training_images: 50
