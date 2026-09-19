@@ -187,3 +187,36 @@ auxiliary_classifier:
   # The reference describes where a plain model looks, not how well a tuned one scores. Reweighting
   # would change the attention this stage calls "normal".
   class_weighting: "none"
+
+# ---------------------------------------------------------------------------------------------
+# Stage 3b — the Go/No-Go gate's thresholds (scripts/asism/ham10000_02_gonogo.py).
+#
+# These decide which signals may be weighted into the selector at all, so they are set BEFORE the
+# artifacts are looked at and are not adjusted to admit a signal that failed.
+# ---------------------------------------------------------------------------------------------
+gonogo:
+  # A score taking fewer distinct values than this cannot order a candidate pool of thousands: it is
+  # a coarse flag, not a ranking feature. Well below any real signal's resolution, so it fires only
+  # on a genuinely degenerate artifact.
+  min_unique_values: 20
+
+  # Unscorable candidates. Explainability's NaNs for a class whose gen_train reference was too thin
+  # count here: legitimate and recorded, but still candidates this signal cannot rank, and a signal
+  # missing for a whole class would silently select only within the classes it covers.
+  max_missing_fraction: 0.05
+
+  # Rank correlation, within class, class-size weighted. 0.90 is deliberately permissive: signals
+  # measuring related properties of the same image SHOULD correlate, and the gate is looking for a
+  # near-restatement — one signal's ranking recoverable from another's — not for mere association.
+  redundancy_abs_correlation_max: 0.90
+  # Classes with fewer comparable pairs than this are skipped rather than contributing a correlation
+  # estimated from a handful of candidates.
+  min_pairs_for_correlation: 20
+
+  # Usefulness: the equal-weight reference selector keeps this fraction OF EACH CLASS, with and
+  # without the signal under test. Half is the neutral choice — it maximises the number of candidates
+  # whose inclusion could change — and it is a diagnostic here, not the selection rate Stage 3 will
+  # actually use; that rate is what Adaptive Threshold Learning decides.
+  selection_fraction: 0.5
+  # Overlap at or above this means the signal moved essentially nothing.
+  usefulness_jaccard_max: 0.99
