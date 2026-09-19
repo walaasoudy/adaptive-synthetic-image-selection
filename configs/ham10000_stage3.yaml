@@ -335,3 +335,50 @@ learned_asism:
     # Below this many distilled targets the ranker is fitting noise, and it refuses rather than
     # producing a model whose scores would look ordinary.
     min_training_images: 50
+
+# ---------------------------------------------------------------------------------------------
+# Stage 3e — Adaptive Threshold Learning, and the selection it publishes as asism_selected.csv.
+#
+# THE ORDER IS PART OF THE METHOD and is fixed in code: safety, then an absolute quality floor,
+# then the class-aware threshold, then a rare class's floor, then the budget cap. Rarity never
+# buys admission for a bad image, and the floor can only ever admit a class's BEST remaining
+# candidates because it runs after the quality floor has removed the pool's worst.
+# ---------------------------------------------------------------------------------------------
+selection:
+  # PRE-REGISTERED, and set before any threshold was seen. Both policies are computed on every run
+  # and both appear in the manifest; this decides which one writes the selection. Which produces
+  # better classifiers is a Stage 4 question — run condition C under each — not something the
+  # selector can answer about itself.
+  #   network     the proposed method: AdaptiveThresholdNetwork distilled from the frozen search
+  #   percentile  the training-free class-adaptive baseline it has to beat
+  threshold_policy: "network"
+
+  # Absolute floor on the pooled ranking score, applied before any class is considered. Pooled, not
+  # per class: a per-class floor would define "bad" relative to each class's own candidates, so the
+  # weakest class's mediocre images would clear a floor its own mediocrity had set.
+  quality_floor_percentile: 25
+
+  # Budget, proportional to each class's REAL training count rather than flat. A flat quota would
+  # hand df as many synthetic images as nv and change the class balance far more than the
+  # augmentation intends.
+  target_synthetic_to_real_ratio: 1.0
+  # The floor exists so a rare class is never selected down to nothing; the cap stops a class whose
+  # candidates all score well from dominating the augmented training set.
+  min_accepted_per_class: 50
+  max_accepted_per_class: 2000
+
+  percentile_policy:
+    # The most common class is cut at base_percentile, the rarest at min_percentile, and the classes
+    # between them interpolate on RANGE-normalised prevalence. Not prevalence divided by the maximum:
+    # with nv at two thirds of the data that would bunch every other class at nearly the same
+    # leniency, which is the opposite of what a class-adaptive rule is for.
+    base_percentile: 50.0
+    min_percentile: 10.0
+
+  network_policy:
+    # Weight on missing a class's budget, relative to the mean score of what is kept. At 1.0 a cut
+    # that misses the budget by 100% is penalised as much as the entire available score range, so
+    # the budget matters without being able to force in bad candidates on its own.
+    budget_weight: 1.0
+    epochs: 400
+    learning_rate: 1.0e-2
