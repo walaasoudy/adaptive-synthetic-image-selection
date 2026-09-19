@@ -70,6 +70,77 @@ signals:
     mass_fraction: 0.80
     min_reference_size: 20
 
+  # -------------------------------------------------------------------------------------------
+  # Similarity — DINOv2 embeddings, k-NN against REAL gen_train images of the same class.
+  #
+  # Same encoder and same pinned revision as the CheXpert stage (stage3_asism.yaml): the choice is
+  # not dataset-specific. DINOv2 is self-supervised on natural images with no medical labels, so it
+  # carries no diagnostic prior into a realism measurement — it compares appearance, which is the
+  # only thing this signal claims to compare. It is NOT fine-tuned on HAM10000: an encoder tuned on
+  # the same real images would measure closeness to its own training set.
+  # -------------------------------------------------------------------------------------------
+  similarity:
+    encoder: "vit_small_patch14_dinov2"   # architecture; the weights below are what actually load
+    weights_repo_id: "timm/vit_small_patch14_dinov2.lvd142m"
+    weights_filename: "model.safetensors"
+    # Pinned by commit, never "main": a moved tag would silently change every embedding, and with it
+    # every similarity score and every selection decision downstream.
+    weights_revision: "936966a8732c5442c9def5d126f2cc4ad4243dba"
+    batch_size: 32
+
+    k_neighbors: 15                 # k-NN aggregation; never single-nearest-neighbour
+    # Real references sampled per CLASS from gen_train. Flat, not proportional: nv would otherwise
+    # supply two thirds of every pool, and the rare classes — the ones the synthetic data exists for
+    # — would be compared against the thinnest references.
+    reference_sample_per_class: 400
+    # Floor on the same-class POOL. Below it the row falls back to the class-agnostic tier and says
+    # so in similarity_reference_tier.
+    min_same_class_references: 25
+
+    # MEMORISATION, not fidelity. The 0.95 cutoff is literature-grounded, not hand-tuned: DINOv2
+    # cosine >= 0.95 means "almost identical" for medical latent-diffusion output, validated against
+    # real patient replication by Dar et al., "Unconditional latent diffusion models memorize
+    # patient imaging data", Nature Biomedical Engineering (2025), doi:10.1038/s41551-025-01468-8.
+    # Carried over unchanged from the CheXpert stage and NOT recalibrated on dermoscopy; the flag
+    # rate on the first full candidate pool is reported so the number can be revisited on evidence.
+    near_duplicate_similarity: 0.95
+    # Only sharpens an already-flagged image into "collapsed onto ONE real image" vs "close to a
+    # cluster of near-identical real ones". It never creates a flag on its own.
+    near_duplicate_top1_gap: 0.02
+
+  # -------------------------------------------------------------------------------------------
+  # Uncertainty — MC Dropout over the frozen auxiliary classifier.
+  # -------------------------------------------------------------------------------------------
+  uncertainty:
+    # Passes through the SAME images with different dropout masks. 20 is the usual operating point
+    # in the MC-Dropout literature and the cost here is linear in this number.
+    mc_dropout_passes: 20
+
+    # Bands on NORMALISED MUTUAL INFORMATION (epistemic uncertainty / log 7), so both numbers read
+    # as a fraction of the maximum possible uncertainty and do not change meaning if the class count
+    # ever does.
+    #
+    # PROVISIONAL, and deliberately not presented as calibrated: unlike the IQA blur threshold,
+    # these two do not gate anything. Nothing in the pipeline penalises a band — the column is
+    # reported and the selection policy decides. The band distribution over the real gen_train
+    # images is written with the signal artifact, so if the split turns out to be uninformative
+    # (nearly every image in one band) it is visible before any selection is made.
+    low_band_max: 0.05
+    moderate_band_max: 0.20
+
+  # -------------------------------------------------------------------------------------------
+  # Agreement — the auxiliary classifier's read of the class the recipe asked the generator for.
+  # -------------------------------------------------------------------------------------------
+  agreement:
+    # A rival class is "confident" past this. 1/7 = 0.143 is chance on this dataset, so 0.5 means a
+    # rival holding at least half the probability mass — an image that reads as a different lesion,
+    # not merely an unsure one.
+    rival_confidence_threshold: 0.5
+    # Deliberately below 1.0. Under a softmax the rival probability is not independent evidence (it
+    # is already reflected in a low intended probability), so weighting it at 1.0 would count the
+    # same failure twice. It separates "confidently the wrong lesion" from "diffusely unsure".
+    penalty_weight: 0.5
+
 # ---------------------------------------------------------------------------------------------
 # ASISM auxiliary classifier — the real-only model this stage scores WITH, never scores.
 #

@@ -1,8 +1,16 @@
-"""ASISM signals specialised for dermoscopy: colour-safe IQA and lesion-appropriate explainability.
+"""ASISM signals specialised for dermoscopy: colour-safe IQA, lesion-appropriate explainability,
+and the single-label forms of similarity, uncertainty and agreement.
 
-Only the two signals whose CheXpert implementations encode radiograph-specific assumptions live
-here. Similarity (DINOv2), uncertainty (MC dropout) and agreement are genuinely dataset-agnostic and
-are still used from scripts/asism/signals.py unchanged.
+WHY ALL FIVE LIVE HERE. The first two were ported because their CheXpert implementations encode
+radiograph-specific assumptions (achromatic images, anatomical region priors). The other three are
+here for a different reason, discovered when they were about to be reused as-is: they are not
+dataset-agnostic either. Every one of them is written against CheXpert's ELEVEN INDEPENDENT BINARY
+labels — reference selection walks a Jaccard neighbourhood over label SETS, uncertainty averages a
+per-label Bernoulli entropy, agreement averages probabilities over an intended positive SET and
+penalises "unintended" labels that a sigmoid head can raise independently. HAM10000 has ONE
+mutually exclusive class per image under a softmax. Running the CheXpert versions on a softmax row
+would not crash; it would silently compute a different quantity (see each function's docstring for
+the specific one). So they are reimplemented, not reused.
 
 scripts/asism/signals.py is not modified by this module. The CheXpert path keeps its behaviour
 exactly; this is a parallel implementation selected by dataset, not a mutation of the shared one.
@@ -14,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from PIL import Image
 
 # ==============================================================================================
@@ -784,6 +793,334 @@ def selection_explainability_column(frame):
     return frame["explainability_calibrated_typicality"]
 
 
+# ==============================================================================================
+# Similarity — realism against real images OF THE SAME LESION CLASS, and memorisation kept apart
+# ==============================================================================================
+#
+# WHAT THE CHEXPERT VERSION DOES AND WHY IT DOES NOT TRANSFER
+#   `signals.hierarchical_reference_indices` picks a synthetic image's real references by walking a
+#   four-tier hierarchy over label SETS: exact set match -> Jaccard >= 0.5 neighbourhood -> any
+#   shared positive -> everything. Tiers 2 and 3 exist because CheXpert labels CO-OCCUR: an image
+#   intending {Cardiomegaly, Edema} has a meaningful partial match in {Cardiomegaly, Effusion}.
+#
+#   HAM10000's seven classes are MUTUALLY EXCLUSIVE. Every intended set has exactly one element, so
+#   Jaccard against another single-element set is 1.0 for the same class and 0.0 for any other, and
+#   "shares a positive" is identical to "is the same class". Tiers 1, 2 and 3 therefore collapse
+#   onto one another, and running the CheXpert code would report a tier name ("tier2_neighbourhood")
+#   that describes a partial-overlap relationship this dataset cannot express. Two honest tiers
+#   remain, and they are named for what they are.
+#
+# WHY A CLASS-AGNOSTIC FALLBACK STILL EXISTS
+#   Not for the rare classes as such — every HAM10000 class has enough real gen_train images to
+#   reference. It exists so an unusable per-class pool (a class whose preprocessed reference images
+#   are missing on this machine) produces a SCORED row carrying its tier, rather than a silent gap
+#   in the candidate table that later joins would turn into a dropped candidate. The tier column is
+#   what makes the weaker comparison visible; a tier-2 row is a measurement against "real
+#   dermoscopy in general", not against the class, and must be read as such.
+
+SIMILARITY_TIER_SAME_CLASS = "tier1_same_class"
+SIMILARITY_TIER_CLASS_AGNOSTIC = "tier2_class_agnostic"
+
+
+def single_label_reference_indices(
+    diagnosis: str,
+    reference_diagnoses: list[str],
+    min_same_class: int,
+) -> tuple[np.ndarray, str]:
+    """Real-reference rows for one synthetic image: same class when there are enough, else all.
+
+    Returns (indices, tier). `min_same_class` is a floor on the POOL, not on k: a top-k mean taken
+    over a three-image pool is dominated by whichever three images happen to be present.
+    """
+    same = np.array(
+        [index for index, value in enumerate(reference_diagnoses) if value == diagnosis], dtype=int
+    )
+    if len(same) >= int(min_same_class):
+        return same, SIMILARITY_TIER_SAME_CLASS
+    return np.arange(len(reference_diagnoses), dtype=int), SIMILARITY_TIER_CLASS_AGNOSTIC
+
+
+def compute_similarity_scores(
+    synthetic_embeddings: np.ndarray,
+    reference_embeddings: np.ndarray,
+    reference_diagnoses: list[str],
+    intended_diagnoses: list[str],
+    config,
+) -> pd.DataFrame:
+    """k-NN cosine similarity to real images of the same class, plus a SEPARATE memorisation flag.
+
+    Fidelity and memorisation stay in different columns on purpose. An image nearly identical to one
+    specific real training image is a privacy and novelty FAILURE, not a fidelity success; a selector
+    fed a single blended score would rank exactly that image highest. Here the fidelity columns are
+    free to be high while `novelty_is_near_duplicate` marks the image, and the selection policy
+    decides what to do about it.
+
+    Cosine similarity on DINOv2 embeddings measures VISUAL agreement — colour, pigment texture,
+    structure. It is not a diagnostic judgement: a synthetic image can sit close to real melanomas
+    and still show a dermoscopic pattern no melanoma has.
+    """
+    similarity_cfg = config.signals.similarity
+    k = int(similarity_cfg.k_neighbors)
+    min_same_class = int(similarity_cfg.min_same_class_references)
+    near_dup_similarity = float(similarity_cfg.near_duplicate_similarity)
+    near_dup_gap = float(similarity_cfg.near_duplicate_top1_gap)
+
+    if len(reference_embeddings) != len(reference_diagnoses):
+        raise ValueError(
+            f"{len(reference_embeddings)} reference embeddings but {len(reference_diagnoses)} "
+            "reference diagnoses; the two are positional and must describe the same images"
+        )
+    if len(synthetic_embeddings) != len(intended_diagnoses):
+        raise ValueError(
+            f"{len(synthetic_embeddings)} synthetic embeddings but {len(intended_diagnoses)} "
+            "intended diagnoses; the two are positional and must describe the same images"
+        )
+    if len(reference_embeddings) == 0:
+        raise ValueError("no real reference embeddings; similarity has nothing to measure against")
+
+    synthetic_norm = synthetic_embeddings / (
+        np.linalg.norm(synthetic_embeddings, axis=1, keepdims=True) + 1e-8
+    )
+    reference_norm = reference_embeddings / (
+        np.linalg.norm(reference_embeddings, axis=1, keepdims=True) + 1e-8
+    )
+
+    rows = []
+    for row_index, diagnosis in enumerate(intended_diagnoses):
+        indices, tier = single_label_reference_indices(
+            diagnosis, reference_diagnoses, min_same_class
+        )
+        similarities = reference_norm[indices] @ synthetic_norm[row_index]
+
+        effective_k = min(k, len(similarities))
+        top_k = np.sort(similarities)[-effective_k:][::-1]
+        top1 = float(top_k[0])
+        knn_mean = float(top_k.mean())
+        spread = float(top_k[0] - top_k[-1]) if effective_k > 1 else 0.0
+        rest_mean = float(top_k[1:].mean()) if effective_k > 1 else top1
+        top1_gap = top1 - rest_mean
+
+        # Crossing the similarity threshold is sufficient for the flag on its own. The gap is a
+        # SECOND, narrower reading: a large gap means the image collapsed onto ONE real image rather
+        # than onto a cluster of near-identical real ones — the difference between reproducing an
+        # individual patient's lesion and reproducing a common appearance.
+        is_near_duplicate = bool(top1 >= near_dup_similarity)
+        collapsed_onto_single = bool(is_near_duplicate and top1_gap >= near_dup_gap)
+
+        rows.append(
+            {
+                "similarity_knn_mean": knn_mean,
+                "similarity_top1": top1,
+                "similarity_topk_spread": spread,
+                "similarity_top1_gap": top1_gap,
+                "similarity_reference_tier": tier,
+                "similarity_reference_diagnosis": diagnosis,
+                "similarity_n_references": int(len(indices)),
+                "similarity_k_used": int(effective_k),
+                "novelty_is_near_duplicate": is_near_duplicate,
+                "novelty_collapsed_onto_single_reference": collapsed_onto_single,
+                # High only when the image resembles its class WITHOUT copying a specific real
+                # image. A memorised image earns no novelty credit at all.
+                "novelty_score": float(knn_mean * (1.0 - float(is_near_duplicate))),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+# ==============================================================================================
+# Uncertainty — the softmax decomposition, not an average of per-label Bernoulli entropies
+# ==============================================================================================
+#
+# WHAT THE CHEXPERT VERSION MEASURES
+#   `signals.compute_uncertainty_scores` bands on the mean MC-Dropout standard deviation across
+#   labels and reports a per-label Bernoulli entropy averaged over the eleven labels. Both are
+#   correct for eleven INDEPENDENT sigmoid outputs.
+#
+# WHY THAT NUMBER IS THE WRONG ONE HERE
+#   A softmax row is a single distribution over seven mutually exclusive classes; its components are
+#   constrained to sum to 1 and are strongly negatively correlated. Treating each as an independent
+#   Bernoulli and averaging their entropies does not estimate the uncertainty of the prediction — it
+#   is dominated by the many near-zero components, and on this dataset by whichever class is
+#   frequent (nv is ~66% of HAM10000), so it would rank images by their class more than by how
+#   unsure the model is.
+#
+# WHAT IS MEASURED INSTEAD — and why the split matters for SELECTING synthetic images
+#   Over MC-Dropout passes p = 1..P with softmax rows q_p:
+#       predictive entropy  H[mean_p q_p]            TOTAL uncertainty
+#       expected entropy    mean_p H[q_p]            ALEATORIC — ambiguity in the image itself
+#       mutual information  predictive - expected    EPISTEMIC — disagreement BETWEEN dropout masks
+#   Only the last is what dropout sampling actually adds, and only it separates the two cases that
+#   matter to this stage: an image the model finds genuinely ambiguous (high aleatoric — plausibly a
+#   hard, informative example) from an image the model has no settled opinion about (high epistemic —
+#   typically off-distribution, i.e. a generation artefact).
+#
+#   All three are normalised by log(7) so they land in [0, 1] and the band thresholds read as
+#   fractions of maximum uncertainty rather than as nats.
+#
+# BANDS ARE REPORTED, NOT PENALISED
+#   Whether moderate uncertainty is good or bad is a SELECTION-POLICY question (TSynD's premise is
+#   that the moderate band is the most informative), decided downstream together with the other
+#   signals. The band column exists so that decision can be made and audited; nothing here turns it
+#   into a score.
+
+UNCERTAINTY_BANDS = ("low", "moderate", "extreme")
+
+
+def _entropy(distributions: np.ndarray) -> np.ndarray:
+    """Shannon entropy in nats along the last axis, with 0 log 0 := 0."""
+    clipped = np.clip(distributions, 1e-12, 1.0)
+    return -(distributions * np.log(clipped)).sum(axis=-1)
+
+
+def compute_uncertainty_scores(probability_passes: np.ndarray, config) -> pd.DataFrame:
+    """Uncertainty columns from the raw (n_passes, n_images, n_classes) MC-Dropout softmax passes.
+
+    The per-pass array is required rather than the (mean, std) pair, because the aleatoric/epistemic
+    split cannot be recovered from a mean and a standard deviation: mean_p H[q_p] needs each pass's
+    own distribution. `ham10000_classifier.predict_probability_passes` returns exactly this array.
+    """
+    passes = np.asarray(probability_passes, dtype=np.float64)
+    if passes.ndim != 3:
+        raise ValueError(
+            f"expected a (n_passes, n_images, n_classes) array, got shape {passes.shape}"
+        )
+    n_passes, _, n_classes = passes.shape
+    if n_passes < 2:
+        raise ValueError(
+            f"n_passes={n_passes}: with one pass the epistemic term is identically zero by "
+            "construction and the signal would be a constant, not a measurement"
+        )
+
+    uncertainty_cfg = config.signals.uncertainty
+    low_max = float(uncertainty_cfg.low_band_max)
+    moderate_max = float(uncertainty_cfg.moderate_band_max)
+    if not 0.0 < low_max < moderate_max:
+        raise ValueError(
+            f"uncertainty bands must satisfy 0 < low_band_max ({low_max}) < moderate_band_max "
+            f"({moderate_max}); both are fractions of log({n_classes})"
+        )
+
+    mean_probabilities = passes.mean(axis=0)
+    scale = float(np.log(n_classes))
+
+    predictive_entropy = _entropy(mean_probabilities) / scale
+    expected_entropy = _entropy(passes).mean(axis=0) / scale
+    # Non-negative in exact arithmetic (Jensen); the clip removes float noise around zero only.
+    mutual_information = np.clip(predictive_entropy - expected_entropy, 0.0, None)
+
+    standard_deviation = passes.std(axis=0)
+
+    bands = np.where(
+        mutual_information <= low_max,
+        "low",
+        np.where(mutual_information <= moderate_max, "moderate", "extreme"),
+    )
+
+    return pd.DataFrame(
+        {
+            "uncertainty_predictive_entropy": predictive_entropy,
+            "uncertainty_expected_entropy": expected_entropy,
+            "uncertainty_mutual_information": mutual_information,
+            "uncertainty_mean_std": standard_deviation.mean(axis=1),
+            "uncertainty_max_std": standard_deviation.max(axis=1),
+            "uncertainty_band": bands,
+            "uncertainty_n_passes": np.full(len(mean_probabilities), n_passes, dtype=int),
+        }
+    )
+
+
+# ==============================================================================================
+# Agreement — does the auxiliary classifier read back the class the generator was asked for?
+# ==============================================================================================
+#
+# WHAT IS DIFFERENT FROM THE CHEXPERT VERSION
+#   There, "unintended labels the classifier is confident about" is INDEPENDENT evidence: sigmoid
+#   outputs are unconstrained, so a recipe can score a high intended probability AND a high
+#   unintended one, and the penalty catches exactly that. Under a softmax the probabilities sum to
+#   1, so a confident rival class MATHEMATICALLY implies a low intended probability — the penalty is
+#   not new evidence and cannot be added as though it were.
+#
+#   It is kept, with a different justification, because it separates two failure modes that share
+#   the same low intended probability:
+#     * diffuse — probability spread over several classes: the classifier is unsure;
+#     * decided — one rival class holds most of the mass: the image reads as a DIFFERENT lesion.
+#   The second is the one that puts a mislabelled image into training data, so it is penalised
+#   further. `agreement_margin` (intended minus best rival) carries the same distinction as a
+#   continuous quantity, for a downstream policy that prefers not to use a threshold at all.
+#
+# WHAT THIS IS NOT
+#   Not clinical verification. The generator and the classifier were fitted to the same real images
+#   and can share a bias — agreeing while both are wrong. It measures consistency between two
+#   models, and the auxiliary classifier is itself weakest on the rare classes this stage cares most
+#   about.
+
+
+def compute_agreement_scores(
+    probabilities: np.ndarray,
+    intended_diagnoses: list[str],
+    config,
+    labels: list[str] | None = None,
+) -> pd.DataFrame:
+    """Label-consistency between each recipe's intended class and the auxiliary classifier's read.
+
+        agreement = P(intended) - penalty_weight * P(best rival)   [when that rival is confident]
+                  = P(intended)                                    [otherwise]
+    """
+    from scripts.utils.ham10000 import CLASSIFIER_TARGET_LABELS, normalize_diagnosis
+
+    labels = list(labels) if labels is not None else list(CLASSIFIER_TARGET_LABELS)
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    if probabilities.ndim != 2 or probabilities.shape[1] != len(labels):
+        raise ValueError(
+            f"expected (n_images, {len(labels)}) softmax probabilities, got shape {probabilities.shape}"
+        )
+    if len(probabilities) != len(intended_diagnoses):
+        raise ValueError(
+            f"{len(probabilities)} probability rows but {len(intended_diagnoses)} intended diagnoses"
+        )
+
+    agreement_cfg = config.signals.agreement
+    threshold = float(agreement_cfg.rival_confidence_threshold)
+    penalty_weight = float(agreement_cfg.penalty_weight)
+
+    label_index = {label: position for position, label in enumerate(labels)}
+    rows = []
+
+    for row_index, raw_diagnosis in enumerate(intended_diagnoses):
+        # An unrecognised dx is a broken recipe row, not an unlabelled one: scoring it would silently
+        # compare against an arbitrary column. normalize_diagnosis raises instead.
+        diagnosis = normalize_diagnosis(raw_diagnosis)
+        probability_row = probabilities[row_index]
+        intended_position = label_index[diagnosis]
+
+        intended_probability = float(probability_row[intended_position])
+        rival_probabilities = np.delete(probability_row, intended_position)
+        rival_position = int(np.argmax(rival_probabilities))
+        best_rival_probability = float(rival_probabilities[rival_position])
+        best_rival = [label for label in labels if label != diagnosis][rival_position]
+
+        predicted = labels[int(np.argmax(probability_row))]
+        penalty_applied = bool(best_rival_probability >= threshold)
+        penalty = best_rival_probability if penalty_applied else 0.0
+
+        rows.append(
+            {
+                "agreement_score": intended_probability - penalty_weight * penalty,
+                "agreement_intended_diagnosis": diagnosis,
+                "agreement_intended_prob": intended_probability,
+                "agreement_predicted_diagnosis": predicted,
+                "agreement_is_argmax_match": bool(predicted == diagnosis),
+                "agreement_best_rival_diagnosis": best_rival,
+                "agreement_best_rival_prob": best_rival_probability,
+                "agreement_margin": intended_probability - best_rival_probability,
+                "agreement_penalty_applied": penalty_applied,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 __all__ = [
     "CONTINUOUS_WEIGHT",
     "MIN_REFERENCE_SIZE",
@@ -816,4 +1153,11 @@ __all__ = [
     "calibrate_explainability",
     "assert_selection_features_allowed",
     "selection_explainability_column",
+    "SIMILARITY_TIER_SAME_CLASS",
+    "SIMILARITY_TIER_CLASS_AGNOSTIC",
+    "single_label_reference_indices",
+    "compute_similarity_scores",
+    "UNCERTAINTY_BANDS",
+    "compute_uncertainty_scores",
+    "compute_agreement_scores",
 ]

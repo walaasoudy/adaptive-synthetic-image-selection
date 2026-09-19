@@ -218,10 +218,16 @@ def predict_probabilities(model, records: list[dict], resolution: int, device: s
     return _softmax_passes(model, records, resolution, device, 1)[0]
 
 
-def predict_probabilities_mc_dropout(
+def predict_probability_passes(
     model, records: list[dict], resolution: int, passes: int, device: str | None = None
-) -> tuple[np.ndarray, np.ndarray]:
-    """(mean, std) over `passes` stochastic forward passes — the Stage 3 uncertainty signal.
+) -> np.ndarray:
+    """The raw (n_passes, n_images, n_classes) MC-Dropout softmax samples.
+
+    Exposed alongside the (mean, std) helper below because the Stage 3 uncertainty signal splits
+    total uncertainty into its aleatoric and epistemic parts, and that split needs each pass's own
+    distribution: the expected entropy mean_p H[q_p] cannot be recovered from a mean and a standard
+    deviation. Returning the samples here keeps that arithmetic in the signal module and the
+    inference — the expensive part — in one place.
 
     Dropout only is switched back on, via the shared `enable_mc_dropout`: calling `model.train()`
     would also put BatchNorm into batch-statistics mode, which changes the predictions themselves
@@ -230,7 +236,7 @@ def predict_probabilities_mc_dropout(
 
     Refuses rather than degenerating:
       * a model with no dropout modules would make every pass identical and the signal a constant;
-      * fewer than two passes gives a standard deviation that is exactly zero by construction.
+      * fewer than two passes gives a spread that is exactly zero by construction.
     """
     torch = require_torch()
     from scripts.utils.classifier import enable_mc_dropout
@@ -252,6 +258,19 @@ def predict_probabilities_mc_dropout(
 
     stacked = _softmax_passes(model, records, resolution, device, int(passes))
     model.eval()  # leave the model as it was handed over, not half in training mode
+    return stacked
+
+
+def predict_probabilities_mc_dropout(
+    model, records: list[dict], resolution: int, passes: int, device: str | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """(mean, std) over `passes` stochastic forward passes.
+
+    A summary of `predict_probability_passes`, kept because callers that only need the mean
+    prediction and its spread should not have to reduce the sample array themselves. Same guards —
+    they live in the function that runs the passes.
+    """
+    stacked = predict_probability_passes(model, records, resolution, passes, device)
     return stacked.mean(axis=0), stacked.std(axis=0)
 
 
@@ -265,6 +284,7 @@ __all__ = [
     "class_weights_from_records",
     "train_classifier",
     "predict_probabilities",
+    "predict_probability_passes",
     "predict_probabilities_mc_dropout",
     "true_class_indices",
 ]
