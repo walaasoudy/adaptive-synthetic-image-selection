@@ -155,8 +155,8 @@ def load_candidate_pool(
     stage3,
     stage2_root: Path,
     *,
-    reject_invalid_iqa: bool = True,
-    reject_near_duplicates: bool = True,
+    reject_invalid_iqa: bool | None = None,
+    reject_near_duplicates: bool | None = None,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, list[str], dict]:
     """The merged, safety-filtered pool the learned selector trains and scores on.
@@ -165,7 +165,18 @@ def load_candidate_pool(
     every column of every SURVIVING signal — nothing from a signal the gate excluded or marked
     ablation-only, because those must be absent from the learned model as well as from the weighted
     one, and the merge is where that is enforced.
+
+    The two safety switches default to `learned_asism.safety` in the config rather than to hardcoded
+    `True`. They used to be plain Python defaults that no caller overrode, which made the config
+    keys decorative: turning one off for a sensitivity run changed nothing and said nothing. An
+    explicit argument still wins, so a test can exercise one switch without editing the config.
     """
+    safety = stage3.learned_asism.safety
+    if reject_invalid_iqa is None:
+        reject_invalid_iqa = bool(safety.reject_invalid_iqa)
+    if reject_near_duplicates is None:
+        reject_near_duplicates = bool(safety.reject_near_duplicates)
+
     namespace_dir = Path(stage3.paths.outputs_dir) / namespace
     scores_dir = namespace_dir / "signals"
     gonogo_path = namespace_dir / "gonogo_report.json"
@@ -223,6 +234,13 @@ def load_candidate_pool(
 
     report = {
         "surviving_signals": surviving,
+        # Recorded so a pool built with a check switched off cannot be mistaken for one built with
+        # it on. A removal count of zero means "nothing failed"; it must not also mean "nothing was
+        # checked", and these two flags are what tells the two apart.
+        "safety_checks_applied": {
+            "reject_invalid_iqa": bool(reject_invalid_iqa),
+            "reject_near_duplicates": bool(reject_near_duplicates),
+        },
         "candidates_before_safety_gate": int(before),
         "candidates_after_safety_gate": int(len(merged)),
         "safety_gate_removals": counts,

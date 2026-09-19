@@ -135,16 +135,84 @@ def network_thresholds(scores_by_class, real_counts, targets, labels, selection_
 
     thresholds = {label: 1.0 for label in labels}
     thresholds.update({label: float(value) for label, value in zip(present, predicted)})
+
+    in_sample = {
+        label: float(abs(predicted[index] - searched[label])) for index, label in enumerate(present)
+    }
+    held_out = _leave_one_class_out_residual(present, searched, contexts, selection_cfg, seed)
+
     diagnostics = {
         "searched_thresholds": {label: float(value) for label, value in searched.items()},
-        "distillation_residual": {
-            label: float(abs(predicted[index] - searched[label])) for index, label in enumerate(present)
+        "distillation_residual": in_sample,
+        # WHAT THE IN-SAMPLE RESIDUAL DOES AND DOES NOT SHOW. It is a FIDELITY measure: how closely
+        # the distilled network reproduces the cuts the frozen search already chose. It is not
+        # evidence that the network learned a RULE, because AdaptiveThresholdNetwork receives a
+        # per-class embedding and is fitted on one point per class — it can reach a near-zero
+        # residual by memorising seven numbers through that embedding alone, without the context
+        # vector contributing anything.
+        #
+        # The leave-one-class-out residual is the measurement that can tell the two apart: each
+        # class is predicted by a network that never saw it, so only the CONTEXT can carry the
+        # answer. Close to the in-sample residual means the context explains the thresholds; much
+        # larger means the fit is memorisation and the thresholds in use are effectively the
+        # search's own. Reported either way, and never used to change the thresholds applied — this
+        # is a statement about what may be claimed, not a tuning signal.
+        "distillation_residual_leave_one_class_out": held_out,
+        "residual_summary": {
+            "in_sample_mean": float(np.mean(list(in_sample.values()))) if in_sample else None,
+            "leave_one_class_out_mean": float(np.mean(list(held_out.values()))) if held_out else None,
+            "interpretation": (
+                "in_sample = fidelity to the frozen search; leave_one_class_out = whether the class "
+                "context, rather than the class embedding, explains the searched thresholds"
+            ),
         },
         "budget_weight": budget_weight,
         "context_features": list(CONTEXT_FEATURES),
         "final_loss": float(loss.item()),
     }
     return thresholds, diagnostics
+
+
+def _leave_one_class_out_residual(present, searched, contexts, selection_cfg, seed: int) -> dict:
+    """|predicted - searched| for each class, from a network fitted WITHOUT that class.
+
+    Cheap: seven fits of a tiny MLP on at most six points each, CPU, seconds. It never touches the
+    thresholds that are applied; it only says whether the distillation claim is supportable.
+    """
+    import torch
+
+    from scripts.asism.models import AdaptiveThresholdNetwork
+    from scripts.utils.seed import set_seed
+
+    if len(present) < 3:
+        return {}
+    residuals = {}
+    for held_out in present:
+        others = [label for label in present if label != held_out]
+        set_seed(int(seed))
+        network = AdaptiveThresholdNetwork(len(CLASSIFIER_TARGET_LABELS), len(CONTEXT_FEATURES))
+        optimizer = torch.optim.AdamW(
+            network.parameters(), lr=float(selection_cfg.network_policy.learning_rate)
+        )
+        ids = torch.tensor([CLASSIFIER_TARGET_LABELS.index(label) for label in others], dtype=torch.long)
+        context = torch.tensor(np.stack([contexts[label] for label in others]), dtype=torch.float32)
+        target = torch.tensor([searched[label] for label in others], dtype=torch.float32)
+        network.train()
+        for _ in range(int(selection_cfg.network_policy.epochs)):
+            loss = torch.nn.functional.mse_loss(network(ids, context), target)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        network.eval()
+        with torch.no_grad():
+            prediction = float(
+                network(
+                    torch.tensor([CLASSIFIER_TARGET_LABELS.index(held_out)], dtype=torch.long),
+                    torch.tensor(contexts[held_out][None], dtype=torch.float32),
+                )[0]
+            )
+        residuals[held_out] = float(abs(prediction - searched[held_out]))
+    return residuals
 
 
 def apply_thresholds(frame: pd.DataFrame, thresholds: dict[str, float]) -> pd.Series:
@@ -229,6 +297,16 @@ def run(namespace: str, policy: str | None = None) -> dict:
         .reset_index(drop=True)
     )
 
+    if selected.empty:
+        raise PoolGate(
+            "the selection is empty: no candidate in any class cleared its threshold.\n"
+            f"quality floor p{float(selection_cfg.quality_floor_percentile)} = {floor:.4f} left "
+            f"{len(above_floor)}/{len(frame)} candidates, and the {policy} policy then admitted none "
+            "of them.\nWriting an empty asism_selected.csv would make condition C a second copy of "
+            "condition A under a different name. Investigate the ranking scores or the policy "
+            "before selecting."
+        )
+
     manifest_frame = pd.read_csv(Path(stage2.paths.stage2_root) / namespace / "all_candidates.csv")
     paths = dict(zip(manifest_frame["image_id"].astype(str), manifest_frame["image_path"].astype(str)))
     output = pd.DataFrame(
@@ -268,6 +346,20 @@ def run(namespace: str, policy: str | None = None) -> dict:
         for label in labels
         if int((frame["dx"] == label).sum()) > 0 and not len(scores_by_class[label])
     }
+    # The floor is pooled, so it need not remove the same SHARE of every class. A class losing most
+    # of its candidates to it is a finding about the generator for that class, and it is invisible
+    # in the all-or-nothing `eliminated` line above — that one fires only at exactly zero survivors.
+    floor_attrition = {}
+    for label in labels:
+        total = int((frame["dx"] == label).sum())
+        if not total:
+            continue
+        survived = int(len(scores_by_class[label]))
+        floor_attrition[label] = {
+            "candidates": total,
+            "above_quality_floor": survived,
+            "removed_fraction": round(1.0 - survived / total, 4),
+        }
     short_of_target = {
         label: {"selected": int(per_class_selected.get(label, 0)), "target": targets[label]}
         for label in labels
@@ -303,6 +395,7 @@ def run(namespace: str, policy: str | None = None) -> dict:
         # the generator or the gate, and Stage 4 has to be read knowing it.
         "classes_short_of_target": short_of_target,
         "classes_eliminated_by_the_quality_floor": eliminated,
+        "quality_floor_attrition_per_class": floor_attrition,
         "n_selected": int(len(output)),
         "selected_path": str(selected_path),
         "stage4_path": str(stage4_path),
@@ -332,6 +425,18 @@ def run(namespace: str, policy: str | None = None) -> dict:
     print("=" * 72, flush=True)
     print(f"  quality floor  p{selection_cfg.quality_floor_percentile} = {floor:.4f} "
           f"({len(above_floor)}/{len(frame)} candidates above it)", flush=True)
+    summary = network_diagnostics["residual_summary"]
+    if summary["leave_one_class_out_mean"] is not None:
+        print(
+            f"  distillation   in-sample residual {summary['in_sample_mean']:.4f}  "
+            f"leave-one-class-out {summary['leave_one_class_out_mean']:.4f}"
+            "   (LOCO >> in-sample means the network reproduced the search rather than"
+            " learning a rule from the class context)",
+            flush=True,
+        )
+    heavy = {k: v["removed_fraction"] for k, v in floor_attrition.items() if v["removed_fraction"] >= 0.5}
+    if heavy:
+        print(f"  quality floor removed >=50% of the candidates of: {heavy}", flush=True)
     if eliminated:
         print(f"  ELIMINATED by the quality floor (no candidate above it): {eliminated}", flush=True)
     if short_of_target:

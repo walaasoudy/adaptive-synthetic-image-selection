@@ -57,9 +57,16 @@ def test_a_rarer_class_receives_a_more_lenient_percentile():
     assert percentiles["df"] < percentiles["akiec"] < percentiles["mel"] < percentiles["nv"]
 
 
-def test_leniency_is_range_normalised_not_divided_by_the_largest_class():
-    """Dividing by the maximum would leave every class except nv bunched at nearly the same cut,
-    which is the opposite of what a class-adaptive rule is for."""
+def test_the_classes_below_the_largest_are_spread_rather_than_collapsed_onto_the_minimum():
+    """What the rule actually guarantees: the non-dominant classes receive DIFFERENT cuts ordered by
+    their real rarity, not one shared cut at min_percentile.
+
+    Deliberately not claimed here: that range normalisation differs meaningfully from dividing by
+    the maximum. On HAM10000's real distribution the two agree to within 0.7 percentile points for
+    every class, because nv is far enough above the rest that subtracting the minimum prevalence
+    barely moves anything — see the note in configs/ham10000_stage3.yaml. The test below pins the
+    property the policy has, not the one it was once described as having.
+    """
     from scripts.asism.ham10000_thresholds import rarity_scaled_percentiles
 
     counts = {"nv": 10000, "mel": 300, "bkl": 250, "bcc": 200, "akiec": 150, "vasc": 100, "df": 50}
@@ -67,6 +74,27 @@ def test_leniency_is_range_normalised_not_divided_by_the_largest_class():
 
     rest = [percentiles[label] for label in LABELS if label != "nv"]
     assert max(rest) - min(rest) > 1.0  # they are spread, not collapsed onto min_percentile
+    # and the ordering follows rarity: rarer class, more lenient (lower) percentile
+    assert percentiles["df"] < percentiles["vasc"] < percentiles["akiec"] < percentiles["mel"]
+
+
+def test_range_normalisation_is_not_claimed_to_separate_the_rare_classes_on_real_prevalences():
+    """Guards the honest description: on the REAL HAM10000 class distribution the two candidate
+    normalisations are interchangeable, so no write-up may present the choice as consequential."""
+    from scripts.asism.ham10000_thresholds import rarity_scaled_percentiles
+
+    real = {"nv": 6705, "mel": 1113, "bkl": 1099, "bcc": 514, "akiec": 327, "vasc": 142, "df": 115}
+    total = sum(real.values())
+    prevalence = {label: real[label] / total for label in LABELS}
+    largest = max(prevalence.values())
+
+    range_normalised = rarity_scaled_percentiles(real, LABELS, 50.0, 10.0)
+    divided_by_max = {label: 10.0 + 40.0 * (prevalence[label] / largest) for label in LABELS}
+
+    assert max(abs(range_normalised[label] - divided_by_max[label]) for label in LABELS) < 1.0
+    # and the real consequence of the policy, stated plainly: nv strict, everyone else lenient
+    assert range_normalised["nv"] == 50.0
+    assert all(range_normalised[label] < 20.0 for label in LABELS if label != "nv")
 
 
 def test_a_class_with_no_real_images_does_not_get_the_most_lenient_cut():
@@ -370,6 +398,66 @@ def test_the_network_policy_records_how_far_it_drifted_from_the_search_it_distil
     assert set(diagnostics["distillation_residual"]) == set(diagnostics["searched_thresholds"])
     assert all(value >= 0 for value in diagnostics["distillation_residual"].values())
     assert diagnostics["context_features"][0] == "real_prevalence"
+
+
+def test_the_distillation_is_also_scored_on_classes_the_network_never_saw(workspace):
+    """The in-sample residual cannot distinguish a learned rule from memorisation.
+
+    AdaptiveThresholdNetwork takes a per-class embedding and is fitted on one point per class, so it
+    can drive the in-sample residual to ~0 through the embedding alone while the context vector
+    contributes nothing. The leave-one-class-out residual is the measurement that separates the two,
+    because a class predicted by a network that never saw it can only be answered from its context.
+    This test pins that it is COMPUTED and REPORTED — not that it comes out low, which is an
+    empirical result about the data and not something a test may assert in advance.
+    """
+    manifest = _run(policy="network")
+    diagnostics = manifest["network_diagnostics"]
+
+    held_out = diagnostics["distillation_residual_leave_one_class_out"]
+    assert set(held_out) == set(diagnostics["distillation_residual"])
+    assert all(value >= 0 for value in held_out.values())
+
+    summary = diagnostics["residual_summary"]
+    assert summary["in_sample_mean"] is not None and summary["leave_one_class_out_mean"] is not None
+    assert "context" in summary["interpretation"]
+
+
+def test_the_quality_floor_reports_how_much_of_each_class_it_removed(workspace):
+    """A pooled floor need not remove the same share of every class, and a class that loses most of
+    its candidates to it is a finding about the generator. The all-or-nothing elimination line fires
+    only at exactly zero survivors, so it cannot show that."""
+    manifest = _run()
+
+    attrition = manifest["quality_floor_attrition_per_class"]
+    assert attrition, "no class reported its attrition"
+    for entry in attrition.values():
+        assert entry["above_quality_floor"] <= entry["candidates"]
+        assert 0.0 <= entry["removed_fraction"] <= 1.0
+
+
+def test_an_empty_selection_is_refused_rather_than_written(workspace):
+    """An empty asism_selected.csv would make condition C a second copy of condition A under a
+    different name, and Stage 4 would train nine runs before anything noticed.
+
+    Forced through the budget: with every class budgeted zero images, the frozen search maximises
+    its objective by keeping nothing and the per-class floor has nothing to restore. That is a
+    degenerate configuration on purpose — the point is the guard, not the route to it.
+    """
+    (workspace / "overlay.yaml").write_text(
+        "ham_stage3:\n"
+        "  selection:\n"
+        "    min_accepted_per_class: 0\n"
+        "    max_accepted_per_class: 0\n"
+        "    network_policy:\n"
+        "      epochs: 50\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit, match="selection is empty"):
+        _run()
+
+    assert not (workspace / "outputs/ham10000/stage3/asism_selected.csv").exists(), (
+        "an empty selection was written where Stage 4 condition C would read it"
+    )
 
 
 if __name__ == "__main__":

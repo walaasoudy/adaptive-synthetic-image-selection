@@ -14,6 +14,10 @@ signals:
     # clipping 0.0%. Kept until a separate decision; only the blur threshold is recalibrated here.
     blank_std_threshold: 5.0
     low_contrast_std: 15.0
+    # NOT READ by the HAM10000 IQA path. compute_iqa_scores measures clipping as the fraction of
+    # pixels at luminance <= 1 or >= 254 and flags the image when those sum above 0.20; none of that
+    # comes from this key. Kept only so the file still parses against the CheXpert schema it was
+    # derived from — do not tune it expecting an effect, and do not report it as a setting.
     clipping_percentile: 0.995
 
     # BORDER ARTIFACT — DECIDED 2026-09-19: measured on the CONTENT box, not the canvas.
@@ -384,9 +388,16 @@ selection:
 
   percentile_policy:
     # The most common class is cut at base_percentile, the rarest at min_percentile, and the classes
-    # between them interpolate on RANGE-normalised prevalence. Not prevalence divided by the maximum:
-    # with nv at two thirds of the data that would bunch every other class at nearly the same
-    # leniency, which is the opposite of what a class-adaptive rule is for.
+    # between them interpolate on RANGE-normalised prevalence.
+    #
+    # HONEST NOTE ON WHAT THIS NORMALISATION BUYS: very little, and the write-up must not claim
+    # otherwise. Range normalisation and dividing by the maximum were measured on HAM10000's real
+    # class distribution and differ by at most 0.7 percentile points for every class, because nv is
+    # such an outlier that subtracting the minimum prevalence changes almost nothing. Under either
+    # rule the effective behaviour is "nv at 50, every other class between 10 and 16" — six of seven
+    # classes sit near the lenient end. That is a defensible policy for this dataset, and it is the
+    # BASELINE the network policy is compared against, but it should be described as what it is
+    # rather than as a fix for bunching.
     base_percentile: 50.0
     min_percentile: 10.0
 

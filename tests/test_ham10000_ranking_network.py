@@ -233,6 +233,32 @@ def test_the_safety_gate_runs_even_when_its_signals_did_not_survive_the_gate(wor
     assert report["safety_gate_removals"] == {"invalid_iqa_safety_gate": 3, "near_duplicate_safety_gate": 5}
 
 
+def test_the_safety_switches_come_from_the_config_and_are_recorded_in_the_report(workspace):
+    """Regression: both switches used to be plain Python defaults that no caller overrode, so
+    `learned_asism.safety` in the config was decorative — turning a check off changed nothing and
+    said nothing. A removal count of zero must not be readable as "nothing failed" when the truth is
+    "nothing was checked", so the report states which checks actually ran.
+    """
+    _write_pool(workspace, near_duplicates=5, invalid_iqa=3)
+
+    _, _, on = _pool(workspace)
+    assert on["safety_checks_applied"] == {"reject_invalid_iqa": True, "reject_near_duplicates": True}
+    assert on["candidates_after_safety_gate"] == N - 8
+
+    (workspace / "overlay.yaml").write_text(
+        "ham_stage3:\n"
+        "  learned_asism:\n"
+        "    safety:\n"
+        "      reject_near_duplicates: false\n",
+        encoding="utf-8",
+    )
+    _, _, off = _pool(workspace)
+    assert off["safety_checks_applied"]["reject_near_duplicates"] is False
+    # the config change reached the gate: the five near-duplicates are no longer removed
+    assert off["candidates_after_safety_gate"] == N - 3
+    assert "near_duplicate_safety_gate" not in off["safety_gate_removals"]
+
+
 def test_the_safety_gate_fails_closed_on_a_candidate_it_has_no_row_for():
     """An image the gate cannot vouch for is not the same as an image the gate approved, and the
     difference matters most exactly when something upstream has gone wrong."""
