@@ -43,3 +43,6 @@ Thumbs.db
 
 # dev-subset pipeline resume markers
 .pipeline_state/
+
+# Test-run scratch dir; an interrupted pytest leaves it behind
+tests/_runtime/

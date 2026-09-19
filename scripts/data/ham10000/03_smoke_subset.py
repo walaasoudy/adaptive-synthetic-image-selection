@@ -343,7 +343,13 @@ def main() -> int:
 
         iqa_rows = []
         for row in records:
-            scores = compute_iqa_scores(out_dir / f"{row['image_id']}.jpg", resolved_iqa_cfg)
+            # The persisted letterbox box, not a default: the committed border_region is
+            # "content_box", and compute_iqa_scores refuses to invent a box rather than
+            # silently scoring the padding this preprocessing added.
+            scores = compute_iqa_scores(
+                out_dir / f"{row['image_id']}.jpg", resolved_iqa_cfg,
+                content_box=boxes[str(row["image_id"])],
+            )
             iqa_rows.append({"image_id": row["image_id"], "dx": row["dx_norm"], **scores})
         iqa = pd.DataFrame(iqa_rows)
         iqa["iqa_is_clipping"] = (iqa["iqa_clipped_low_fraction"] + iqa["iqa_clipped_high_fraction"]) > 0.20

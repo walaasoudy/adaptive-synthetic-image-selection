@@ -58,6 +58,20 @@ HAM_STAGE3 = OmegaConf.load(CONFIGS_DIR / "ham10000_stage3.yaml")
 FIXTURE_CALIBRATION = {"source_split": "gen_train", "rule": "lower_quantile", "quantile": 0.02, "laplacian_blur_threshold": 20.0}
 CONFIG = resolve_iqa_config(HAM_STAGE3, FIXTURE_CALIBRATION)
 
+# The committed config measures the border on the CONTENT BOX, so compute_iqa_scores now requires
+# each image's box and refuses to invent one. The fixtures below are square, unpadded arrays written
+# straight to disk: their true content box is the whole canvas, which is what this constant says. It
+# is not a way of switching the region off — on these images the content box and the canvas are the
+# same region, so the numbers are identical to what they were before the region changed, and the
+# tests keep exercising the committed configuration rather than a private one.
+UNPADDED_BOX = (0.0, 0.0, 1.0, 1.0)
+
+# The inherited canvas behaviour, kept ONLY for the tests whose subject is the difference between
+# the two regions. Nothing in the pipeline reads it.
+CANVAS_CONFIG = resolve_iqa_config(
+    OmegaConf.merge(HAM_STAGE3, {"signals": {"iqa": {"border_region": "canvas"}}}), FIXTURE_CALIBRATION
+)
+
 
 def _load_preprocess():
     spec = importlib.util.spec_from_file_location(
@@ -137,7 +151,7 @@ def test_iqa_does_not_penalise_a_colourful_image():
     """The CheXpert IQA subtracts 0.10 for channel divergence because a radiograph is achromatic.
     Carrying that over would fire on every valid dermoscopy image."""
     with fixture_workspace("ham-iqa-colour") as workspace:
-        scores = compute_iqa_scores(_write(workspace, "lesion.jpg", _colourful_lesion()), CONFIG)
+        scores = compute_iqa_scores(_write(workspace, "lesion.jpg", _colourful_lesion()), CONFIG, content_box=UNPADDED_BOX)
     assert scores["iqa_valid"] is True
     assert scores["iqa_channel_saturation"] > 5.0, "fixture must actually be colourful"
     assert scores["iqa_composite"] > 0.8, "a clean colourful lesion must not be penalised"
@@ -153,8 +167,8 @@ def test_iqa_saturation_is_reported_but_carries_no_penalty():
         coloured = grey_like.copy()
         coloured[..., 0] = np.clip(coloured[..., 0].astype(int) + 40, 0, 255)  # add a red cast
 
-        grey_scores = compute_iqa_scores(_write(workspace, "grey.jpg", grey_like), CONFIG)
-        colour_scores = compute_iqa_scores(_write(workspace, "colour.jpg", coloured), CONFIG)
+        grey_scores = compute_iqa_scores(_write(workspace, "grey.jpg", grey_like), CONFIG, content_box=UNPADDED_BOX)
+        colour_scores = compute_iqa_scores(_write(workspace, "colour.jpg", coloured), CONFIG, content_box=UNPADDED_BOX)
 
     assert colour_scores["iqa_channel_saturation"] > grey_scores["iqa_channel_saturation"]
     assert colour_scores["iqa_composite"] >= grey_scores["iqa_composite"] - 0.02, (
@@ -165,7 +179,8 @@ def test_iqa_saturation_is_reported_but_carries_no_penalty():
 def test_iqa_still_catches_real_defects():
     with fixture_workspace("ham-iqa-defects") as workspace:
         blank = compute_iqa_scores(
-            _write(workspace, "blank.jpg", np.full((128, 128, 3), 130, dtype=np.uint8)), CONFIG
+            _write(workspace, "blank.jpg", np.full((128, 128, 3), 130, dtype=np.uint8)), CONFIG,
+            content_box=UNPADDED_BOX,
         )
     assert blank["iqa_is_near_uniform"] is True
     assert blank["iqa_composite"] < 0.6, "a blank frame must still be heavily penalised"
@@ -177,7 +192,7 @@ def test_iqa_composite_is_continuous_enough_for_the_gonogo_gate():
     defect-free image be out-ranked by a defective one."""
     with fixture_workspace("ham-iqa-unique") as workspace:
         composites = [
-            compute_iqa_scores(_write(workspace, f"img{i}.jpg", _colourful_lesion(seed=i)), CONFIG)["iqa_composite"]
+            compute_iqa_scores(_write(workspace, f"img{i}.jpg", _colourful_lesion(seed=i)), CONFIG, content_box=UNPADDED_BOX)["iqa_composite"]
             for i in range(24)
         ]
     assert len(set(composites)) >= 20
@@ -316,10 +331,16 @@ def test_border_calibration_is_an_upper_quantile_from_gen_train_only():
     _expect_raises(ReferenceLeakageError, calibrate_border_threshold, values, "content_box", "gen_train", ids, {ids[3]}, 0.98)
 
 
-def test_border_calibration_stays_disabled_and_labelled_inherited_by_default():
+def test_the_committed_border_region_is_the_content_box_with_calibration_still_disabled():
+    """The frozen methodology choice, pinned so it cannot drift back silently.
+
+    The region and the CUTOFF are two separate decisions: the region moved to the content box
+    because on the canvas the score is dominated by padding this pipeline added, while the threshold
+    is still the inherited 0.30 constant and is labelled as uncalibrated in every artifact row.
+    """
     resolved = resolve_iqa_config(HAM_STAGE3, FIXTURE_CALIBRATION)
     assert HAM_STAGE3.signals.iqa.border_calibration.enabled is False
-    assert resolved.signals.iqa.border_uniform_fraction == 0.30 and resolved.signals.iqa.border_region == "canvas"
+    assert resolved.signals.iqa.border_uniform_fraction == 0.30 and resolved.signals.iqa.border_region == "content_box"
     assert resolved.signals.iqa.border_uniform_fraction_source == "inherited_constant_uncalibrated"
 
 
@@ -339,10 +360,10 @@ def test_enabled_border_calibration_requires_a_matching_artifact():
 def test_iqa_reports_a_numeric_border_score_and_its_region():
     """Regression: the refactor briefly returned the helper FUNCTION under iqa_border_uniform_fraction."""
     canvas, box = _letterboxed_edge_matching_padding()
-    content_config = resolve_iqa_config(OmegaConf.merge(HAM_STAGE3, {"signals": {"iqa": {"border_region": "content_box"}}}), FIXTURE_CALIBRATION)
+    content_config = CONFIG  # the committed config already measures on the content box
     with fixture_workspace("ham-iqa-border") as workspace:
         path = _write(workspace, "letterboxed.jpg", canvas)
-        on_canvas = compute_iqa_scores(path, CONFIG)
+        on_canvas = compute_iqa_scores(path, CANVAS_CONFIG)
         on_content = compute_iqa_scores(path, content_config, content_box=box)
         _expect_raises(UncalibratedIQAError, compute_iqa_scores, path, content_config)
     assert isinstance(on_canvas["iqa_border_uniform_fraction"], float) and on_canvas["iqa_border_region"] == "canvas"
@@ -353,7 +374,7 @@ def test_iqa_reports_a_numeric_border_score_and_its_region():
 def test_measure_sharpness_is_the_value_compute_iqa_thresholds():
     with fixture_workspace("ham-sharpness") as workspace:
         path = _write(workspace, "lesion.jpg", _colourful_lesion())
-        assert measure_sharpness(path) == compute_iqa_scores(path, CONFIG)["iqa_sharpness"]
+        assert measure_sharpness(path) == compute_iqa_scores(path, CONFIG, content_box=UNPADDED_BOX)["iqa_sharpness"]
 
 
 # ---------------------------------------------------------------- explainability

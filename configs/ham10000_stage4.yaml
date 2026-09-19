@@ -32,6 +32,13 @@ conditions:
 # Model selection / validation ONLY. final_eval_heldout is refused here in code: it belongs to
 # Stage 5 and is never read by Stage 4.
 selection_split: "classifier_val"
+# DOCUMENTATION ONLY — no code reads this key, and nothing in Stage 4 selects a model.
+# train_classifier runs a fixed optimizer-step budget and returns the FINAL model: there is no
+# best-checkpoint tracking and no early stopping anywhere in scripts/utils/ham10000_classifier.py.
+# selection_split is scored ONCE after training and written to selection_metrics.json so the
+# manifest records what the frozen model does; the value below names which number in that file is
+# the headline one when reading it. It never changes a weight. The metric that carries a claim is
+# PRIMARY_METRIC in scripts/eval/ham10000_compare_conditions.py.
 selection_metric: "balanced_accuracy"
 
 model:
@@ -50,13 +57,28 @@ training:
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
   eval_every_n_steps: 500
-  # OPEN METHODOLOGY DECISION (the experimenter's, not the code's): "none" or "inverse_frequency".
+  # DECIDED 2026-09-19, before any Stage 4 run: "none". The alternative, "inverse_frequency", is
+  # still implemented and still valid config; it is simply not this experiment's protocol.
   #   none               plain mean CrossEntropy; loss share follows class frequency (nv ~66%).
   #                      Matches the CheXpert Stage 4 (unweighted BCE). Synthetic data is the ONLY
   #                      rebalancing intervention, so A vs B vs C isolates its effect.
   #   inverse_frequency  CrossEntropyLoss(weight=w), w_c = (1/n_c) / mean(1/n); every class then
   #                      contributes ~1/7 of the loss. A second rebalancing mechanism layered on top
   #                      of the synthetic data.
+  #
+  # WHY "none" — three reasons, in order of weight:
+  #   1. The claim under test is that adaptively SELECTED synthetic data helps. Weighting adds a
+  #      second rebalancing mechanism, so a C-over-B gain could no longer be attributed to selection
+  #      alone. Under "none" the training data is the only thing that differs across A, B and C.
+  #   2. The subset utility the ranking network is trained on is measured by a proxy classifier that
+  #      trains UNWEIGHTED (scripts/asism/ham10000_03_build_utility_subsets.py, _measure() passes no
+  #      class_weights). Weighting Stage 4 would optimise the selector for one objective and grade it
+  #      under another.
+  #   3. The Grad-CAM reference model refuses any weighting by design (ham10000_stage3.yaml
+  #      auxiliary.class_weighting, enforced in ham10000_train_auxiliary_classifier.py), so "none"
+  #      keeps the explainability reference and the evaluated models on the same footing.
+  # Not tuned: no code reads a metric and chooses this value, and neither asism_tuning_heldout nor
+  # final_eval_heldout informed it.
   class_weighting: "none"
   # Only read when class_weighting=inverse_frequency. WHICH counts the weights come from:
   #   real_train_split        n_c from the real classifier_train images only -> the SAME weight

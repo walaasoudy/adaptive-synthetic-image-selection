@@ -62,6 +62,15 @@ FAIRNESS_KEYS = (
     "model.resolution",
     "model.dropout_p",
     "class_weighting",
+    # The basis and the resulting vector, not only the on/off switch. Two runs can both say
+    # "inverse_frequency" and still be weighted differently: with basis condition_training_set the
+    # counts come from each condition's own training set, so on ham-stratified-v1 the df/nv weight
+    # ratio is 43x for A but 1.3x for B — weighting would cancel most of what the synthetic images
+    # add, and the switch alone would not show it. Under the frozen protocol (class_weighting=none)
+    # both are None in every manifest, so these two entries cost nothing and close the gap in
+    # advance for any sensitivity run that does turn weighting on.
+    "class_weight_basis",
+    "class_weights",
     "data.real_train_split",
     "data.selection_split",
     "loss",
