@@ -54,7 +54,7 @@ from scripts.utils.ham10000_classifier import (  # noqa: E402
     LesionRecordDataset,
     predict_probability_passes,
 )
-from scripts.utils.ham10000_geometry import validate_content_box  # noqa: E402
+from scripts.utils.ham10000_geometry import load_content_boxes, validate_content_box  # noqa: E402
 from scripts.utils.manifest import get_git_commit_hash, read_json, sha256_file  # noqa: E402
 
 SIGNALS = ("iqa", "similarity", "uncertainty", "agreement", "explainability")
@@ -109,7 +109,13 @@ def candidate_content_boxes(frame: pd.DataFrame) -> dict[str, tuple[float, float
 
     Required for every candidate. The generic band is a different measurement and the reference was
     built with exact boxes, so a fallback here would calibrate one quantity against another.
+
+    Stage 2 writes the boxes to content_boxes.csv beside the candidate images rather than as a column
+    of all_candidates.csv; when the column is absent they are read from that table, which holds the
+    same exact boxes.
     """
+    if "content_box" not in frame.columns:
+        return _content_boxes_from_candidate_tables(frame)
     boxes = {}
     for row in frame.to_dict("records"):
         raw = row.get("content_box")
@@ -120,6 +126,29 @@ def candidate_content_boxes(frame: pd.DataFrame) -> dict[str, tuple[float, float
             )
         value = json.loads(raw) if isinstance(raw, str) else raw
         boxes[str(row["image_id"])] = validate_content_box(value)
+    return boxes
+
+
+def _content_boxes_from_candidate_tables(frame: pd.DataFrame) -> dict[str, tuple[float, float, float, float]]:
+    tables: dict[Path, dict[str, tuple[float, float, float, float]]] = {}
+    boxes = {}
+    for row in frame.to_dict("records"):
+        image_id = str(row["image_id"])
+        table_path = Path(row["image_path"]).parent / "content_boxes.csv"
+        if table_path not in tables:
+            try:
+                tables[table_path] = load_content_boxes(table_path)
+            except (FileNotFoundError, ValueError) as exc:
+                raise UpstreamGate(
+                    f"candidate {image_id} has no content_box in the generation manifest ({exc}); "
+                    "re-run scripts/generate/ham10000_standardize_generated.py"
+                ) from exc
+        if image_id not in tables[table_path]:
+            raise UpstreamGate(
+                f"candidate {image_id} has no content_box in the generation manifest ({table_path}); "
+                "re-run scripts/generate/ham10000_standardize_generated.py"
+            )
+        boxes[image_id] = tables[table_path][image_id]
     return boxes
 
 

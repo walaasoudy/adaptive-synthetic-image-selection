@@ -158,6 +158,46 @@ def test_a_candidate_without_a_content_box_stops_the_run(workspace):
         _run(["iqa"])
 
 
+def _drop_content_box_column(workspace):
+    import pandas as pd
+
+    path = workspace / "outputs/ham10000/stage2" / NAMESPACE / "all_candidates.csv"
+    frame = pd.read_csv(path)
+    frame.drop(columns=["content_box"]).to_csv(path, index=False)
+    return frame
+
+
+def _write_content_box_table(frame, image_ids):
+    from scripts.utils.ham10000_geometry import write_content_boxes
+
+    x0, y0, x1, y1 = CONTENT_BOX
+    write_content_boxes(Path(frame.loc[0, "image_path"]).parent / "content_boxes.csv", [
+        {"image_id": image_id, "source_width": 768, "source_height": 576, "x0": x0, "y0": y0, "x1": x1, "y1": y1}
+        for image_id in image_ids
+    ])
+
+
+def test_boxes_are_read_from_the_stage2_content_box_table_when_the_column_is_absent(workspace):
+    frame = _drop_content_box_column(workspace)
+    _write_content_box_table(frame, frame["image_id"])
+    _run(["iqa"])
+    scores, _ = _artifact(workspace, "iqa")
+    assert sorted(scores["image_id"]) == sorted(frame["image_id"])
+
+
+def test_without_the_column_or_the_table_the_run_still_stops(workspace):
+    _drop_content_box_column(workspace)
+    with pytest.raises(SystemExit, match="content_box"):
+        _run(["iqa"])
+
+
+def test_a_candidate_missing_from_the_content_box_table_stops_the_run(workspace):
+    frame = _drop_content_box_column(workspace)
+    _write_content_box_table(frame, frame["image_id"][1:])
+    with pytest.raises(SystemExit, match="content_box"):
+        _run(["iqa"])
+
+
 # ==============================================================================================
 # Uncertainty and agreement — one set of passes, two independent artifacts
 # ==============================================================================================
