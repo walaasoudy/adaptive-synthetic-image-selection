@@ -188,3 +188,22 @@ def test_unknown_variant_and_default_dirs():
         nf.variant_proxy("steps999")
     assert nf.default_out_name("v1") == "proxy_noise_floor"
     assert nf.default_out_name("steps1500") == "proxy_noise_floor_steps1500"
+
+
+def test_stage4size_changes_only_resolution_and_steps(tmp_path):
+    v1_dir, v1_out = _write_v1(tmp_path)
+    nf.run_plan(v1_dir, v1_out)
+    nf.run_plan(v1_dir, tmp_path / "s4", "stage4size")
+    short = json.loads((v1_out / "noise_floor_plan.json").read_text())
+    s4 = json.loads((tmp_path / "s4" / "noise_floor_plan.json").read_text())
+    assert s4["chosen_subsets"] == short["chosen_subsets"]
+    assert s4["proxy"] == {**short["proxy"], "resolution": 512, "max_steps": 3000}
+    assert nf.default_out_name("stage4size") == "proxy_noise_floor_stage4size"
+
+
+def test_stage4size_matches_the_stage4_config():
+    from omegaconf import OmegaConf
+    stage4 = OmegaConf.load("configs/ham10000_stage4.yaml")
+    proxy = nf.variant_proxy("stage4size")
+    assert proxy["resolution"] == stage4.model.resolution
+    assert proxy["max_steps"] == stage4.training.max_steps

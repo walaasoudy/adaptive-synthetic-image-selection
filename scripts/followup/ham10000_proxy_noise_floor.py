@@ -50,6 +50,17 @@ freezes its own plan, so the two rounds can never mix. Its rule, fixed before it
                                              steps); if that also fails, the proxy utility is reported
                                              as unreliable on this dataset and v2 must select without it.
 
+THIRD AND LAST ROUND: A STAGE-4-SIZED PROXY (--proxy-variant stage4size). The 1500-step round did not
+help: balanced accuracy lost its between-subset signal entirely (ICC 0.00, "no_detectable_signal"),
+and no metric came within 5 repeats. As fixed above, the last round uses Stage 4's own resolution and
+step budget (512 px, 3000 steps) with every other setting still v1's proxy, the same 12 subsets, 4
+seeds and 4 metrics, in its own directory with its own frozen plan. Its rule, fixed before it runs:
+    * repeats_needed <= 5 on some metric  -> Stage 3 v2 uses the Stage-4-sized proxy with that many
+                                             repeats.
+    * otherwise                           -> the proxy utility is reported as unreliable on this
+                                             dataset at all three budgets, and Stage 3 v2 selects
+                                             without a learned utility. There is no fourth round.
+
 WHAT IT NEVER DOES. It does not modify, re-select or re-rank anything from ham-final-v1: the 616
 selected images, the v1 utility files and the v1 code are read-only here. It never reads
 final_eval_heldout. Nothing it measures is a thesis result; it is reported as a post-hoc diagnostic.
@@ -64,7 +75,7 @@ Usage:
     python scripts/followup/ham10000_proxy_noise_floor.py --namespace ham-stratified-v1 --phase plan
     python scripts/followup/ham10000_proxy_noise_floor.py --namespace ham-stratified-v1 --phase measure
     python scripts/followup/ham10000_proxy_noise_floor.py --namespace ham-stratified-v1 --phase analyze
-    (add --proxy-variant steps1500 to each for the second round)
+    (add --proxy-variant steps1500 to each for the second round, stage4size for the third)
 """
 
 from __future__ import annotations
@@ -114,6 +125,7 @@ V1_ARCHITECTURE = "densenet121"
 PROXY_VARIANTS = {
     "v1": {},
     "steps1500": {"max_steps": 1500},
+    "stage4size": {"resolution": 512, "max_steps": 3000},   # configs/ham10000_stage4.yaml model/training
 }
 
 TUNING_SPLIT = "asism_tuning_heldout"
