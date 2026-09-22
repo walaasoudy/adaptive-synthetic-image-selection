@@ -40,6 +40,16 @@ THE DECISION RULE IS FIXED HERE, BEFORE ANY RUN (RELIABILITY_TARGET, MAX_AFFORDA
     The v2 utility metric is the one with the highest single-run ICC among those whose verdict is
     "repeat"; if none is, v2 keeps balanced_accuracy and lengthens the proxy.
 
+SECOND ROUND: A LONGER PROXY (--proxy-variant steps1500). The v1-proxy round (commit 1357407) gave
+every metric the verdict "lengthen_proxy" (balanced accuracy: ICC 0.14, about 25 repeats needed).
+The second round repeats the SAME 12 subsets, 4 seeds and 4 metrics with ONE change: 1500 optimiser
+steps instead of 300 (every other proxy setting stays v1's). It writes to its own directory and
+freezes its own plan, so the two rounds can never mix. Its rule, fixed before it runs:
+    * repeats_needed <= 5 on some metric  -> Stage 3 v2 uses the 1500-step proxy with that many repeats.
+    * otherwise                           -> one last round with a Stage-4-sized proxy (512 px, 3000
+                                             steps); if that also fails, the proxy utility is reported
+                                             as unreliable on this dataset and v2 must select without it.
+
 WHAT IT NEVER DOES. It does not modify, re-select or re-rank anything from ham-final-v1: the 616
 selected images, the v1 utility files and the v1 code are read-only here. It never reads
 final_eval_heldout. Nothing it measures is a thesis result; it is reported as a post-hoc diagnostic.
@@ -54,6 +64,7 @@ Usage:
     python scripts/followup/ham10000_proxy_noise_floor.py --namespace ham-stratified-v1 --phase plan
     python scripts/followup/ham10000_proxy_noise_floor.py --namespace ham-stratified-v1 --phase measure
     python scripts/followup/ham10000_proxy_noise_floor.py --namespace ham-stratified-v1 --phase analyze
+    (add --proxy-variant steps1500 to each for the second round)
 """
 
 from __future__ import annotations
@@ -64,6 +75,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -96,6 +108,13 @@ V1_PROXY = {
     "pretrained_source": "imagenet",
 }
 V1_ARCHITECTURE = "densenet121"
+
+# The proxies this diagnostic may measure, each written as its only differences from V1_PROXY. The
+# Stage 3 config itself is never edited: measure still requires it to be v1's, then applies these.
+PROXY_VARIANTS = {
+    "v1": {},
+    "steps1500": {"max_steps": 1500},
+}
 
 TUNING_SPLIT = "asism_tuning_heldout"
 FORBIDDEN_SPLIT = "final_eval_heldout"
@@ -272,6 +291,17 @@ def check_proxy_config(proxy_cfg) -> None:
         raise NoiseFloorError(f"proxy config differs from v1 (current, v1): {differing}; refusing")
 
 
+def variant_proxy(variant: str) -> dict:
+    """The full proxy recipe of one variant: V1_PROXY with that variant's overrides."""
+    if variant not in PROXY_VARIANTS:
+        raise NoiseFloorError(f"unknown proxy variant {variant!r}; known: {sorted(PROXY_VARIANTS)}")
+    return {**V1_PROXY, **PROXY_VARIANTS[variant]}
+
+
+def default_out_name(variant: str) -> str:
+    return "proxy_noise_floor" if variant == "v1" else f"proxy_noise_floor_{variant}"
+
+
 def freeze_measure_inputs(path: Path, inputs: dict) -> str:
     """Write the measure inputs on the first run; on a resume, refuse if any of them changed."""
     if path.is_file():
@@ -313,7 +343,7 @@ def _append_jsonl(path: Path, row: dict) -> None:
         handle.write(json.dumps(row) + "\n")
 
 
-def run_plan(v1_dir: Path, out_dir: Path) -> dict:
+def run_plan(v1_dir: Path, out_dir: Path, variant: str = "v1") -> dict:
     results_path, subsets_path = v1_dir / "utility_results.jsonl", v1_dir / "utility_subsets.jsonl"
     for path in (results_path, subsets_path):
         if not path.is_file():
@@ -331,12 +361,15 @@ def run_plan(v1_dir: Path, out_dir: Path) -> dict:
         "selection_seed": SELECTION_SEED,
         "selection_basis": "v1 utility ranks, used only to stratify coverage; frozen before any new run, "
                            "and the new runs never influence the choice",
-        "proxy": {**V1_PROXY, "architecture": V1_ARCHITECTURE},
+        "proxy": {**variant_proxy(variant), "architecture": V1_ARCHITECTURE},
         "reliability_target": RELIABILITY_TARGET,
         "max_affordable_repeats": MAX_AFFORDABLE_REPEATS,
         "v1_utility_results_sha256": _sha256(results_path),
         "v1_utility_subsets_sha256": _sha256(subsets_path),
     }
+    if variant != "v1":
+        # Only added for later rounds, so the plan frozen by the v1-proxy round stays identical.
+        plan["proxy_variant"] = variant
     plan_path = out_dir / "noise_floor_plan.json"
     if plan_path.is_file():
         frozen = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -357,8 +390,9 @@ def _gpu_name() -> str:
         return "unknown"
 
 
-def run_measure(namespace: str, v1_dir: Path, out_dir: Path, device: str | None) -> dict:
-    # Reused, not copied: the proxy recipe must be byte-for-byte the one that produced the v1 labels.
+def run_measure(namespace: str, v1_dir: Path, out_dir: Path, device: str | None, variant: str = "v1") -> dict:
+    # Reused, not copied: the proxy training code must be byte-for-byte the one that produced the v1
+    # labels; a variant changes only the settings passed to it.
     from scripts.asism.ham10000_03_build_utility_subsets import _candidate_records, _measure, _split_records
     from scripts.asism.ham10000_ranking import load_candidate_pool
     from scripts.utils.config import load_named_config
@@ -376,15 +410,16 @@ def run_measure(namespace: str, v1_dir: Path, out_dir: Path, device: str | None)
     if FORBIDDEN_SPLIT in {str(learned.real_train_split), TUNING_SPLIT}:
         raise NoiseFloorError("the protected split cannot be used to measure utility")
     check_proxy_config(learned.proxy)
-    if plan["proxy"] != {**V1_PROXY, "architecture": V1_ARCHITECTURE}:
-        raise NoiseFloorError("the frozen plan records a different proxy than this code; refusing")
+    proxy = variant_proxy(variant)
+    if plan["proxy"] != {**proxy, "architecture": V1_ARCHITECTURE} or plan.get("proxy_variant", "v1") != variant:
+        raise NoiseFloorError(f"the frozen plan records a different proxy than variant {variant!r}; refusing")
 
     splits_dir = Path(splits_cfg.paths.splits_root) / namespace
     stage2_manifest = Path(stage2.paths.stage2_root) / namespace / "all_candidates.csv"
     real_split = str(learned.real_train_split)
     status = freeze_measure_inputs(out_dir / "measure_inputs.json", {
         "git_commit_hash": get_git_commit_hash(),
-        "proxy": {key: str(learned.proxy[key]) for key in V1_PROXY},
+        "proxy": {key: str(proxy[key]) for key in V1_PROXY},
         f"{real_split}_csv_sha256": _sha256(splits_dir / f"{real_split}.csv"),
         f"{TUNING_SPLIT}_csv_sha256": _sha256(splits_dir / f"{TUNING_SPLIT}.csv"),
         "all_candidates_sha256": _sha256(stage2_manifest),
@@ -411,7 +446,7 @@ def run_measure(namespace: str, v1_dir: Path, out_dir: Path, device: str | None)
     for position, (seed, sid) in enumerate(pending, start=1):
         synthetic = [] if sid == BASELINE_ID else [candidates[i] for i in subsets[sid]["image_ids"]]
         started = time.perf_counter()
-        metrics = _measure(real_records + synthetic, tuning_records, learned.proxy, seed, device)
+        metrics = _measure(real_records + synthetic, tuning_records, SimpleNamespace(**proxy), seed, device)
         seconds = time.perf_counter() - started
         _append_jsonl(runs_path, {
             "subset_id": sid,
@@ -453,7 +488,9 @@ def run_analyze(v1_dir: Path, out_dir: Path) -> dict:
 
     v1 = pd.DataFrame(_read_jsonl(v1_dir / "utility_results.jsonl")).set_index("subset_id")
     same_seed = {}
-    if 42 in complete_seeds:
+    variant = plan.get("proxy_variant", "v1")
+    # Only the v1 proxy reproduces v1's recipe, so only there does seed 42 repeat a v1 label.
+    if 42 in complete_seeds and variant == "v1":
         rerun = first.loc[chosen, 42]
         original = v1.loc[chosen, "augmented_balanced_accuracy"]
         same_seed = {"max_abs_difference": float((rerun - original).abs().max()),
@@ -463,6 +500,8 @@ def run_analyze(v1_dir: Path, out_dir: Path) -> dict:
     report = {
         "diagnostic": "proxy_noise_floor",
         "post_hoc": True,
+        "proxy_variant": variant,
+        "proxy": plan["proxy"],
         "complete_seeds": complete_seeds,
         "chosen_subsets": chosen,
         "chosen_subset_sizes": sizes.tolist(),
@@ -483,6 +522,7 @@ def run_analyze(v1_dir: Path, out_dir: Path) -> dict:
     }
     (out_dir / "noise_floor_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
+    print(f"proxy variant: {variant}  (max_steps {plan['proxy']['max_steps']}, {plan['proxy']['resolution']} px)")
     print(f"complete seeds: {complete_seeds}")
     for label, blocks in (("v1-style label", per_metric), ("paired label", paired_per_metric)):
         print(f"\n{label}")
@@ -507,7 +547,9 @@ def main() -> int:
     parser.add_argument("--phase", required=True, choices=["plan", "measure", "analyze"])
     parser.add_argument("--device", default=None)
     parser.add_argument("--v1-dir", default=None, help="v1 learned/ directory (default: from the Stage 3 config)")
-    parser.add_argument("--out-dir", default=None, help="default: outputs/ham10000/followup/<ns>/proxy_noise_floor")
+    parser.add_argument("--out-dir", default=None,
+                        help="default: outputs/ham10000/followup/<ns>/proxy_noise_floor[_<variant>]")
+    parser.add_argument("--proxy-variant", default="v1", choices=sorted(PROXY_VARIANTS))
     args = parser.parse_args()
 
     if args.v1_dir and args.out_dir:
@@ -518,12 +560,13 @@ def main() -> int:
         stage3 = load_named_config("ham10000_stage3.yaml", "ham_stage3")
         base = Path(stage3.paths.outputs_dir)
         v1_dir = Path(args.v1_dir) if args.v1_dir else base / args.namespace / "learned"
-        out_dir = Path(args.out_dir) if args.out_dir else base.parent / "followup" / args.namespace / "proxy_noise_floor"
+        out_dir = (Path(args.out_dir) if args.out_dir
+                   else base.parent / "followup" / args.namespace / default_out_name(args.proxy_variant))
 
     if args.phase == "plan":
-        result = run_plan(v1_dir, out_dir)
+        result = run_plan(v1_dir, out_dir, args.proxy_variant)
     elif args.phase == "measure":
-        result = run_measure(args.namespace, v1_dir, out_dir, args.device)
+        result = run_measure(args.namespace, v1_dir, out_dir, args.device, args.proxy_variant)
     else:
         result = run_analyze(v1_dir, out_dir)
     print(json.dumps(result, indent=2))

@@ -158,3 +158,33 @@ def test_report_labels_ceiling_and_same_size_as_diagnostics(tmp_path):
     same = report["v1_style_label"]["balanced_accuracy"]["same_size_only"]
     assert same["role"] == "sensitivity"
     assert sum(same["subsets_per_size"].values()) == 12
+
+
+def test_v1_plan_is_unchanged_by_the_variant_option(tmp_path):
+    v1_dir, out_dir = _write_v1(tmp_path)
+    nf.run_plan(v1_dir, out_dir)                                  # default variant
+    plan = json.loads((out_dir / "noise_floor_plan.json").read_text())
+    assert "proxy_variant" not in plan                           # the round-1 plan stays byte-comparable
+    assert nf.run_plan(v1_dir, out_dir, "v1")["status"] == "already frozen, identical"
+
+
+def test_steps1500_plan_changes_only_the_step_budget(tmp_path):
+    v1_dir, v1_out = _write_v1(tmp_path)
+    long_out = tmp_path / "long"
+    nf.run_plan(v1_dir, v1_out)
+    nf.run_plan(v1_dir, long_out, "steps1500")
+    short = json.loads((v1_out / "noise_floor_plan.json").read_text())
+    long = json.loads((long_out / "noise_floor_plan.json").read_text())
+    assert long["chosen_subsets"] == short["chosen_subsets"] and long["seeds"] == short["seeds"]
+    assert long["proxy_variant"] == "steps1500"
+    assert long["proxy"] == {**short["proxy"], "max_steps": 1500}
+    assert sorted(k for k in set(long) | set(short) if long.get(k) != short.get(k)) == ["proxy", "proxy_variant"]
+    with pytest.raises(nf.NoiseFloorError):                       # a frozen round-2 plan cannot become round 1
+        nf.run_plan(v1_dir, long_out, "v1")
+
+
+def test_unknown_variant_and_default_dirs():
+    with pytest.raises(nf.NoiseFloorError):
+        nf.variant_proxy("steps999")
+    assert nf.default_out_name("v1") == "proxy_noise_floor"
+    assert nf.default_out_name("steps1500") == "proxy_noise_floor_steps1500"
