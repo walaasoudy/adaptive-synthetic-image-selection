@@ -1,0 +1,68 @@
+# HAM10000 Stage 4 (v2 follow-up) — conditions A / B / C2 / D2.
+#
+# SEPARATE FILE ON PURPOSE. ham10000_stage4.yaml is v1's protocol and the primary result rests on
+# it; it is not edited, and v2 writes to its own results_dir so a v2 run can never overwrite a v1
+# one. Everything below that is not a condition is copied from v1 unchanged, because the fairness
+# invariant Stage 4 enforces is that only the DATA differs.
+#
+# WHAT THE CONDITIONS ARE
+#   A    real images only                                    (identical to v1's A)
+#   B    real + ALL synthetic candidates                     (identical to v1's B)
+#   C2   real + the candidates the v2 rules selected         top-k per class, per-class floor
+#   D2   real + the same NUMBER drawn at random, per class   the control v1 never had
+# C2 vs D2 is the confirmatory comparison, fixed in scripts/utils/ham10000_conditions.py before any
+# v2 run. C2 and D2 must contain the same number of images per class; the aggregator refuses the
+# table if they do not.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  splits_root: ${paths.project_root}/data/ham10000/processed/splits
+  images_root: ${paths.project_root}/data/ham10000/processed/images
+  results_dir: ${paths.project_root}/outputs/ham10000/stage4_v2
+  checkpoints_dir: ${paths.project_root}/checkpoints/ham10000/stage4_v2
+
+dataset: "ham10000"
+split_namespace: "ham-stratified-v1"
+
+# Asserted in code: any other value makes the entry point refuse to start.
+loss: "cross_entropy"
+classes: ["nv", "mel", "bkl", "bcc", "akiec", "vasc", "df"]   # must equal CLASSIFIER_TARGET_LABELS
+
+real_train_split: "classifier_train"
+conditions:
+  A:
+    synthetic_manifest: null
+  B:
+    synthetic_manifest: ${paths.project_root}/outputs/ham10000/stage2/${split_namespace}/all_candidates.csv
+  C2:
+    synthetic_manifest: ${paths.project_root}/outputs/ham10000/stage3_v2/${split_namespace}/c2_selected.csv
+  D2:
+    synthetic_manifest: ${paths.project_root}/outputs/ham10000/stage3_v2/${split_namespace}/d2_selected.csv
+
+# Model selection / validation ONLY. final_eval_heldout is refused here in code: it belongs to
+# Stage 5 and is never read by Stage 4.
+selection_split: "classifier_val"
+# DOCUMENTATION ONLY — see ham10000_stage4.yaml for the full note. Nothing in Stage 4 selects a
+# model; this names which number in selection_metrics.json is the headline one when reading it.
+selection_metric: "balanced_accuracy"
+
+model:
+  architecture: "densenet121"
+  pretrained_source: "imagenet"
+  dropout_p: 0.2
+  resolution: 512
+
+# Equal OPTIMIZER STEPS across conditions and seeds, exactly as v1: at fixed epochs the larger B
+# dataset would silently receive more gradient updates than A, C2 or D2.
+training:
+  max_steps: 3000
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  eval_every_n_steps: 500
+  # Unchanged from v1, and for the same reason: the training data must be the only thing that
+  # differs across conditions, so no second rebalancing mechanism is layered on top.
+  class_weighting: "none"
+  class_weight_basis: "real_train_split"
+
+seeds: [42, 43, 44]

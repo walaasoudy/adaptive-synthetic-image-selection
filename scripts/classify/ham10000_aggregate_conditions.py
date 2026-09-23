@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Stage 4 aggregation — collect A/B/C across seeds, and verify that only the DATA differed.
+"""Stage 4 aggregation — collect the conditions across seeds, and verify that only the DATA differed.
 
 Stage 4 trains one classifier per (condition, seed). This collects those runs, checks that the
 comparison between them is actually fair, and writes one table. It trains nothing and needs no GPU.
 
-WHAT THE THREE CONDITIONS ARE
-    A   real images only
-    B   real + ALL synthetic candidates
-    C   real + the candidates ASISM selected
+WHAT THE CONDITIONS ARE — see scripts/utils/ham10000_conditions.py, which fixes them per protocol
+    v1   A  real only    B  real + ALL candidates    C   real + the candidates ASISM selected
+    v2   A  real only    B  real + ALL candidates    C2  real + the v2 selection
+                                                     D2  real + the same number, drawn at random
 B is the condition that makes the thesis's claim testable: without it, C versus A would only show
-that synthetic data helps, not that SELECTING it helps, which is the entire contribution.
+that synthetic data helps, not that SELECTING it helps, which is the entire contribution. D2 does
+the same job one level down in v2: it is C2's size held constant while the selection rule is
+removed, so C2 over D2 is selection and not volume.
 
 THE FAIRNESS INVARIANT, CHECKED RATHER THAN ASSUMED. Every condition must have trained under the
 same optimizer-step budget, the same architecture and resolution, the same class weighting, the same
@@ -44,9 +46,12 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.ham10000 import CLASSIFIER_TARGET_LABELS  # noqa: E402
+from scripts.utils.ham10000_conditions import DEFAULT_PROTOCOL, PROTOCOLS, get_protocol  # noqa: E402
 from scripts.utils.manifest import get_git_commit_hash, read_json, write_json  # noqa: E402
 
-CONDITIONS = ("A", "B", "C")
+# v1's condition tuple, kept as a module attribute because Stage 5 imports it. The protocol
+# object is the source of truth; this is its v1 view.
+CONDITIONS = get_protocol("v1").conditions
 HEADLINE_METRICS = ("balanced_accuracy", "macro_f1", "macro_auroc_ovr", "accuracy")
 FORBIDDEN_SPLIT = "final_eval_heldout"
 
@@ -90,10 +95,10 @@ def _dig(manifest: dict, path: str):
     return node
 
 
-def discover_runs(results_dir: Path, namespace: str, seeds: list[int]) -> tuple[dict, list[tuple[str, int]]]:
+def discover_runs(results_dir: Path, namespace: str, seeds: list[int], conditions=CONDITIONS) -> tuple[dict, list[tuple[str, int]]]:
     """Every (condition, seed) that produced both a manifest and its metrics."""
     runs, missing = {}, []
-    for condition in CONDITIONS:
+    for condition in conditions:
         for seed in seeds:
             run_dir = Path(results_dir) / namespace / condition / f"seed{seed}"
             manifest_path = run_dir / "run_manifest.json"
@@ -158,12 +163,18 @@ def check_fairness(runs: dict) -> dict:
     return {key: entry["values"][next(iter(entry["values"]))] for key, entry in observed.items()}
 
 
-def check_training_data_differs(runs: dict) -> dict:
-    """The one thing that SHOULD differ. A condition B or C with no synthetic images is not that
-    condition, whatever its directory is called, and a C identical to B means the selector kept
-    everything — either of which silently turns the experiment into a different one."""
+def check_training_data_differs(runs: dict, protocol=None) -> dict:
+    """The one thing that SHOULD differ, checked rather than assumed.
+
+    A condition that is supposed to carry synthetic images and has none is not that condition,
+    whatever its directory is called. Two arms that are supposed to differ and share a count are
+    either reading the same manifest or reporting a selector that kept everything. And a matched
+    control that does NOT share its arm's count is not a control: C2 vs D2 would then be comparing
+    sizes, which is the confound D2 exists to remove.
+    """
+    protocol = protocol or get_protocol(DEFAULT_PROTOCOL)
     per_condition = {}
-    for condition in CONDITIONS:
+    for condition in protocol.conditions:
         entries = [entry for (name, _), entry in runs.items() if name == condition]
         if not entries:
             continue
@@ -175,26 +186,45 @@ def check_training_data_differs(runs: dict) -> dict:
             "real_train_images": sorted({int(entry["manifest"]["data"]["real_train_images"]) for entry in entries}),
         }
 
+    def counts(condition):
+        return per_condition.get(condition, {}).get("synthetic_images")
+
     notes = []
-    if per_condition.get("A", {}).get("synthetic_images") not in (None, [0]):
-        notes.append("condition A was trained with synthetic images; A is the real-only baseline")
-    for condition in ("B", "C"):
-        counts = per_condition.get(condition, {}).get("synthetic_images")
-        if counts is not None and counts == [0]:
-            notes.append(f"condition {condition} was trained with no synthetic images")
-    b_counts = per_condition.get("B", {}).get("synthetic_images")
-    c_counts = per_condition.get("C", {}).get("synthetic_images")
-    if b_counts and c_counts and b_counts == c_counts:
+    if counts(protocol.baseline) not in (None, [0]):
         notes.append(
-            "conditions B and C used the same number of synthetic images; either the selector kept "
-            "every candidate or C is reading B's manifest"
+            f"condition {protocol.baseline} was trained with synthetic images; "
+            f"{protocol.baseline} is the real-only baseline"
         )
+    for condition in protocol.synthetic_conditions:
+        if counts(condition) == [0]:
+            notes.append(f"condition {condition} was trained with no synthetic images")
+    for left, right in protocol.equal_counts_suspect:
+        if counts(left) and counts(right) and counts(left) == counts(right):
+            notes.append(
+                f"conditions {left} and {right} used the same number of synthetic images; either the "
+                f"selector kept every candidate or {right} is reading {left}'s manifest"
+            )
+    for left, right in protocol.equal_counts_required:
+        left_counts, right_counts = counts(left), counts(right)
+        if not left_counts or not right_counts:
+            continue
+        if left_counts != right_counts:
+            notes.append(
+                f"conditions {left} and {right} used different numbers of synthetic images "
+                f"({left_counts} vs {right_counts}); {right} is {left}'s size-matched control, so a "
+                f"difference between them would be a size difference"
+            )
+        elif per_condition[left]["synthetic_manifest"] == per_condition[right]["synthetic_manifest"]:
+            notes.append(
+                f"conditions {left} and {right} read the same manifest; the control is not a "
+                "separate draw"
+            )
     if notes:
         raise AggregationError("CONDITION DEFINITION:\n  " + "\n  ".join(notes))
     return per_condition
 
 
-def summarise(runs: dict, seeds: list[int]) -> tuple[pd.DataFrame, dict]:
+def summarise(runs: dict, seeds: list[int], conditions=CONDITIONS) -> tuple[pd.DataFrame, dict]:
     rows = []
     for (condition, seed), entry in sorted(runs.items()):
         metrics = entry["metrics"]
@@ -208,7 +238,7 @@ def summarise(runs: dict, seeds: list[int]) -> tuple[pd.DataFrame, dict]:
     frame = pd.DataFrame(rows)
 
     summary = {}
-    for condition in CONDITIONS:
+    for condition in conditions:
         subset = frame[frame["condition"] == condition]
         if subset.empty:
             continue
@@ -236,17 +266,18 @@ def summarise(runs: dict, seeds: list[int]) -> tuple[pd.DataFrame, dict]:
     return frame, summary
 
 
-def rare_class_deltas(summary: dict, real_counts: dict[str, int] | None = None) -> dict:
-    """Per-class recall change from A, which is where a rebalancing intervention has to show up.
+def rare_class_deltas(summary: dict, real_counts: dict[str, int] | None = None, protocol=None) -> dict:
+    """Per-class recall change from the baseline, where a rebalancing intervention has to show up.
 
     Reported per class rather than only as a headline average: a balanced-accuracy gain that comes
     entirely from nv would mean the synthetic data did nothing for the classes it was generated for.
     """
-    if "A" not in summary:
+    protocol = protocol or get_protocol(DEFAULT_PROTOCOL)
+    if protocol.baseline not in summary:
         return {}
-    baseline = summary["A"]["per_class_recall_mean"]
+    baseline = summary[protocol.baseline]["per_class_recall_mean"]
     deltas = {}
-    for condition in ("B", "C"):
+    for condition in protocol.synthetic_conditions:
         if condition not in summary:
             continue
         deltas[condition] = {
@@ -256,23 +287,25 @@ def rare_class_deltas(summary: dict, real_counts: dict[str, int] | None = None) 
     return deltas
 
 
-def run(namespace: str | None = None) -> dict:
-    config = load_named_config("ham10000_stage4.yaml", "ham_stage4")
+def run(namespace: str | None = None, protocol_name: str = DEFAULT_PROTOCOL) -> dict:
+    condition_protocol = get_protocol(protocol_name)
+    config = load_named_config(condition_protocol.stage4_config, "ham_stage4")
     namespace = namespace or str(config.split_namespace)
     seeds = [int(seed) for seed in config.seeds]
     results_dir = Path(config.paths.results_dir)
 
-    runs, missing = discover_runs(results_dir, namespace, seeds)
+    runs, missing = discover_runs(results_dir, namespace, seeds, condition_protocol.conditions)
     if not runs:
         raise AggregationError(
             f"no Stage 4 runs under {results_dir / namespace}.\n"
-            "Run: python scripts/classify/ham10000_train_conditions.py --condition A --seed 42"
+            f"Run: python scripts/classify/ham10000_train_conditions.py --protocol {condition_protocol.name} "
+            f"--condition {condition_protocol.baseline} --seed {seeds[0]}"
         )
 
     check_protected_split(runs)
     protocol = check_fairness(runs)
-    data_per_condition = check_training_data_differs(runs)
-    frame, summary = summarise(runs, seeds)
+    data_per_condition = check_training_data_differs(runs, condition_protocol)
+    frame, summary = summarise(runs, seeds, condition_protocol.conditions)
 
     out_dir = results_dir / namespace
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -281,6 +314,8 @@ def run(namespace: str | None = None) -> dict:
 
     report = {
         "stage": "ham10000_stage4_aggregate",
+        "protocol": condition_protocol.name,
+        "conditions": list(condition_protocol.conditions),
         "namespace": namespace,
         "measured_on": str(config.selection_split),
         "status": (
@@ -294,14 +329,14 @@ def run(namespace: str | None = None) -> dict:
         "shared_protocol": protocol,
         "training_data_per_condition": data_per_condition,
         "per_condition": summary,
-        "per_class_recall_delta_vs_A": rare_class_deltas(summary),
+        f"per_class_recall_delta_vs_{condition_protocol.baseline}": rare_class_deltas(summary, protocol=condition_protocol),
         "table_path": str(table_path),
         "git_commit_hash": get_git_commit_hash(),
     }
     if missing:
         report["commands_for_missing_runs"] = [
             "python scripts/classify/ham10000_train_conditions.py "
-            f"--condition {condition} --seed {seed}"
+            f"--protocol {condition_protocol.name} --condition {condition} --seed {seed}"
             for condition, seed in missing
         ]
     write_json(out_dir / "stage4_condition_summary.json", report)
@@ -310,7 +345,7 @@ def run(namespace: str | None = None) -> dict:
     print("=" * 78, flush=True)
     header = f"  {'cond':<6}{'n':<4}" + "".join(f"{name[:14]:>16}" for name in HEADLINE_METRICS)
     print(header, flush=True)
-    for condition in CONDITIONS:
+    for condition in condition_protocol.conditions:
         entry = summary.get(condition)
         if not entry:
             print(f"  {condition:<6}{'-':<4}  no runs", flush=True)
@@ -327,9 +362,13 @@ def run(namespace: str | None = None) -> dict:
         print(f"  {condition:<6}{entry['n_seeds']:<4}{cells}", flush=True)
     print("=" * 78, flush=True)
 
-    deltas = report["per_class_recall_delta_vs_A"]
+    deltas = report[f"per_class_recall_delta_vs_{condition_protocol.baseline}"]
     if deltas:
-        print("  per-class recall change vs A (where a rebalancing intervention has to show up):", flush=True)
+        print(
+            f"  per-class recall change vs {condition_protocol.baseline} "
+            "(where a rebalancing intervention has to show up):",
+            flush=True,
+        )
         for condition, values in deltas.items():
             formatted = "  ".join(f"{label}{value:+.3f}" for label, value in values.items())
             print(f"    {condition}: {formatted}", flush=True)
@@ -344,9 +383,10 @@ def run(namespace: str | None = None) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--namespace", default=None)
+    parser.add_argument("--protocol", default=DEFAULT_PROTOCOL, choices=sorted(PROTOCOLS))
     args = parser.parse_args()
 
-    report = run(args.namespace)
+    report = run(args.namespace, args.protocol)
     return 0 if report["complete"] else 1
 
 
