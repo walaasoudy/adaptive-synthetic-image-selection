@@ -80,8 +80,13 @@ python scripts/data/ham10000/00_download_dataset.py
 ```
 
 ```bash
-python scripts/data/ham10000/01_build_splits.py --namespace ham --run-id ham-stratified-v1 --freeze
+python scripts/data/ham10000/01_build_splits.py --namespace production --run-id ham-stratified-v1 --freeze
 ```
+
+`--namespace` accepts only `production` or `dev`; the split's own name is the `--run-id`, and that is
+what every later `--namespace ham-stratified-v1` refers to. For this thesis the splits were **not**
+rebuilt on the pod: the local `ham-stratified-v1` was uploaded unchanged (md5 identical). The command
+is for reproducing the project from scratch.
 
 > **Run this once, ever.** Every artifact downstream is keyed to these splits. Rebuilding them later
 > invalidates everything already computed. Back the manifest up immediately:
@@ -97,8 +102,11 @@ python scripts/data/ham10000/02_preprocess_images.py --namespace ham-stratified-
 Resumable per image, so an interrupted run can simply be repeated.
 
 ```bash
-python scripts/data/ham10000/03_smoke_subset.py --namespace ham-stratified-v1
+python scripts/data/ham10000/03_smoke_subset.py --namespace ham-stratified-v1 --per-class-lesions 0
 ```
+
+`--per-class-lesions 0` runs the check on every `gen_train` lesion. With the default sample of 40
+lesions per class, one of the 27 checks failed on the pod; on the whole of `gen_train` all 27 passed.
 
 This reads real pixels from `gen_train` only and prints numbers, not just pass/fail. It is the last
 cheap chance to catch a greyscale conversion, a content box that never reaches the measurement, or
@@ -113,14 +121,22 @@ Unpadded 4:3 images — not the letterboxed canvases, or the LoRA would learn to
 ## 1.2 Stage 1 — SDXL + LoRA  (4 – 8 h)
 
 ```bash
-python scripts/train/ham10000_train_lora_sdxl.py --run-id ham-lora-v1 --auto-resume
+python scripts/train/ham10000_train_lora_sdxl.py --run-id ham-lora-v1
 ```
+
+> **Never use `--auto-resume`.** It ignores `--run-id` and continues whichever run
+> `latest_run.json` names — after a memory probe or a test run, that is the probe, and the real
+> training would be written into the probe's directory. Resume explicitly instead:
+>
+> ```bash
+> python scripts/train/ham10000_train_lora_sdxl.py --run-id ham-lora-v1 --resume-from checkpoints/ham10000/stage1_lora_sdxl/ham-lora-v1/checkpoint-<N>
+> ```
 
 8000 optimizer steps, effective batch 16, 768×576, LoRA rank 32.
 
 **Calibrate the estimate early:** watch the `tqdm` rate after ~100 steps and extrapolate. If it is far
-below ~1 step/s, the bottleneck is volume I/O — see *If training is slow* below. `--auto-resume`
-means a terminated pod loses only the steps since the last checkpoint.
+below ~1 step/s, the bottleneck is volume I/O — see *If training is slow* below. Resuming with
+`--resume-from` means a terminated pod loses only the steps since the last checkpoint.
 
 ## 1.3 Stage 2 — recipes and pilot  (~10 min)
 
@@ -132,8 +148,12 @@ Per-class quotas from `gen_train` only, inverted by rarity: roughly nv 100, bkl 
 bcc 400, akiec 479, vasc 731, df 847 — about 3,120 candidates in total.
 
 ```bash
-python scripts/generate/ham10000_generate_synthetic_images.py --mode pilot
+python scripts/generate/ham10000_generate_synthetic_images.py --mode pilot checkpoint.lora_weights_dir=checkpoints/ham10000/stage1_lora_sdxl/ham-lora-v1/final
 ```
+
+The LoRA must be named explicitly: `checkpoint.lora_weights_dir` is `null` in
+`configs/ham10000_stage2.yaml`, so pilot, approval and full generation refuse to start without it.
+`final` is the snapshot chosen for this thesis; use the same directory in all three commands.
 
 ### ⛔ Stop here. Terminate the pod.
 
@@ -156,11 +176,11 @@ cd /workspace/master && source /workspace/venv/bin/activate && git pull && nvidi
 Only after you have actually looked:
 
 ```bash
-python scripts/generate/ham10000_generate_synthetic_images.py --approve-pilot --reviewer "Walaa" --notes "<what you checked>"
+python scripts/generate/ham10000_generate_synthetic_images.py --approve-pilot --reviewer "Walaa" --notes "<what you checked>" checkpoint.lora_weights_dir=checkpoints/ham10000/stage1_lora_sdxl/ham-lora-v1/final
 ```
 
 ```bash
-python scripts/generate/ham10000_generate_synthetic_images.py --mode full
+python scripts/generate/ham10000_generate_synthetic_images.py --mode full checkpoint.lora_weights_dir=checkpoints/ham10000/stage1_lora_sdxl/ham-lora-v1/final
 ```
 
 ```bash
@@ -381,7 +401,7 @@ whole protocol exists to prevent — the four leakage defences would no longer m
 | Step | Resume unit | Cost of interruption |
 |---|---|---|
 | preprocessing | per image | negligible — rerun |
-| Stage 1 LoRA | optimizer step (`--auto-resume`) | since last checkpoint |
+| Stage 1 LoRA | optimizer step (`--resume-from`, never `--auto-resume`) | since last checkpoint |
 | Stage 2 generation | per image | per-image, manifest-tracked |
 | signals | per signal | recompute one signal |
 | `--phase measure` | per subset | one subset (~1 min) |
