@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""HAM10000 Stage 4: train one condition (A/B/C) x seed with softmax + CrossEntropy.
+"""HAM10000 Stage 4: train one condition x seed with softmax + CrossEntropy.
+
+WHICH conditions exist is a protocol decision, not a flag: --protocol names one of the frozen
+protocols in scripts/utils/ham10000_conditions.py (v1 = A/B/C, v2 = A/B/C2/D2), and that protocol
+chooses both the condition names this accepts and the config file they are read from. The default
+is v1, so every existing v1 command keeps working unchanged.
 
 The dedicated HAM10000 entry point. It never imports the CheXpert trainer
 (scripts/utils/classifier.train_classifier, BCE) — only the dataset-agnostic model builder and
@@ -16,6 +21,7 @@ Writes <results_dir>/<namespace>/<condition>/seed<seed>/: model.pt, selection_me
 
 Usage:
     python scripts/classify/ham10000_train_conditions.py --condition A --seed 42
+    python scripts/classify/ham10000_train_conditions.py --protocol v2 --condition C2 --seed 42
 """
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.utils.classifier import TrainingBudget  # noqa: E402  (dataclass only; no loss code)
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.ham10000 import CLASSIFIER_TARGET_LABELS, normalize_diagnosis  # noqa: E402
+from scripts.utils.ham10000_conditions import DEFAULT_PROTOCOL, PROTOCOLS, get_protocol  # noqa: E402
 from scripts.utils.ham10000_classifier import (  # noqa: E402
     class_weights_from_records,
     predict_probabilities,
@@ -122,7 +129,7 @@ def build_condition_records(config, condition: str) -> tuple[list[dict], list[di
     return train + synthetic, selection, provenance
 
 
-def run(config, condition: str, seed: int, device: str | None = None) -> dict:
+def run(config, condition: str, seed: int, device: str | None = None, protocol_name: str = DEFAULT_PROTOCOL) -> dict:
     validate_config(config)
     if condition not in config.conditions:
         raise Stage4ConfigError(f"unknown condition {condition!r}; configured: {list(config.conditions)}")
@@ -155,6 +162,7 @@ def run(config, condition: str, seed: int, device: str | None = None) -> dict:
     write_json(out_dir / "selection_metrics.json", {"split": str(config.selection_split), **metrics})
     manifest = {
         "dataset": "ham10000",
+        "protocol": protocol_name,
         "condition": condition,
         "seed": int(seed),
         "loss": "cross_entropy",
@@ -174,14 +182,20 @@ def run(config, condition: str, seed: int, device: str | None = None) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--condition", required=True, choices=["A", "B", "C"])
+    parser.add_argument("--protocol", default=DEFAULT_PROTOCOL, choices=sorted(PROTOCOLS))
+    parser.add_argument("--condition", required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
-    config = load_named_config("ham10000_stage4.yaml", "ham_stage4")
+    protocol = get_protocol(args.protocol)
+    if args.condition not in protocol.conditions:
+        raise Stage4ConfigError(
+            f"condition {args.condition!r} is not in protocol {protocol.name}: {list(protocol.conditions)}"
+        )
+    config = load_named_config(protocol.stage4_config, "ham_stage4")
     if args.seed not in list(config.seeds):
         raise Stage4ConfigError(f"seed {args.seed} is not in the frozen seed list {list(config.seeds)}")
-    result = run(config, args.condition, args.seed, args.device)
+    result = run(config, args.condition, args.seed, args.device, protocol.name)
     print(json.dumps({"out_dir": result["out_dir"], "balanced_accuracy": result["metrics"]["balanced_accuracy"], "macro_f1": result["metrics"]["macro_f1"]}, indent=2))
     return 0
 
