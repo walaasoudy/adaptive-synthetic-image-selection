@@ -337,38 +337,60 @@ v2 changes only the rules that §2.1, §2.3 and §4.1 identified. It is implemen
   retrained ranking network if the proxy proves reliable, a selection without a learned utility if
   not.
 
-**12.0.1 What "without a learned utility" means, fixed before round 3 finished.**
+**12.0.1 What a failed round 3 does and does not mean, fixed before round 3 finished.**
 
 *Written on 2026-09-23 while round 3 was at 33 of 52 runs. No round-3 number of any kind had been
-computed. §11 named this branch but never defined it, and the code requires a score: the per-class
-floor and the top-k rule both order candidates by one. Choosing that score after seeing round 3
-would have been a post-hoc choice inside a pre-registered protocol, so it is fixed here instead.*
+computed. §11 named a branch it never defined, and the code requires a score: the per-class floor
+and the top-k rule both order candidates by one. Settling that after reading round 3 would have been
+a post-hoc choice inside a pre-registered protocol, so it is settled here. An earlier draft of this
+subsection, written the same day, made image quality the score for C2 itself; that is corrected
+below, and the correction is also pre-result.*
 
-If round 3 does not reach `repeats_needed` ≤ 5 on any metric, the score is **`iqa_composite`**, the
-calibrated image-quality composite from the Stage 3 signal artifact
-(`outputs/ham10000/stage3/<namespace>/signals/iqa_scores.parquet`). It is passed to
-`ham10000_v2_select.py` with `--score-column iqa_composite`; no code changes, so the selection logic
-cannot be adjusted once a result is visible. The IQA signal passed the v1 Go/No-Go gate (all five
-signals did) and covers all 3,168 candidates with no missing values.
+**What §11 measured, and what it did not.** The three rounds measure one thing: whether a short
+proxy training is a reliable enough instrument to produce the utility labels the ranking network is
+trained on. A failing ICC is a statement about the **supervision** — about how the labels were
+obtained — not about learned utility as an approach. The claim
+`ASISM signals → utility → ranking → selection` is this thesis's contribution, and no round of §11
+tests it. Concluding from a noisy label-generating instrument that learned utility does not work
+would be reading the diagnostic for more than it measured.
 
-Three consequences are recorded now, before any of them can be argued backwards:
+**C2 is reserved for a learned-utility selection.** If round 3 reaches `repeats_needed` ≤ 5 on some
+metric, C2 is produced from a ranking network retrained on labels averaged over that many repeats,
+and §12.1's confirmatory C2 vs D2 stands exactly as written.
 
-- **The quality floor changes meaning.** In v1 the p25 floor was computed on the ranking network's
-  normalised score (§4.1). Under this branch it is computed on IQA, within class. The floor and the
-  ordering then come from the same signal, which is a narrower rule than v1's, not a broader one.
-- **What C2 vs D2 then tests.** Not ASISM's multi-signal utility, which this branch exists precisely
-  because the diagnostic could not support. It tests whether ordering candidates by calibrated image
-  quality within a class, with a per-class quality floor, beats drawing the same number at random
-  from the same safe pool. That is the claim that will be made, and no larger one.
-- **The comparison is low-powered, for a reason visible in advance.** A dry run on 2026-09-23 (read
-  only; nothing written, `final_eval_heldout` not read) gives C2 = 1,244 images with every class
-  reaching its target — mel 114, bkl 112, bcc 213, akiec 251, vasc 279, df 275, nv 0. But the targets
-  are a large share of the available candidates (akiec 251 of 486, bcc 213 of 400), so a uniform draw
-  of the same size lands on many of the same images: **537 of C2's 1,244 images, 43%, are also in
-  D2.** C2 and D2 therefore differ in 57% of their content, which shrinks any difference between them.
-  With three seeds and v1's seed SD near 0.06, a null result must be read as weak evidence, not as
-  evidence of no effect. This follows from target policy 5b at N = 300 and would hold under any
-  score; it is not a property of the IQA choice. Neither 5b nor D2's draw is changed because of it.
+**If round 3 fails, C2 is not produced.** The follow-up does not substitute a different score into
+C2's place and carry on under C2's name. Doing so would let a table headed *C2 vs D2 — the
+confirmatory test of the selection rule* be read as evidence for ASISM when the images had been
+ordered by something else entirely. Instead:
+
+- **What gets fixed is the supervision, not the pipeline.** The recorded direction is to estimate
+  candidate utility more reliably before any ranking network is trained on it — repeated
+  measurement, a less noisy outcome, or a different instrument altogether. This is written down as
+  the next piece of work and is **not implemented here**: v2 as pre-registered is not modified after
+  the fact.
+- **An IQA arm is available as a named ablation, not as the method.** `iqa_composite`, the calibrated
+  image-quality composite in `outputs/ham10000/stage3/<namespace>/signals/iqa_scores.parquet`, passed
+  the v1 Go/No-Go gate (all five signals did) and covers all 3,168 candidates with no missing values,
+  so `ham10000_v2_select.py --score-column iqa_composite` runs with no code change. If it is run its
+  arm is called **E2** and never C2, and it answers one question: does ordering by image quality
+  within a class, with a per-class floor, beat a random draw of the same size from the same safe
+  pool? That is the whole claim. E2 carries no ASISM claim, and a positive E2 result is not evidence
+  for the contribution.
+- **E2 is in no pre-registered condition set.** `scripts/utils/ham10000_conditions.py` defines v2 as
+  A / B / C2 / D2. Running E2 would need its own protocol entry; that code does not exist and is
+  deliberately not being written before round 3 says whether this branch is reached at all.
+
+**A limitation that holds whichever branch is taken: C2 and D2 overlap heavily.** A read-only dry
+run on 2026-09-23 (nothing written, `final_eval_heldout` not read) shows target policy 5b at N = 300
+meeting every class target — 1,244 images against v1's 616, with vasc at 279 and df at 275 where v1
+stopped at the class floor of 50, which is the §4.2 failure the policy was designed to fix. But
+those targets are a large share of the available candidates (akiec 251 of 486, bcc 213 of 400), so a
+uniform draw of the same size lands on many of the same images: **537 of the 1,244, or 43%, would
+appear in both arms.** The two arms then differ in 57% of their content, which shrinks any
+difference between them; with three seeds and v1's seed SD near 0.06, a null result there is weak
+evidence, not evidence of no effect. This follows from 5b at N = 300 and is independent of which
+score does the ordering. **Neither N nor D2's draw is changed because of it** — it is recorded as a
+limitation and read alongside the result, exactly as §11's noise findings are.
 - **Planned Stage 4 v2 conditions:** C2, D2, B and A. Any v2 result is post-hoc and will be
   reported as such.
 
