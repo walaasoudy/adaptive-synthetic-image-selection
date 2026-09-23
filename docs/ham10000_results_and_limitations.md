@@ -336,6 +336,39 @@ v2 changes only the rules that §2.1, §2.3 and §4.1 identified. It is implemen
 - **Which score orders the candidates** is decided by round 3's rule (§11), not chosen here: a
   retrained ranking network if the proxy proves reliable, a selection without a learned utility if
   not.
+
+**12.0.1 What "without a learned utility" means, fixed before round 3 finished.**
+
+*Written on 2026-09-23 while round 3 was at 33 of 52 runs. No round-3 number of any kind had been
+computed. §11 named this branch but never defined it, and the code requires a score: the per-class
+floor and the top-k rule both order candidates by one. Choosing that score after seeing round 3
+would have been a post-hoc choice inside a pre-registered protocol, so it is fixed here instead.*
+
+If round 3 does not reach `repeats_needed` ≤ 5 on any metric, the score is **`iqa_composite`**, the
+calibrated image-quality composite from the Stage 3 signal artifact
+(`outputs/ham10000/stage3/<namespace>/signals/iqa_scores.parquet`). It is passed to
+`ham10000_v2_select.py` with `--score-column iqa_composite`; no code changes, so the selection logic
+cannot be adjusted once a result is visible. The IQA signal passed the v1 Go/No-Go gate (all five
+signals did) and covers all 3,168 candidates with no missing values.
+
+Three consequences are recorded now, before any of them can be argued backwards:
+
+- **The quality floor changes meaning.** In v1 the p25 floor was computed on the ranking network's
+  normalised score (§4.1). Under this branch it is computed on IQA, within class. The floor and the
+  ordering then come from the same signal, which is a narrower rule than v1's, not a broader one.
+- **What C2 vs D2 then tests.** Not ASISM's multi-signal utility, which this branch exists precisely
+  because the diagnostic could not support. It tests whether ordering candidates by calibrated image
+  quality within a class, with a per-class quality floor, beats drawing the same number at random
+  from the same safe pool. That is the claim that will be made, and no larger one.
+- **The comparison is low-powered, for a reason visible in advance.** A dry run on 2026-09-23 (read
+  only; nothing written, `final_eval_heldout` not read) gives C2 = 1,244 images with every class
+  reaching its target — mel 114, bkl 112, bcc 213, akiec 251, vasc 279, df 275, nv 0. But the targets
+  are a large share of the available candidates (akiec 251 of 486, bcc 213 of 400), so a uniform draw
+  of the same size lands on many of the same images: **537 of C2's 1,244 images, 43%, are also in
+  D2.** C2 and D2 therefore differ in 57% of their content, which shrinks any difference between them.
+  With three seeds and v1's seed SD near 0.06, a null result must be read as weak evidence, not as
+  evidence of no effect. This follows from target policy 5b at N = 300 and would hold under any
+  score; it is not a property of the IQA choice. Neither 5b nor D2's draw is changed because of it.
 - **Planned Stage 4 v2 conditions:** C2, D2, B and A. Any v2 result is post-hoc and will be
   reported as such.
 
