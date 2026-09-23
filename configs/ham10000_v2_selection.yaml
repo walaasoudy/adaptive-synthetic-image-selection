@@ -1,0 +1,41 @@
+# HAM10000 Stage 3 v2 — the post-hoc selection follow-up (scripts/followup/ham10000_v2_select.py).
+#
+# ham-final-v1 stays the primary result. This file does not change it: ham10000_stage3.yaml, the v1
+# selection (outputs/ham10000/stage3/asism_selected.csv) and its manifest are never read for writing
+# and never overwritten. Everything v2 writes goes under outputs_dir below.
+#
+# PRE-REGISTERED on 2026-09-22, before the noise-floor diagnostic's last round finished and before
+# any v2 result existed. None of these values may be changed after a v2 result has been seen.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  outputs_dir: ${paths.project_root}/outputs/ham10000/stage3_v2
+
+# The real component whose class counts set each class's target. Same split as v1 and Stage 4.
+real_train_split: "classifier_train"
+
+selection:
+  # TARGET POLICY 5b — fill each class up to N images in total (real + synthetic):
+  #   target_c = max(0, N - real_c)
+  # A rare class gets the most synthetic images, a class already at or above N (nv) gets none.
+  # A class with fewer candidates than its target takes every candidate it has; the shortfall is
+  # reported in the manifest and N is NEVER changed to hide it.
+  fill_to_total: 300
+
+  # QUALITY FLOOR 6a — the same percentile as v1 (p25), but computed WITHIN each class instead of
+  # over the pooled candidates. In v1 the pooled floor removed 49% of mel for being darker and less
+  # typical than nv, not for being defective; per class, every class loses its own worst quarter.
+  quality_floor_percentile: 25
+  quality_floor_scope: "per_class"
+
+  # Within a class, after the floor: the highest-scoring candidates up to the target (top-k).
+  # The Adaptive Threshold Network is not used in v2 — under 5b the target alone fixes the count,
+  # and the threshold network's weakness is recorded as a limitation of v1 instead.
+  within_class_rule: "top_k"
+
+# D2 — the random control for C2. Same per-class counts as C2, drawn uniformly from the SAFE pool
+# (after the safety gate, BEFORE the quality floor), so C2 vs D2 measures the ranking and the floor
+# together against no ordering at all.
+d2:
+  seed: 42
+  source_pool: "safe"
