@@ -87,6 +87,8 @@ at equal quantity. This is the most important missing control.
 - Utility labels came from 80 short proxy trainings (224 px, 300 steps), measured on
   `asism_tuning_heldout`.
 - Only 32 of the 80 subsets scored above the real-only baseline (balanced accuracy 0.514).
+  *(The 0.514 came from a single proxy run, and §14 shows it was an outlier one. This bullet is
+  left as it was written; read it together with §14.1.)*
 - The differences between subsets are likely comparable to the run-to-run noise of a single
   proxy training. The noise floor was not measured before training the set model.
 
@@ -545,3 +547,72 @@ augmentation and without a learning-rate schedule, so the absolute performance f
 be read as a floor for this architecture and budget rather than as its ceiling. The comparisons
 between conditions are unaffected, because every condition was trained under the identical
 transform.
+
+---
+
+## 14. Post-hoc correction: the utility baseline was a single run, and an outlier
+
+*Found on 2026-09-24 during the utility-supervision audit, after round 3 (§11) finished. This
+section corrects the reading of one number in §3.1. It changes no v1 result: the baseline is a
+constant subtracted from all 80 labels, so it shifts every label by the same amount and cannot
+change their order, the selection, or anything in §1–§2. §3.1's own wording is left unedited; this
+is how to read it.*
+
+### 14.1 What the number was
+
+Every one of the 80 utility labels is `balanced accuracy with the subset` minus
+`balanced accuracy of a real-only baseline`. That baseline was measured **once**
+(`utility_baseline.json`, seed 42) and reused for all 80 subsets — deliberately, to avoid paying for
+80 identical retrainings. Its value was **0.5136**, and §3.1 reports that only 32 of 80 subsets beat
+it.
+
+Round 1 of the noise-floor diagnostic re-trained that same real-only baseline under the same proxy
+recipe (224 px, 300 steps) at four seeds:
+
+| | balanced accuracy |
+|---|---|
+| v1 baseline, single run, seed 42 | **0.5136** |
+| Round 1 baseline, seeds 42 / 43 / 44 / 45 | 0.4675 / 0.4529 / 0.4737 / 0.4556 |
+| Round 1 baseline, mean of four | **0.4624** |
+
+The v1 baseline sits **+0.051 above** that mean and **outside the whole observed range**
+[0.4529, 0.4737]. The seed-42 runs alone differ by 0.046 between the two, at the same seed and the
+same recipe — so this is not seed noise but environment: a different pod, GPU and commit. A single
+proxy run is not a fixed quantity even with the seed held.
+
+### 14.2 What that means for §3.1
+
+The subtracted constant was about five points too high, so **every** label was pushed five points
+negative. The count "32 of 80 above baseline" therefore measures the baseline run, not the subsets.
+Re-measured against a four-seed baseline of the same recipe, **all twelve** of the subsets that
+round 1 re-ran come out positive, between +0.007 and +0.078.
+
+The corrected statement is: at the v1 proxy budget, adding 60–180 synthetic images to 1,641 real
+ones **raised** the proxy's balanced accuracy on `asism_tuning_heldout`, by roughly +2 to +7 points
+depending on the subset. §11's interpretation already said this from the round-1 and round-2 data
+("adding synthetic images does help the proxy"); §3.1's count is the same fact read through one bad
+constant.
+
+### 14.3 What does *not* change
+
+- **No v1 artifact changes.** The offset is identical for all 80 labels, so the ranking the set
+  model was trained on is unaffected, and so are `ranking_scores.parquet`, the selection, and every
+  number in §1–§2 and §5.
+- **§3.1's headline still holds.** "The utility signal is weak relative to its noise" is confirmed,
+  not weakened, by §11: at this budget the between-subset SD is 0.0134 against a within-subset SD of
+  0.0332.
+- **Nothing is re-run.** v1 is frozen and `final_eval_heldout` is not read again.
+
+### 14.4 Why a single-run baseline was fragile, recorded for the redesign
+
+The audit found the mechanism, and it is not the number of seeds. Balanced accuracy on
+`asism_tuning_heldout` averages recall over seven classes, and that split holds **13 df images** and
+**20 vasc images**. One df image changing its prediction moves df recall by 1/13 and therefore moves
+balanced accuracy by 1/(7×13) = **0.011**. The between-subset SD this diagnostic is trying to
+resolve is **0.0134**. The finest step the instrument can take is about the size of the entire
+quantity being measured, which is why a single run — of the baseline or of any subset — is not a
+usable label, and why macro AUROC, which is continuous and not quantised by a 13-image class,
+produced the highest ICC of the three rounds (§11).
+
+This is recorded here as the finding. What to do about it belongs to the supervision redesign, which
+is a separate piece of work and is not implemented by this section.
