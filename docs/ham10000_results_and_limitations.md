@@ -274,26 +274,29 @@ to learn, and the −0.36 validation Spearman (§3.2) is what one would expect.
 **Results** (v1-style label; ICC with 95% bootstrap CI over subsets; repeats estimated as
 4 × within / between):
 
-| Metric | Round 1: 224 px, 300 steps | Round 2: 224 px, 1500 steps |
-|---|---|---|
-| balanced accuracy | ICC 0.14 [0.00, 0.40], ~25 repeats | ICC 0.00 [0.00, 0.20], no detectable signal |
-| macro AUROC | ICC 0.18 [0.00, 0.39], ~19 repeats | ICC 0.16 [0.00, 0.40], ~21 repeats |
-| macro-F1 | ICC 0.13 [0.00, 0.43], ~28 repeats | ICC 0.08 [0.00, 0.26], ~49 repeats |
-| accuracy | ICC 0.19 [0.00, 0.38], ~17 repeats | ICC 0.00 [0.00, 0.20], no detectable signal |
-| **Verdict** | every metric: lengthen the proxy | no metric within 5 repeats |
+| Metric | Round 1: 224 px, 300 steps | Round 2: 224 px, 1500 steps | Round 3: 512 px, 3000 steps |
+|---|---|---|---|
+| balanced accuracy | ICC 0.14 [0.00, 0.40], ~25 repeats | ICC 0.00 [0.00, 0.20], no detectable signal | ICC 0.06 [0.00, 0.27], 11 repeats |
+| macro AUROC | ICC 0.18 [0.00, 0.39], ~19 repeats | ICC 0.16 [0.00, 0.40], ~21 repeats | ICC 0.35 [0.00, 0.55], **8 repeats** |
+| macro-F1 | ICC 0.13 [0.00, 0.43], ~28 repeats | ICC 0.08 [0.00, 0.26], ~49 repeats | ICC 0.11 [0.00, 0.34], 11 repeats |
+| accuracy | ICC 0.19 [0.00, 0.38], ~17 repeats | ICC 0.00 [0.00, 0.20], no detectable signal | ICC 0.09 [0.00, 0.25], 11 repeats |
+| **Verdict** | every metric: lengthen the proxy | no metric within 5 repeats | no metric within 5 repeats |
 
 Balanced accuracy in detail:
 
-| | Round 1 | Round 2 |
-|---|---|---|
-| Within-subset SD (seed noise) | 0.033 | 0.032 |
-| Between-subset SD (signal) | 0.013 | 0.000 |
-| Baseline mean over 4 seeds | 0.462 | 0.508 |
-| Mean of the 12 subsets | 0.511 | 0.541 |
+| | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Within-subset SD (seed noise) | 0.033 | 0.032 | 0.040 |
+| Between-subset SD (signal) | 0.013 | 0.000 | 0.010 |
+| Baseline mean over 4 seeds | 0.462 | 0.508 | 0.541 |
+| Mean of the 12 subsets | 0.511 | 0.541 | 0.564 |
 
 Further observations:
 - The paired label v1 used (subset minus the same seed's baseline) is noisier still: ICC 0.07 in
-  round 1 and 0.00 in round 2, for every metric.
+  round 1 and 0.00 in round 2, for every metric. Round 3 is the same picture with one exception:
+  balanced accuracy, macro-F1 and accuracy all give ICC 0.00 (no detectable between-subset signal),
+  while macro AUROC gives 0.20 — still far short of the target, and below its own v1-style 0.35.
+  Subtracting the baseline removes more signal than noise at every budget tested.
 - Re-running v1's own seed 42 on the same GPU type moved the 12 labels by up to 0.031 (mean 0.015):
   a single v1 label is not reproducible to better than a few points.
 - Restricted to subsets of equal size, the round-1 ICC was 0.003. This is a sensitivity check only,
@@ -306,10 +309,42 @@ Further observations:
 2. A five-times longer proxy did not help: the between-subset signal in balanced accuracy vanished
    entirely.
 3. Adding synthetic images does help the proxy (+3 to +5 points of balanced accuracy over the
-   baseline in both rounds). What the proxy cannot detect is *which* synthetic images were added.
+   baseline in both rounds; +2.3 points in round 3). What the proxy cannot detect is *which*
+   synthetic images were added.
+4. Round 3 shows the diagnostic itself was working. Going to the full Stage 4 recipe did recover
+   between-subset signal that round 2 had lost, and macro AUROC reached the highest ICC of the three
+   rounds. The budget is the binding constraint, not the absence of any effect: the labels would
+   need averaging over more runs than this study can pay for.
 
-**Round 3** (Stage 4 recipe: 512 px, 3000 steps; commit `ac813a4`): *running at the time of
-writing. Its result and the branch of the decision rule it triggers will be added here unchanged.*
+**Round 3** (Stage 4 recipe: 512 px, 3000 steps; commit `ac813a4`), completed 2026-09-23 on one
+RTX 5090: 52 of 52 runs, 4 seeds × (12 subsets + baseline), no missing or duplicated cell, mean 578 s
+per run. The columns above are its result, added unchanged.
+
+**Round 3 fails the decision rule.** The threshold was `repeats_needed` ≤ 5 on some metric. The best
+metric, macro AUROC, needs **8**; balanced accuracy, macro-F1 and accuracy need 11. Nothing is within
+budget, so the third and last branch of the rule applies: *the proxy utility is unreliable on this
+dataset at all three budgets, and v2 selects without a learned utility.* There is no fourth round.
+
+Two details are recorded because they qualify that verdict rather than soften it:
+
+- **Macro AUROC came closest, and it is not the metric the thesis is judged on.** Its ICC of 0.35 is
+  the highest of the twelve subset-level ICCs measured across the three rounds, and in 14.9% of
+  bootstrap resamples it did fall within 5 repeats. But the confirmatory comparison in this thesis
+  is balanced accuracy (§1), whose ICC here is 0.06 and whose bootstrap median is 11
+  repeats, with **0%** of resamples within budget. Choosing AUROC now because it is the metric that
+  nearly passed would be selecting the metric after seeing which one survived.
+- **The 5-repeat ceiling was fixed before round 1 and is not revisited here.** `repeats_needed` = 8
+  is close to 5, and raising the ceiling would flip the verdict. That is exactly why it is not
+  raised: the affordability limit was set in advance (`MAX_AFFORDABLE_REPEATS = 5`) precisely so that
+  a near miss could not be argued into a pass after the fact. If the limit is ever revised it must be
+  on a stated cost argument written before the number it would change is looked at again.
+
+What "without a learned utility" means was fixed in §12.0.1 while this round was still running, and
+that text governs: C2 is **not** produced, no other score is substituted under C2's name, and the
+recorded next step is to rebuild the utility *supervision* rather than to abandon learned utility or
+to promote an ablation into the method. A failing ICC here is a statement about how the labels were
+obtained; it is not a test of `ASISM signals → utility → ranking → selection`, and no round of this
+diagnostic tested that claim.
 
 ---
 
