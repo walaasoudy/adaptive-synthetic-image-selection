@@ -23,6 +23,29 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class SelectionManifest:
+    """Where a protocol records the selection that produced its selected condition(s).
+
+    v1 has one selected condition (C) and one manifest. v2 has two (C2 and its matched random
+    control D2) and ALSO one manifest, because a single selection run produces both draws and
+    documents them together; `covers` is what ties the file to the conditions it explains, which is
+    why this is a descriptor rather than a per-condition path.
+    """
+
+    config: str
+    """The config file whose paths.outputs_dir the manifest lives under."""
+    section: str
+    filename: str
+    """The file inside <outputs_dir>/<namespace>/."""
+    covers: tuple[str, ...]
+    """The conditions whose synthetic images this manifest accounts for."""
+    rebuild_command: str
+    """Printed verbatim when the manifest is missing; {namespace} is substituted."""
+    evidence_keys: tuple[str, ...]
+    """Manifest keys copied into the Stage 5 evidence as selection_<key>."""
+
+
+@dataclass(frozen=True)
 class ConditionProtocol:
     """One experiment's conditions and its pre-registered comparison families."""
 
@@ -46,6 +69,11 @@ class ConditionProtocol:
     interpretation: str
     """Copied verbatim into the Stage 5 comparison report. v1's is reproduced exactly as that
     script wrote it, so a v1 report re-generated after this change is unchanged to the byte."""
+    selection_manifest: SelectionManifest
+    stage5_dirname: str
+    """The directory Stage 5 writes predictions under, beside stage4's results_dir. Separate per
+    protocol: a v2 evaluation sharing v1's tree could overwrite the protected result under a
+    colliding run id."""
 
 
 V1 = ConditionProtocol(
@@ -64,6 +92,15 @@ V1 = ConditionProtocol(
         "helps. Every p-value is reported with its effect size and interval; significance "
         "alone is not a result."
     ),
+    selection_manifest=SelectionManifest(
+        config="ham10000_stage3.yaml",
+        section="ham_stage3",
+        filename="asism_selection_manifest.json",
+        covers=("C",),
+        rebuild_command="python scripts/asism/ham10000_05_adaptive_thresholds.py --namespace {namespace}",
+        evidence_keys=("threshold_policy", "n_selected"),
+    ),
+    stage5_dirname="stage5",
 )
 
 V2 = ConditionProtocol(
@@ -84,6 +121,20 @@ V2 = ConditionProtocol(
         "against A are exploratory and say nothing about the rule on their own. Every p-value is "
         "reported with its effect size and interval; significance alone is not a result."
     ),
+    # One file documents both draws: C2's selection and the D2 control built to its per-class
+    # counts. Splitting it would let the two fall out of step.
+    selection_manifest=SelectionManifest(
+        config="ham10000_v2_selection.yaml",
+        section="ham_v2_selection",
+        filename="v2_selection_manifest.json",
+        covers=("C2", "D2"),
+        rebuild_command=(
+            "python scripts/followup/ham10000_v2_select.py --namespace {namespace} "
+            "--scores <stage3 scores csv>"
+        ),
+        evidence_keys=("n_selected_c2", "n_selected_d2"),
+    ),
+    stage5_dirname="stage5_v2",
 )
 
 PROTOCOLS = {protocol.name: protocol for protocol in (V1, V2)}
