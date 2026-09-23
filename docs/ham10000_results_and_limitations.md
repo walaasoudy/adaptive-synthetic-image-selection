@@ -372,6 +372,86 @@ comparison wearing a control's name) or when both read the same manifest (not a 
 all). The v1 rule that B and C sharing a count signals a fault is unchanged, and still applies to B
 against C2 and against D2.
 
-**Not yet covered.** `scripts/eval/ham10000_stage5_evaluate.py` still names condition C directly, so
-a v2 run can be trained and aggregated (Stage 4) but not yet evaluated on the protected split
-(Stage 5). That protected split is not read by anything described here.
+**Stage 5 support, added afterwards.** When this section was written,
+`scripts/eval/ham10000_stage5_evaluate.py` still named condition C directly, so a v2 run could be
+trained and aggregated but not evaluated. That gap was closed in commit `b8623ff`: Stage 5 takes a
+`--protocol` argument, defaulting to v1, and under v2 it checks the single
+`v2_selection_manifest.json` that covers both C2 and D2 and writes predictions under `stage5_v2/`
+so a follow-up run cannot land on the protected v1 result. The protected split is not read by
+anything described here, and v1's Stage 5 was not re-run.
+
+---
+
+## 13. Post-hoc finding: the classifier trains without augmentation
+
+*Found on 2026-09-23 while reviewing the Stage 4 training recipe, after §1–§12 were written. This
+section records a property of the code that was always true and had not been stated. It changes no
+result and no decision: v1 is frozen, and v2's protocol was fixed before this was noticed.*
+
+**Where it belongs.** This is a limitation of the classifier protocol, so its natural home is §6.
+§1–§12 are kept unchanged so the v1 record stays exactly as it was when `final_eval_heldout` was
+read, which is why it is appended here instead. Read it as an addition to §6.
+
+### 13.1 What the code does
+
+`LesionRecordDataset.__getitem__` (`scripts/utils/ham10000_classifier.py:46–60`) is the entire
+input pipeline for every Stage 4 condition:
+
+1. open the file and convert to RGB;
+2. resize to the configured resolution with bicubic interpolation, if it is not already that size;
+3. divide by 255;
+4. HWC → CHW;
+5. normalise to [−1, 1].
+
+There is no horizontal or vertical flip, no rotation, no random crop or scale jitter, no colour or
+brightness jitter, and no cutout. The word `transforms` does not appear in
+`ham10000_classifier.py` or in `ham10000_train_conditions.py`. Training and validation see the
+identical deterministic transform; the only stochasticity in an epoch is the shuffle order.
+
+`train_classifier` uses AdamW at a fixed learning rate with no scheduler — no warmup, no cosine or
+step decay. (The absence of early stopping and checkpoint selection is *deliberate* and already
+recorded in §6: it avoids tuning on validation data. The absence of augmentation and of a scheduler
+was not a decision; it is a gap.)
+
+### 13.2 Why it matters
+
+- Dermoscopy images have no canonical orientation: a lesion photographed rotated or mirrored is the
+  same lesion with the same diagnosis. Flips and rotations are therefore label-preserving here in a
+  way they are not for, say, handwritten digits. They are standard practice on this dataset.
+- The over-fitting already recorded in §6 is consistent with this. Condition A trains for 3,000
+  steps at batch size 32 over 1,641 images — about 58 epochs — and reaches a training loss near
+  10⁻³. Every one of those 58 passes shows the network the *same pixels*.
+- The rare classes are where this costs most. df and vasc have the fewest real images, so they are
+  the classes for which a finite set of exact repeats is furthest from a description of the class.
+
+### 13.3 What it does and does not explain
+
+**It does not explain the confirmatory result.** The transform is identical for A, B, C and for the
+v2 conditions A, B, C2, D2. It raises or lowers the absolute level of every condition together and
+cannot produce a difference between them. Specifically, it is **not** a candidate explanation for C
+trailing B (§2.1), nor for df recall of 0.20 under C relative to the other conditions.
+
+**It plausibly depresses the absolute numbers.** Every figure in §1 — condition C's balanced
+accuracy of 0.612, B's 0.645, A's 0.566 — was measured without augmentation. A comparable recipe
+with flips and rotations would be expected to score higher. How much higher is unknown and is not
+asserted here: no such run exists, and none is planned for the protected split.
+
+### 13.4 What is not being done about it
+
+- **v1 is frozen.** `final_eval_heldout` has been read once. Re-training v1 with augmentation and
+  re-measuring on that split would replace a held-out result with a tuned one, which is the one
+  thing §7 says cannot be undone. No v1 run will be repeated.
+- **v2 is frozen too.** v2's conditions, selection rules and training budget were fixed before this
+  finding (§12, §12.1). Adding augmentation to v2 now would change the recipe after a limitation was
+  noticed, and would confound the comparison v2 exists to make. v2 runs on the recipe as recorded.
+- **Any future test is a separate experiment.** Adding augmentation would be a sensitivity
+  experiment with its own protocol, measured on `classifier_val` only, reported as a statement about
+  the training recipe and never as a v1 or v2 result. `final_eval_heldout` would not be read for it.
+
+### 13.5 How to report it
+
+As a limitation of the training recipe, in §6's terms: the classifier was trained without data
+augmentation and without a learning-rate schedule, so the absolute performance figures in §1 should
+be read as a floor for this architecture and budget rather than as its ceiling. The comparisons
+between conditions are unaffected, because every condition was trained under the identical
+transform.
