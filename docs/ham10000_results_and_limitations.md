@@ -338,3 +338,40 @@ v2 changes only the rules that §2.1, §2.3 and §4.1 identified. It is implemen
   not.
 - **Planned Stage 4 v2 conditions:** C2, D2, B and A. Any v2 result is post-hoc and will be
   reported as such.
+
+### 12.1 The v2 comparison families
+
+*Decided on 2026-09-23, before any v2 Stage 4 run and while round 3 (§11) was still measuring. No
+v2 number of any kind had been produced. Implemented in `scripts/utils/ham10000_conditions.py`,
+commit `0719094`.*
+
+- **Confirmatory family — one test: C2 vs D2 on balanced accuracy**, Holm–Bonferroni corrected
+  (a family of one, so the adjusted p equals the raw p). Balanced accuracy is the primary metric in
+  v2 as in v1.
+- **Exploratory — everything else**, Benjamini–Hochberg corrected and labelled exploratory wherever
+  it appears: C2 vs B, D2 vs B, C2 vs A, D2 vs A and B vs A on every metric, the non-primary metrics
+  of C2 vs D2, and all per-class recall differences.
+
+**Why C2 vs D2 and not C2 vs B.** §2.2 records the absence of a random control as v1's most
+important missing piece, and §2.1 records why C vs B cannot answer the question on its own: C and B
+differ in quantity and in class composition as well as in which images were chosen, so a difference
+between them is not attributable to the selection rule. C2 and D2 differ in the rule and in nothing
+else — the same safe pool, the same per-class counts, the same training budget. It is therefore the
+only comparison in v2 that isolates what ASISM claims to contribute, and it is the only one that
+carries a confirmatory claim. C2 vs B remains informative and is reported, but as exploratory: it
+inherits v1's confound.
+
+**A family of one, deliberately.** Adding C2 vs B to the confirmatory family would halve the
+per-test α under Holm for a comparison that cannot support the claim anyway. The power is spent
+where the question is.
+
+**The equal-count requirement is enforced, not assumed.** D2 is only a control while it has C2's
+per-class counts drawn from a separate draw. `check_training_data_differs` refuses to write the
+Stage 4 table when C2 and D2 differ in their image counts (the comparison would then be a size
+comparison wearing a control's name) or when both read the same manifest (not a separate draw at
+all). The v1 rule that B and C sharing a count signals a fault is unchanged, and still applies to B
+against C2 and against D2.
+
+**Not yet covered.** `scripts/eval/ham10000_stage5_evaluate.py` still names condition C directly, so
+a v2 run can be trained and aggregated (Stage 4) but not yet evaluated on the protected split
+(Stage 5). That protected split is not read by anything described here.
