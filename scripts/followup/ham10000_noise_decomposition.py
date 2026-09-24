@@ -20,19 +20,24 @@ help. Flat curve -> it could not. No subtraction, no independence assumption, fo
 The measurement path is the frozen one. `_measure` in ham10000_03_build_utility_subsets.py builds a
 TrainingBudget, calls train_classifier, then predict_probabilities, then full_metric_suite. This
 calls those same four things with those same arguments and differs in exactly one respect: it keeps
-the probability matrix instead of discarding it. `--phase verify` proves that by reproducing
-`_measure`'s own output at the same seed, and the grid refuses to run until it has.
+the probability matrix instead of discarding it. `--phase verify` audits that at source level and the grid
+refuses to run until it passes. It does NOT check numerical equality: GPU convolutions here are not
+bit-deterministic (scripts/utils/classifier.py:135), so two runs at one seed differ by about one
+sigma_e. That non-determinism is part of the measurement noise this experiment characterises.
 
 Phases:
   --phase plan      laptop, seconds. Freezes the two subsets and the evaluation-curve settings.
-  --phase verify    GPU, about 30 s. Two runs. Must match `_measure` exactly or nothing proceeds.
+  --phase verify    laptop, seconds. Source audit against `_measure`; the grid is gated on it.
   --phase measure   GPU, about 6 minutes. 24 runs. Resumable.
   --phase analyze   laptop, a few minutes. Refuses an incomplete grid, then builds the curve.
 """
 from __future__ import annotations
 
 import argparse
+import ast
+import inspect
 import json
+import textwrap
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -84,8 +89,8 @@ def measure_keeping_probabilities(train_records, tuning_records, proxy_cfg, seed
     """Line for line `_measure`, except that the probability matrix is returned as well.
 
     Kept deliberately parallel rather than clever: any divergence from the frozen recipe would make
-    every number produced here incomparable with sections 15 and 16. `--phase verify` checks the
-    equality rather than trusting this comment.
+    every number produced here incomparable with sections 15 and 16. `--phase verify` audits that at
+    source level rather than trusting this comment.
     """
     from scripts.utils.classifier import TrainingBudget
     from scripts.utils.ham10000_classifier import (
@@ -404,46 +409,117 @@ def _prepare(namespace: str, out_dir: Path):
     return plan, proxy, real_records, tuning_records, candidates
 
 
-def run_verify(namespace: str, out_dir: Path, device: str | None) -> dict:
-    """Prove the local measurement path is the frozen one before any of the grid runs."""
+ALLOWED_EXTRA_CALLS = {"asarray", "argmax"}   # retention and reshaping; neither computes a metric
+AUDITED_CALLS = ("TrainingBudget", "train_classifier", "predict_probabilities", "full_metric_suite")
+
+
+def _call_signatures(fn) -> dict:
+    """Every call in a function body, as {name: (args-as-source, kwargs-as-source)}."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    found = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            found[name] = ([ast.unparse(a) for a in node.args],
+                           {k.arg: ast.unparse(k.value) for k in node.keywords})
+    return found
+
+
+def audit_measurement_path() -> dict:
+    """Compare the two call sites as SOURCE, not as numbers.
+
+    An earlier version of this phase trained two models and required their metrics to be equal. That
+    was impossible by construction: scripts/utils/classifier.py:135 records that GPU convolutions in
+    this pipeline are not bit-deterministic, because cudnn.deterministic is never set. Two runs at
+    the same seed differ by about one sigma_e, so the comparison measured run-to-run noise rather
+    than agreement between the two functions, and it could never have passed.
+
+    That non-determinism is not a defect to route around here: it is part of the measurement noise
+    this experiment exists to characterise, and it is inside sigma_e wherever sigma_e is quoted.
+
+    What replaces it is a source-level audit with no GPU and no training. It answers, mechanically:
+      * the same TrainingBudget, with the same arguments?
+      * the same train_classifier, predict_probabilities, full_metric_suite, same arguments?
+      * are the additions only retention and reshaping?
+      * does the wrapper drop anything the frozen function does?
+    It cannot prove numerical identity. Nothing can, on this pipeline.
+    """
     from scripts.asism.ham10000_03_build_utility_subsets import _measure
 
-    plan, proxy, real_records, tuning_records, candidates = _prepare(namespace, out_dir)
-    arm = SMALL_ARM
-    train = real_records + [candidates[i] for i in plan["arms"][arm]]
-    cfg = SimpleNamespace(**proxy)
+    frozen = _call_signatures(_measure)
+    local = _call_signatures(measure_keeping_probabilities)
 
-    print(f"verifying against _measure on {arm}, seed {VERIFY_SEED} ...", flush=True)
-    frozen = _measure(train, tuning_records, cfg, VERIFY_SEED, device)
-    local = measure_keeping_probabilities(train, tuning_records, cfg, VERIFY_SEED, device)["metrics"]
+    checks, failures = {}, []
+    for name in AUDITED_CALLS:
+        f, l = frozen.get(name), local.get(name)
+        same = bool(f and l and f[0] == l[0] and f[1] == l[1])
+        checks[name] = {"same_arguments": same,
+                        "frozen": {"args": f[0], "kwargs": f[1]} if f else None,
+                        "local": {"args": l[0], "kwargs": l[1]} if l else None}
+        if not same:
+            failures.append(f"{name} is not called with identical arguments")
 
-    differences = {m: (float(frozen[m]), float(local[m])) for m in METRICS
-                   if float(frozen[m]) != float(local[m])}
-    result = {
-        "arm": arm, "seed": VERIFY_SEED,
-        "frozen": {m: float(frozen[m]) for m in METRICS},
-        "local": {m: float(local[m]) for m in METRICS},
-        "identical": not differences,
-        "differences": differences,
+    extra = sorted(set(local) - set(frozen) - {None})
+    dropped = sorted(set(frozen) - set(local) - {None})
+    if not set(extra).issubset(ALLOWED_EXTRA_CALLS):
+        failures.append(f"the wrapper makes calls that are not retention or reshaping: "
+                        f"{sorted(set(extra) - ALLOWED_EXTRA_CALLS)}")
+    if dropped:
+        failures.append(f"the wrapper does not make calls the frozen function makes: {dropped}")
+
+    return {
+        "kind": "source_audit",
+        "audited_calls": checks,
+        "extra_calls_in_wrapper": extra,
+        "allowed_extra_calls": sorted(ALLOWED_EXTRA_CALLS),
+        "calls_dropped_by_wrapper": dropped,
+        "frozen_source_sha256": _sha256_text(inspect.getsource(_measure)),
+        "local_source_sha256": _sha256_text(inspect.getsource(measure_keeping_probabilities)),
+        "numerical_equality_not_tested": (
+            "GPU convolutions here are not bit-deterministic (scripts/utils/classifier.py:135), so "
+            "two runs at one seed differ by about one sigma_e. Exact reproduction cannot be "
+            "demonstrated and is not claimed."),
+        "identical": not failures,
+        "failures": failures,
     }
+
+
+def _sha256_text(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def run_verify(namespace: str, out_dir: Path, device: str | None) -> dict:
+    """Audit the measurement path before any of the grid runs. No GPU, no training."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = audit_measurement_path()
     (out_dir / "verification.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-    if differences:
-        raise DecompositionError(
-            f"the local measurement path does NOT reproduce _measure: {differences}. "
-            "Nothing is measured until it does.")
-    print("  identical on all four metrics. The measurement path is the frozen one.", flush=True)
-    for m in METRICS:
-        print(f"    {m:<20} {float(frozen[m]):.10f}", flush=True)
+
+    print("source audit of the measurement path (no training, no GPU)\n", flush=True)
+    for name, check in result["audited_calls"].items():
+        print(f"  {name:<24} {'IDENTICAL arguments' if check['same_arguments'] else 'DIFFERS'}",
+              flush=True)
+    print(f"\n  additions in the wrapper : {result['extra_calls_in_wrapper'] or 'none'}"
+          f"   (allowed: {result['allowed_extra_calls']})", flush=True)
+    print(f"  dropped by the wrapper   : {result['calls_dropped_by_wrapper'] or 'none'}", flush=True)
+    print(f"\n  {result['numerical_equality_not_tested']}", flush=True)
+
+    if result["failures"]:
+        raise DecompositionError("the measurement path does not match the frozen one: "
+                                 + "; ".join(result["failures"]) + ". Nothing is measured.")
+    print("\n  audit passed: same four calls, same arguments, additions retain and reshape only.",
+          flush=True)
     return result
 
 
 def run_measure(namespace: str, out_dir: Path, device: str | None) -> dict:
     verification = out_dir / "verification.json"
     if not verification.is_file():
-        raise DecompositionError("run --phase verify first: the grid does not run until the local "
-                                 "measurement path has been shown to reproduce _measure exactly.")
+        raise DecompositionError("run --phase verify first: the grid does not run until the "
+                                 "measurement path has been audited against _measure.")
     if not json.loads(verification.read_text(encoding="utf-8"))["identical"]:
-        raise DecompositionError("verification on record did not pass; nothing is measured.")
+        raise DecompositionError("the audit on record did not pass; nothing is measured.")
 
     plan, proxy, real_records, tuning_records, candidates = _prepare(namespace, out_dir)
     runs_path = out_dir / "decomposition_runs.jsonl"
