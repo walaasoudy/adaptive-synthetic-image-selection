@@ -10,6 +10,14 @@ Two questions, one grid, one cheap proxy recipe (224 px / 300 steps, the v1 arch
                       what ANY selection rule can achieve. C, the selection v1 actually made, is
                       measured in the same grid so its position in that spread is visible.
 
+Everything produced here is DIAGNOSTIC evidence about the measuring instrument and about how much
+room a selection rule could have. None of it is a Stage 5 result, none of it is confirmatory, and
+nothing in ASISM, the ranking network or the selection is changed on the strength of it. The
+headroom figure of 0.0165 is a pre-declared EXPLORATORY reference, not a hypothesis threshold and
+not a claim about the smallest utility variation that matters scientifically: it is half of a gap
+observed in v1 after the fact, and a number seen before it was chosen cannot carry a confirmatory
+verdict. C is measured to be located, never to tune a threshold or to re-pick a selection.
+
 The budget is OPTIMIZER STEPS, never epochs. That is the frozen fairness protocol of
 docs/stages2_to_5_plan.md:454, and the reason is that at fixed epochs a larger dataset silently
 receives more gradient updates, which conflates "more data" with "more training" - the exact
@@ -59,12 +67,17 @@ HEADROOM_SEEDS = tuple(range(42, 52))              # 42..51, 10 per subset
 DRAW_SEED = 20260924                               # frozen before any run; draws are never re-drawn
 ARM_SELECTED = "C_asism_selected"
 
-# The necessary condition, fixed numerically before the experiment.
-#   ASISM must beat random by B - C. For that to be reachable at all, B - C must lie within about
-#   two standard deviations of the random-616 distribution, i.e. selection must land in its top
-#   2.5%. Asking for less is asking selection to be near perfect.
-ANCHOR_B_MINUS_C = 0.033                           # the conservative of the two available values
-SIGMA_S_MIN = ANCHOR_B_MINUS_C / 2                 # 0.0165
+# An EXPLORATORY reference, declared before the experiment so it cannot be moved afterwards, and
+# explicitly not a confirmatory threshold.
+#   Reasoning: for ASISM to beat random by B - C, that gap has to lie within about two standard
+#   deviations of the random-616 distribution, i.e. selection would have to land in its top 2.5%.
+#   Reading it the other way, a sigma_s far below this leaves a selection rule very little to find.
+#   Provenance: B - C = 0.033 is a gap OBSERVED in v1 on a test set, and it was known before this
+#   reference was written. A number seen in advance can orient an exploratory diagnostic; it cannot
+#   support a confirmatory claim, and it is not asserted to be the smallest utility variation that
+#   would matter. Whether the reference is met is reported as an orientation, never as a verdict.
+ANCHOR_B_MINUS_C = 0.033                           # the smaller of the two available v1 gaps
+SIGMA_S_REFERENCE = ANCHOR_B_MINUS_C / 2           # 0.0165
 N_BOOTSTRAP = 2000
 BOOTSTRAP_SEED = 0
 
@@ -118,12 +131,15 @@ def sigma_s(table: np.ndarray) -> dict:
         "sigma_e": components["within_sd"],
         "icc_single_run": components["icc_single_run"],
         "ci95": [float(np.percentile(draws, 2.5)), float(np.percentile(draws, 97.5))],
-        "share_of_resamples_above_threshold": float((draws >= SIGMA_S_MIN).mean()),
-        "threshold": SIGMA_S_MIN,
+        "share_of_resamples_above_reference": float((draws >= SIGMA_S_REFERENCE).mean()),
+        "exploratory_reference": SIGMA_S_REFERENCE,
         "anchor_b_minus_c": ANCHOR_B_MINUS_C,
-        # A necessary condition, never a sufficient one: failing it rules selection out, passing it
-        # proves nothing about whether any rule can actually find the headroom.
-        "passed": bool(components["between_sd"] >= SIGMA_S_MIN),
+        "status": "exploratory diagnostic reference, not a confirmatory threshold",
+        "provenance": "half of a v1 C-vs-B gap observed on a test set and known before this "
+                      "reference was written; it orients the reading and decides nothing",
+        # Deliberately not called "passed". Meeting it is an orientation, not a verdict, and
+        # missing it does not by itself rule selection out.
+        "reference_met": bool(components["between_sd"] >= SIGMA_S_REFERENCE),
     }
 
 
@@ -219,17 +235,26 @@ def run_plan(namespace: str, selected_csv: Path, out_dir: Path) -> dict:
             "seeds": list(HEADROOM_SEEDS),
             "selection_size": SELECTION_SIZE,
             "draw_seed": DRAW_SEED,
-            "criterion": {
-                "sigma_s_min": SIGMA_S_MIN,
+            "exploratory_reference": {
+                "sigma_s": SIGMA_S_REFERENCE,
                 "anchor_b_minus_c": ANCHOR_B_MINUS_C,
-                "reasoning": "selection must beat random by B - C; that is reachable only if B - C "
-                             "is within about 2 SD of the random-616 distribution",
-                "status": "necessary, not sufficient",
+                "reasoning": "for selection to beat random by B - C, that gap must lie within "
+                             "about 2 SD of the random-616 distribution",
+                "status": "exploratory diagnostic reference, NOT a confirmatory threshold and NOT "
+                          "a claim about the smallest utility variation that matters",
+                "provenance": "half of a v1 C-vs-B gap observed on a test set, known before this "
+                              "reference was written",
             },
         },
+        "what_this_cannot_do": [
+            "it is not a Stage 5 result and is not reported as one",
+            "no C2 is produced and no ASISM, ranking or selection change follows from it alone",
+            "C is located within the random distribution, never used to set or move a reference",
+            "a sigma_s below the reference does not by itself close the question",
+        ],
         "attempts": "one. If the control fails, the proxy is blind and no further measurement with "
-                    "it is interpreted. If the headroom criterion fails, sigma_s is not re-estimated "
-                    "on a different draw, a different size or a different metric.",
+                    "it is interpreted. sigma_s is not re-estimated on a different draw, a "
+                    "different size or a different metric after the number is seen.",
         "arms": arms,
         "asism_selected_sha256": _sha256(selected_csv),
         "git_commit_hash": get_git_commit_hash(),
@@ -367,9 +392,11 @@ def run_analyze(out_dir: Path) -> dict:
                                       plan["headroom"]["selected_arm"]]},
         "verdict": {
             "control_passed": pc["passed"],
-            "headroom_passed": hr["passed"],
-            "meaning": "the control decides whether the proxy can see anything; the headroom "
-                       "criterion is necessary, never sufficient, for selection to be worth building",
+            "headroom_reference_met": hr["reference_met"],
+            "meaning": "the control is the only confirmatory test here: it decides whether the "
+                       "proxy can see a large effect at all. The headroom figure is an exploratory "
+                       "reading of how much room a selection rule could have, and C's position is "
+                       "descriptive. Nothing downstream changes on the strength of either.",
         },
     }
     (out_dir / "headroom_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -380,15 +407,17 @@ def run_analyze(out_dir: Path) -> dict:
     print(f"                  (v1 Stage 4 reference {CONTROL_ANCHOR_STAGE4:+.4f}, a different "
           f"recipe and a different evaluation split)")
     print(f"Headroom          sigma_s = {hr['sigma_s']:.4f}  95% CI "
-          f"[{hr['ci95'][0]:.4f}, {hr['ci95'][1]:.4f}]  threshold {SIGMA_S_MIN:.4f}"
-          f"  -> {'PASS' if hr['passed'] else 'FAIL'}")
+          f"[{hr['ci95'][0]:.4f}, {hr['ci95'][1]:.4f}]  exploratory reference "
+          f"{SIGMA_S_REFERENCE:.4f} -> {'met' if hr['reference_met'] else 'not met'}")
+    print("                  (exploratory only: this reference decides nothing)")
     print(f"C                 {c_mean:.4f}  against random mean {position['random_mean']:.4f} "
           f"(range {position['random_min']:.4f}-{position['random_max']:.4f}), "
           f"{position['share_of_random_draws_below_c']:.0%} of draws below it")
-    print(f"\nVERDICT: control {'PASS' if pc['passed'] else 'FAIL'}, "
-          f"headroom {'PASS' if hr['passed'] else 'FAIL'}")
+    print(f"\nCONFIRMATORY: positive control {'PASS' if pc['passed'] else 'FAIL'}")
+    print(f"EXPLORATORY : headroom reference {'met' if hr['reference_met'] else 'not met'}; "
+          "C located, not judged. Diagnostic evidence only, not a Stage 5 result.")
     return {"report": str(out_dir / "headroom_report.json"),
-            "control_passed": pc["passed"], "headroom_passed": hr["passed"]}
+            "control_passed": pc["passed"], "headroom_reference_met": hr["reference_met"]}
 
 
 def main() -> int:
