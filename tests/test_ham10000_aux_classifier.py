@@ -273,7 +273,7 @@ def test_the_v2_block_refuses_to_train_without_its_acceptance_criteria():
 def test_an_unknown_config_key_is_refused():
     module = _module()
     with pytest.raises(module.AuxiliaryClassifierConfigError):
-        module.validate_config(_committed_v2(), "auxiliary_classifier_v3")
+        module.validate_config(_committed_v2(), "auxiliary_classifier_v4")
 
 
 @pytest.mark.parametrize("key", ["train_split", "selection_split"])
