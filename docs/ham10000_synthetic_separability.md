@@ -118,3 +118,41 @@ It does not:
 - read `final_eval_heldout`.
 
 It writes to `outputs/ham10000/diagnostics/synthetic_separability/` only.
+
+## Result — 2026-09-27
+
+The check ran once, exactly as fixed above:
+
+- **embed:** on the pod at commit `8509c34`;
+- **encoder:** weights sha256 `04d27f34…`, revision `936966a8…`;
+- **inputs:** 3,168 synthetic and 3,586 real images, embeddings sha256 `a82b9311…`;
+- **analyse:** on the CPU.
+
+The full numbers are in `ham10000_work/separability/separability.{json,md}`.
+
+**Reading: mixed** (S1 does not confirm, S2 confirms, S3 does not confirm).
+
+| Question | Result | Confirms |
+|---|---|---|
+| S1 separability, synthetic − real balanced accuracy | +0.148 [0.079, 0.207]; real 0.494, synthetic 0.642 | No. The synthetic classes are **more** separable than the real ones. |
+| S2 within-class variety, pooled synthetic − real | −0.094 [−0.107, −0.081]; negative in all 7 classes, and every interval excludes 0 | Yes. The synthetic images vary less. |
+| S3 nv-leaning share, synthetic − real | mel −0.121 [−0.192, −0.050]; bkl −0.074 [−0.136, −0.009] | No. Synthetic mel and bkl lean towards nv **less** than real ones do. |
+
+Colour, descriptive only: the median a\* (red) of synthetic mel and bkl is 24.5 and 22.7, against
+19.6 and 17.5 for real mel and bkl. The real nv median is 32.4.
+
+What this does and does not say:
+
+- In DINOv2's appearance space, synthetic mel and bkl are not nv-like. The exploratory visual
+  reading that they were is **not supported**, and it stays exploratory.
+- The narrowed variety of the synthetic images **is supported**.
+- Classes that are separable are not thereby correct. The generator may give each class a cue of
+  its own that DINOv2 separates, and that cue need not be a diagnostic feature of the class.
+- The v2 classifier reads 99.6% of synthetic mel as nv, even though synthetic mel is distinct from
+  nv in appearance space. This points at the classifier's response to the synthetic images
+  (domain shift, or reliance on cues the synthetic images lack) rather than at mel identity alone.
+  It does not show that checkpoint selection will fix it.
+
+Decision, by Walaa on 2026-09-27: the protocol's next step stands. v3a (5-fold CV checkpoint
+selection, as fixed in `docs/ham10000_v2_signal_criteria.md`) is prepared and not started until she
+says so. The generator is not changed now.
