@@ -34,11 +34,20 @@ class LesionRecordDataset:
 
     Images are loaded as RGB and never converted to greyscale: colour is the diagnostic signal in
     dermoscopy, and the preprocessing step already guaranteed RGB on disk.
+
+    `augment=True` flips each image horizontally and vertically, each with probability 0.5. A
+    dermoscopic lesion has no canonical orientation, so a flip keeps the diagnosis. Rotation by 90°
+    is deliberately NOT offered: the canvas is letterboxed with padding above and below the content
+    box (0.125 / 0.875), and a quarter turn would move that padding to the sides — a layout the
+    model never meets at inference and one the Grad-CAM content box does not describe. Both flips
+    keep the padding where it is. The default is False, so every existing caller (Stage 4, the v1
+    auxiliary classifier) sees exactly the transform it always did and draws no extra random numbers.
     """
 
-    def __init__(self, records: list[dict], resolution: int):
+    def __init__(self, records: list[dict], resolution: int, augment: bool = False):
         self.records = records
         self.resolution = resolution
+        self.augment = bool(augment)
 
     def __len__(self) -> int:
         return len(self.records)
@@ -57,6 +66,11 @@ class LesionRecordDataset:
         # HWC -> CHW, normalised to [-1, 1] to match the preprocessing convention used elsewhere.
         tensor = torch.from_numpy(array).permute(2, 0, 1)
         tensor = (tensor - 0.5) / 0.5
+        if self.augment:
+            if torch.rand(1).item() < 0.5:
+                tensor = torch.flip(tensor, dims=[2])  # horizontal: mirror along the width axis
+            if torch.rand(1).item() < 0.5:
+                tensor = torch.flip(tensor, dims=[1])  # vertical: mirror along the height axis
         return {"image": tensor, "target": int(record["class_index"])}
 
 
@@ -113,12 +127,15 @@ def train_classifier(
     class_weights: np.ndarray | None = None,
     device: str | None = None,
     progress_desc: str = "train",
+    augment: bool = False,
 ):
     """Train to a FIXED optimizer-step budget with softmax + CrossEntropy. Returns (model, history).
 
     Equal optimizer steps (not equal epochs) is the same fairness rule the CheXpert Stage 4 uses: at
     fixed epochs a larger dataset silently receives more gradient updates, which would conflate
     "more data" with "more training" in exactly the comparison this thesis makes.
+
+    `augment` switches on the training-time flips of `LesionRecordDataset`; off by default.
     """
     torch = require_torch()
     from torch.utils.data import DataLoader
@@ -137,7 +154,7 @@ def train_classifier(
 
     settings = _loader_settings(device, budget.num_workers)
     loader = DataLoader(
-        LesionRecordDataset(train_records, resolution),
+        LesionRecordDataset(train_records, resolution, augment=augment),
         batch_size=budget.batch_size,
         shuffle=True,
         drop_last=False,
