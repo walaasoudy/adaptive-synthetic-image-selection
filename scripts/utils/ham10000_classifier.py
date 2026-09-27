@@ -128,6 +128,8 @@ def train_classifier(
     device: str | None = None,
     progress_desc: str = "train",
     augment: bool = False,
+    checkpoint_every: int | None = None,
+    on_checkpoint=None,
 ):
     """Train to a FIXED optimizer-step budget with softmax + CrossEntropy. Returns (model, history).
 
@@ -136,7 +138,15 @@ def train_classifier(
     "more data" with "more training" in exactly the comparison this thesis makes.
 
     `augment` switches on the training-time flips of `LesionRecordDataset`; off by default.
+
+    `on_checkpoint(step, model)` is called after every `checkpoint_every`-th optimizer step. It is
+    used by the v3a cross-validated step selection to score held-out images during the run. The
+    torch RNG state is saved before the call and restored after it, and the model is put back in
+    train mode, so the training itself is identical with or without the callback: scoring cannot
+    shift the next epoch's shuffle or the flips. Both default to None, and then nothing changes.
     """
+    if (checkpoint_every is None) != (on_checkpoint is None):
+        raise ValueError("checkpoint_every and on_checkpoint must be given together")
     torch = require_torch()
     from torch.utils.data import DataLoader
     from tqdm.auto import tqdm
@@ -183,6 +193,14 @@ def train_classifier(
             progress.update(1)
             progress.set_postfix(loss=f"{loss.item():.4f}")
             history.append({"step": step, "loss": float(loss.item())})
+            if checkpoint_every is not None and step % int(checkpoint_every) == 0:
+                cpu_state = torch.get_rng_state()
+                cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+                on_checkpoint(step, model)
+                torch.set_rng_state(cpu_state)
+                if cuda_state is not None:
+                    torch.cuda.set_rng_state_all(cuda_state)
+                model.train()
     progress.close()
     return model, history
 

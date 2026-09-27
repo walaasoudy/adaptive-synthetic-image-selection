@@ -19,6 +19,8 @@ WHY THERE IS NO BEST-CHECKPOINT SELECTION
   the same. `selection_split` here is MEASURED, never selected on: it is scored once after training
   so the manifest records what the frozen model does. Adding selection for this model alone would
   make the reference model trained differently from the models it is a reference for.
+  The exception is `auxiliary_classifier_v3` (below), where choosing the step IS the change under
+  test, and it is chosen on classifier_train alone, never on the measured split.
 
 TWO CONFIG BLOCKS, ONE ENTRY POINT
   `auxiliary_classifier` is the v1 model, and every v1 artifact names it. It stays unweighted and
@@ -28,6 +30,11 @@ TWO CONFIG BLOCKS, ONE ENTRY POINT
   to its own checkpoint directory and mints its own cam_model_id, so the two are never mixed. Its
   acceptance criteria are pre-registered in the config and evaluated once, after training; the
   result is written to the manifest whichever way it falls.
+  `auxiliary_classifier_v3` is the v2 recipe with one change: the training step. It is chosen by
+  5-fold cross-validation on classifier_train, grouped by lesion and stratified by diagnosis, on
+  the pooled out-of-fold balanced accuracy, with the pooled NLL breaking ties. The final model then
+  trains on all of classifier_train up to that step, and classifier_val is used for acceptance
+  only (docs/ham10000_v2_signal_criteria.md, "Step v3a").
 
 Refuses to start when:
   * the train or selection split is gen_train (the reference split) or a held-out split;
@@ -36,12 +43,15 @@ Refuses to start when:
   * the architecture or class list is not the one Grad-CAM and the metric suite assume;
   * the produced manifest is not accepted by `cam_model_identity`.
 
-Writes <checkpoint_dir>/<namespace>/: model.pt, selection_metrics.json, run_manifest.json
+Writes <checkpoint_dir>/<namespace>/: model.pt, selection_metrics.json, run_manifest.json, and
+for v3 also cv_selection.json (folds, per-step table, chosen step) and oof_probabilities.npz.
 
 Usage:
     python scripts/classify/ham10000_train_auxiliary_classifier.py --namespace ham-stratified-v1
     python scripts/classify/ham10000_train_auxiliary_classifier.py --namespace ham-stratified-v1 \\
         --config-key auxiliary_classifier_v2
+    python scripts/classify/ham10000_train_auxiliary_classifier.py --namespace ham-stratified-v1 \
+        --config-key auxiliary_classifier_v3
 """
 from __future__ import annotations
 
@@ -51,6 +61,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -79,6 +90,17 @@ V2_CONFIG_KEY = "auxiliary_classifier_v2"
 V2_CLASS_WEIGHTING = frozenset({"none", "inverse_frequency"})
 V2_AUGMENTATION = frozenset({"none", "flips"})
 V2_ACCEPTANCE_KEYS = ("min_balanced_accuracy_exclusive", "require_nonzero_recall_every_class")
+V3_CONFIG_KEY = "auxiliary_classifier_v3"
+CONFIG_KEYS = (V1_CONFIG_KEY, V2_CONFIG_KEY, V3_CONFIG_KEY)
+# docs/ham10000_v2_signal_criteria.md, "How option 3 is carried out", fixed before any v3 training.
+V3_SELECTION = {
+    "method": "lesion_grouped_stratified_kfold",
+    "n_folds": 5,
+    "fold_seed": 42,
+    "eval_every_steps": 250,
+    "tie_tolerance": 0.005,
+    "tie_breaker": "pooled_oof_nll",
+}
 
 
 class AuxiliaryClassifierConfigError(SystemExit):
@@ -91,10 +113,8 @@ def _augmentation(auxiliary) -> str:
 
 
 def validate_config(auxiliary, config_key: str = V1_CONFIG_KEY) -> None:
-    if config_key not in (V1_CONFIG_KEY, V2_CONFIG_KEY):
-        raise AuxiliaryClassifierConfigError(
-            f"config_key={config_key!r}: expected {V1_CONFIG_KEY!r} or {V2_CONFIG_KEY!r}"
-        )
+    if config_key not in CONFIG_KEYS:
+        raise AuxiliaryClassifierConfigError(f"config_key={config_key!r}: expected one of {CONFIG_KEYS}")
     for key in ("train_split", "selection_split"):
         split = str(auxiliary[key])
         if split in FORBIDDEN_AUXILIARY_SPLITS:
@@ -138,8 +158,19 @@ def validate_config(auxiliary, config_key: str = V1_CONFIG_KEY) -> None:
     missing = [key for key in V2_ACCEPTANCE_KEYS if acceptance is None or key not in acceptance]
     if missing:
         raise AuxiliaryClassifierConfigError(
-            f"{V2_CONFIG_KEY}.acceptance is missing {missing}: the criteria must be fixed before training"
+            f"{config_key}.acceptance is missing {missing}: the criteria must be fixed before training"
         )
+    if config_key == V3_CONFIG_KEY:
+        selection = auxiliary.get("checkpoint_selection")
+        found = {} if selection is None else {key: selection.get(key) for key in V3_SELECTION}
+        if found != V3_SELECTION:
+            raise AuxiliaryClassifierConfigError(
+                f"{V3_CONFIG_KEY}.checkpoint_selection is {found}, not the pre-registered {V3_SELECTION}"
+            )
+        if int(auxiliary.max_steps) % int(selection.eval_every_steps) != 0:
+            raise AuxiliaryClassifierConfigError(
+                f"max_steps={auxiliary.max_steps} is not a multiple of eval_every_steps={selection.eval_every_steps}"
+            )
 
 
 def evaluate_acceptance(metrics: dict, acceptance) -> dict:
@@ -170,6 +201,114 @@ def evaluate_acceptance(metrics: dict, acceptance) -> dict:
             "passed": bool(criterion_b),
         },
         "passed": bool(criterion_a and criterion_b),
+    }
+
+
+# ==============================================================================================
+# v3a - the training step chosen by cross-validation on classifier_train
+# ==============================================================================================
+
+
+def lesion_grouped_folds(records: list[dict], n_folds: int, seed: int) -> np.ndarray:
+    """A fold index per record. All images of one lesion share a fold, and each diagnosis is spread
+    evenly: within a class, lesions are shuffled with `seed`, then placed largest first into the
+    fold holding the fewest images of that class so far (ties go to the lowest fold index).
+
+    A record without a lesion_id is its own lesion. A lesion carrying two diagnoses is refused: it
+    cannot be stratified and would signal a broken split.
+    """
+    def lesion(record):
+        value = record.get("lesion_id")
+        if value is None or value == "" or (isinstance(value, float) and np.isnan(value)):
+            return f"__image__{record['image_id']}"
+        return str(value)
+
+    members: dict[str, list[int]] = {}
+    class_of: dict[str, int] = {}
+    for index, record in enumerate(records):
+        key = lesion(record)
+        members.setdefault(key, []).append(index)
+        if class_of.setdefault(key, record["class_index"]) != record["class_index"]:
+            raise AuxiliaryClassifierConfigError(f"lesion {key} carries more than one diagnosis")
+
+    rng = np.random.default_rng(seed)
+    folds = np.full(len(records), -1, dtype=int)
+    for class_index in sorted(set(class_of.values())):
+        lesions = sorted(key for key, c in class_of.items() if c == class_index)
+        lesions = [lesions[i] for i in rng.permutation(len(lesions))]
+        lesions.sort(key=lambda key: -len(members[key]))  # stable: equal sizes keep the shuffle
+        load = np.zeros(n_folds, dtype=int)
+        for key in lesions:
+            fold = int(np.argmin(load))
+            folds[members[key]] = fold
+            load[fold] += len(members[key])
+    return folds
+
+
+def pooled_step_table(probabilities: np.ndarray, truth: np.ndarray, steps: list[int]) -> list[dict]:
+    """Balanced accuracy and NLL per step on the pooled out-of-fold probabilities (steps, n, classes)."""
+    table = []
+    for position, step in enumerate(steps):
+        p = probabilities[position]
+        predicted = p.argmax(axis=1)
+        recalls = [float(np.mean(predicted[truth == c] == c)) for c in np.unique(truth)]
+        nll = float(-np.mean(np.log(np.clip(p[np.arange(len(truth)), truth], 1e-12, None))))
+        table.append({"step": int(step), "balanced_accuracy": float(np.mean(recalls)), "nll": nll})
+    return table
+
+
+def select_step(table: list[dict], tie_tolerance: float) -> dict:
+    """The best pooled balanced accuracy wins. A step less than `tie_tolerance` below it is tied, and
+    the tie goes to the lower pooled NLL (then, deterministically, to the earlier step)."""
+    best = max(row["balanced_accuracy"] for row in table)
+    tied = [row for row in table if best - row["balanced_accuracy"] < tie_tolerance]
+    chosen = min(tied, key=lambda row: (row["nll"], row["step"]))
+    return {"step": chosen["step"], "best_balanced_accuracy": best, "chosen": chosen,
+            "tied_steps": [row["step"] for row in tied]}
+
+
+def cross_validate_steps(train_records: list[dict], auxiliary, budget, device: str | None = None) -> dict:
+    """Train one model per fold to max_steps, score its held-out fold every eval_every_steps, and
+    choose the step on the pooled out-of-fold predictions. Only `train_records` are ever read."""
+    selection = auxiliary.checkpoint_selection
+    n_folds, every = int(selection.n_folds), int(selection.eval_every_steps)
+    steps = list(range(every, int(budget.max_steps) + 1, every))
+    resolution = int(auxiliary.resolution)
+    folds = lesion_grouped_folds(train_records, n_folds, int(selection.fold_seed))
+    truth = np.array([record["class_index"] for record in train_records])
+    oof = np.full((len(steps), len(train_records), len(CLASSIFIER_TARGET_LABELS)), np.nan)
+
+    for fold in range(n_folds):
+        held = np.flatnonzero(folds == fold)
+        fold_train = [train_records[i] for i in np.flatnonzero(folds != fold)]
+        fold_held = [train_records[i] for i in held]
+        weights = (class_weights_from_records(fold_train)
+                   if str(auxiliary.class_weighting) == "inverse_frequency" else None)
+
+        def score(step, model, held=held, fold_held=fold_held):
+            oof[steps.index(step), held] = predict_probabilities(model, fold_held, resolution, device=device)
+
+        train_classifier(
+            fold_train, budget, float(auxiliary.dropout_p), str(auxiliary.pretrained_source), resolution,
+            class_weights=weights, device=device, progress_desc=f"v3a-fold{fold}",
+            augment=_augmentation(auxiliary) == "flips", checkpoint_every=every, on_checkpoint=score,
+        )
+    if np.isnan(oof).any():
+        raise RuntimeError("some out-of-fold predictions were never written")
+
+    table = pooled_step_table(oof, truth, steps)
+    chosen = select_step(table, float(selection.tie_tolerance))
+    fold_counts = {
+        str(fold): {label: int(np.sum((folds == fold) & (truth == index)))
+                    for index, label in enumerate(CLASSIFIER_TARGET_LABELS)}
+        for fold in range(n_folds)
+    }
+    return {
+        "selection": {key: selection[key] for key in V3_SELECTION},
+        "selection_data": "classifier_train, pooled out-of-fold",
+        "steps": steps, "table": table, **chosen, "fold_class_counts": fold_counts,
+        "image_ids": [record["image_id"] for record in train_records],
+        "folds": folds.tolist(), "oof_probabilities": oof,
     }
 
 
@@ -231,6 +370,16 @@ def run(
         class_weights_from_records(train_records) if class_weighting == "inverse_frequency" else None
     )
 
+    cv = None
+    if config_key == V3_CONFIG_KEY:
+        # The step is chosen before the final model exists, from classifier_train alone: the
+        # selection records (classifier_val) are not passed in and cannot influence it.
+        cv = cross_validate_steps(train_records, auxiliary, budget, device=device)
+        budget = TrainingBudget(
+            max_steps=int(cv["step"]), batch_size=budget.batch_size, learning_rate=budget.learning_rate,
+            weight_decay=budget.weight_decay, seed=budget.seed,
+        )
+
     model, history = train_classifier(
         train_records, budget, float(auxiliary.dropout_p), str(auxiliary.pretrained_source), resolution,
         class_weights=class_weights, device=device, progress_desc="asism-auxiliary",
@@ -239,7 +388,7 @@ def run(
     probabilities = predict_probabilities(model, selection_records, resolution, device=device)
     metrics = full_metric_suite(probabilities, true_class_indices(selection_records))
     acceptance = None
-    if config_key == V2_CONFIG_KEY:
+    if config_key in (V2_CONFIG_KEY, V3_CONFIG_KEY):
         acceptance = {
             **evaluate_acceptance(metrics, auxiliary.acceptance),
             "evaluated_once_on": provenance["selection_split"],
@@ -250,6 +399,11 @@ def run(
     model_path = out_dir / "model.pt"
     torch.save(model.state_dict(), model_path)
     write_json(out_dir / "selection_metrics.json", {"split": provenance["selection_split"], **metrics})
+    if cv is not None:
+        np.savez_compressed(out_dir / "oof_probabilities.npz", probabilities=cv["oof_probabilities"],
+                            steps=np.array(cv["steps"]), image_id=np.array(cv["image_ids"]),
+                            fold=np.array(cv["folds"]))
+        write_json(out_dir / "cv_selection.json", {k: v for k, v in cv.items() if k != "oof_probabilities"})
 
     manifest = {
         "dataset": "ham10000",
@@ -272,7 +426,13 @@ def run(
             "max_steps": budget.max_steps, "batch_size": budget.batch_size,
             "learning_rate": budget.learning_rate, "weight_decay": budget.weight_decay, "seed": budget.seed,
         },
-        "checkpoint_selection": "none_fixed_step_budget",
+        "checkpoint_selection": "none_fixed_step_budget" if cv is None else {
+            **cv["selection"],
+            "selection_data": cv["selection_data"],
+            "selected_step": int(cv["step"]),
+            "step_rescaled_for_full_data": False,
+            "classifier_val_used_for_selection": False,
+        },
         "final_loss": history[-1]["loss"] if history else None,
         "data": provenance,
         "final_eval_heldout_read": False,
@@ -293,7 +453,7 @@ def main() -> int:
     parser.add_argument("--device", default=None)
     parser.add_argument("--max-steps", type=int, default=None, help="Override the configured budget (smoke runs only)")
     parser.add_argument(
-        "--config-key", default=V1_CONFIG_KEY, choices=(V1_CONFIG_KEY, V2_CONFIG_KEY),
+        "--config-key", default=V1_CONFIG_KEY, choices=CONFIG_KEYS,
         help=f"Which block of ham10000_stage3.yaml to train (default: {V1_CONFIG_KEY}, the v1 model)",
     )
     args = parser.parse_args()
@@ -327,6 +487,8 @@ def main() -> int:
     }
     if "acceptance" in manifest:
         summary["acceptance_passed"] = manifest["acceptance"]["passed"]
+    if isinstance(manifest["checkpoint_selection"], dict):
+        summary["selected_step"] = manifest["checkpoint_selection"]["selected_step"]
     print(json.dumps(summary, indent=2))
     return 0
 
