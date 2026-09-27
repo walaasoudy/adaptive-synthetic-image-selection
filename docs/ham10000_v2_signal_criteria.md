@@ -151,9 +151,11 @@ The only change is which checkpoint is kept:
 - `classifier_val` is **not** used to choose anything. It stays the acceptance split, and the
   acceptance is measured once, on the chosen checkpoint, with criteria A and B unchanged.
 
-The source of the selection data is **OPEN — to be decided by Walaa before v3a is trained.** It may
-not be `gen_train`, which is the Grad-CAM reference, or `final_eval_heldout`, which is protected. The
-counts that make this hard, from `splits/ham-stratified-v1`:
+The source of the selection data was chosen by Walaa on 2026-09-27, before the analysis ran:
+**option 3, cross-validated step selection on `classifier_train`.** The choice is conditional: it
+is carried out only if the decision rule calls for v3. The data may not come from `gen_train`, which
+is the Grad-CAM reference, or from `final_eval_heldout`, which is protected. The counts that make
+this hard, from `splits/ham-stratified-v1`:
 
 | Split | Images | vasc | df | Role today |
 |---|---|---|---|---|
@@ -173,10 +175,36 @@ Options:
    retrain on all of `classifier_train` and keep that step. No other split is touched and no
    training data is lost. It costs about 6 trainings instead of 1.
 
+Options 1 and 2 were rejected:
+
+- Option 1 leaves too few vasc and df images to choose a checkpoint on.
+- Option 2 mixes classifier design into the split U1 needs later.
+
+How option 3 is carried out, fixed now:
+
+- **Folds.** 5 folds of `classifier_train`, grouped by `lesion_id` so that no lesion is on both
+  sides. They are stratified by `dx`, with seed 42.
+- **Training.** Each fold model is a full v2-recipe training to 3000 steps, saving the 12
+  checkpoints (every 250 steps). All 12 come from one run per fold, and no checkpoint needs a run of
+  its own. The total is 5 fold runs plus 1 final run, about 6 times the compute of v2.
+- **Scoring.** Balanced accuracy is computed on the **pooled out-of-fold predictions**, not as the
+  mean of 5 per-fold values. Every one of the 1,641 images is scored exactly once, by the model that
+  did not train on it, and one balanced accuracy is computed per step. A single fold holds only about
+  5 df and 4 vasc images, so per-fold values would be dominated by one or two images. Pooling puts
+  all 25 df and 21 vasc images into the decision.
+- **Ties.** A step within 0.005 of the best balanced accuracy is tied with it. The tie goes to the
+  lower pooled out-of-fold NLL.
+- **The final model.** It trains on all of `classifier_train` and stops at the chosen step, **with no
+  rescaling.** Limitation: each fold model saw 80% of the images, so the same step count means
+  slightly more passes over the data than in the final run. This is recorded, not corrected.
+- **What stays out.** `classifier_val`, `asism_tuning_heldout` and `final_eval_heldout` take no
+  part in choosing the step.
+
 ### Step v3b — calibration (only if v3a is kept and a confidence problem remains)
 
-Temperature scaling, with one scalar fitted by NLL on the same selection data as v3a.
-`classifier_val` is not used to fit it.
+Temperature scaling: one scalar, fitted by NLL on the pooled out-of-fold logits at the chosen step,
+the same data v3a selected on. It is then applied to the final model. `classifier_val` is not used
+to fit it.
 
 Temperature scaling does not change the argmax. It cannot move the match rate in Q1 or the mel→nv
 share in Q2. It can only change `agreement_score`, the probabilities, and the uncertainty
