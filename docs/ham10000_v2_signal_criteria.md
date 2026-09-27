@@ -85,10 +85,11 @@ Measured:
 
 ## Q3 — Is uncertainty still near zero?
 
-Measured: the normalised mutual information, `uncertainty_mutual_information / ln 7`. Its median,
-P90, P99 and IQR are reported, with `uncertainty_mean_std` beside them. The script first checks that
-this normalisation reproduces `uncertainty_band` for every row, against the unchanged bands 0.05 and
-0.20. If it does not, the script stops rather than guessing the unit.
+Measured: the normalised mutual information, `uncertainty_mutual_information`. The column is
+already divided by ln 7 when it is written (see Amendment 1). Its median, P90, P99 and IQR are
+reported, with `uncertainty_mean_std` beside them. The script first checks that the column
+reproduces `uncertainty_band` for every row, against the unchanged bands 0.05 and 0.20. If it does
+not, the script stops rather than guessing the unit.
 
 **Degenerate** (does not separate candidates) if both of these hold, pooled:
 
@@ -229,3 +230,19 @@ The analysis does not touch the following:
 - the final evaluation.
 
 It reads the downloaded artifacts only and runs on the CPU.
+
+## Amendments
+
+### Amendment 1 — 2026-09-27, before the analysis ran: the unit of Q3
+
+The first version of Q3 said to divide `uncertainty_mutual_information` by ln 7. That column is
+already divided by ln 7 when it is written (`compute_uncertainty_scores` in
+`scripts/asism/ham10000_signals.py`, `scale = log(n_classes)`), so dividing again would have
+normalised it twice. This was found while writing the analysis script, from the code, before any
+value of the column had been read.
+
+- **Corrected:** Q3 now reads the column as it is.
+- **Unchanged:** the thresholds (P90 < 0.01, IQR < 0.005), the bands, and the check that the column
+  reproduces `uncertainty_band`.
+- **No second verdict:** no result existed under the old wording, so there is none to report beside
+  the new one.
