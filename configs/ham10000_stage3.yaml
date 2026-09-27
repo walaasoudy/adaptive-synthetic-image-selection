@@ -259,6 +259,49 @@ auxiliary_classifier_v2:
     require_nonzero_recall_every_class: true
 
 # ---------------------------------------------------------------------------------------------
+# v3a auxiliary classifier: the v2 recipe with ONE change, the training step chosen by
+# cross-validation instead of the last step. It is built only because the pre-registered v2 signal
+# diagnostic returned build_v3 (docs/ham10000_v2_signal_criteria.md, "Step v3a"; the
+# separability check, docs/ham10000_synthetic_separability.md, left that verdict standing).
+#
+# The step is chosen on classifier_train alone:
+#   * 5 folds, grouped by lesion_id and stratified by dx;
+#   * each fold model trains to max_steps and is scored every eval_every_steps;
+#   * the step with the best balanced accuracy on the POOLED out-of-fold predictions wins, and a
+#     step within tie_tolerance of it is tied, with the tie going to the lower pooled NLL;
+#   * the final model trains on all of classifier_train and stops at that step, without rescaling.
+# classifier_val, asism_tuning_heldout and final_eval_heldout take no part in the choice.
+# classifier_val stays the acceptance split, and the acceptance criteria are v2's, unchanged.
+# ---------------------------------------------------------------------------------------------
+auxiliary_classifier_v3:
+  checkpoint_dir: ${paths.project_root}/checkpoints/ham10000/asism_auxiliary_v3
+  train_split: "classifier_train"
+  selection_split: "classifier_val"
+  architecture: "densenet121"
+  pretrained_source: "imagenet"
+  dropout_p: 0.2
+  resolution: 512
+  seed: 42
+  max_steps: 3000
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  class_weighting: "inverse_frequency"
+  augmentation: "flips"
+  acceptance:
+    min_balanced_accuracy_exclusive: 0.478
+    require_nonzero_recall_every_class: true
+
+  # FIXED 2026-09-27, before any v3 training.
+  checkpoint_selection:
+    method: "lesion_grouped_stratified_kfold"
+    n_folds: 5
+    fold_seed: 42
+    eval_every_steps: 250
+    tie_tolerance: 0.005
+    tie_breaker: "pooled_oof_nll"
+
+# ---------------------------------------------------------------------------------------------
 # Stage 3b — the Go/No-Go gate's thresholds (scripts/asism/ham10000_02_gonogo.py).
 #
 # These decide which signals may be weighted into the selector at all, so they are set BEFORE the
