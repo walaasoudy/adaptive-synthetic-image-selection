@@ -6,6 +6,10 @@
 paths:
   project_root: ${oc.env:PROJECT_ROOT,.}
   outputs_dir: ${paths.project_root}/outputs/ham10000/stage3
+  # The Grad-CAM reference and the three classifier-dependent signals (uncertainty, agreement,
+  # explainability) recomputed with auxiliary_classifier_v2. A separate root, so the v1 artifacts
+  # under outputs_dir are never overwritten. Similarity and IQA are not recomputed there.
+  aux_v2_outputs_dir: ${paths.project_root}/outputs/ham10000/stage3_aux_v2
 
 signals:
   iqa:
