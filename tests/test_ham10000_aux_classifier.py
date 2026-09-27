@@ -44,7 +44,11 @@ def _committed_auxiliary():
     return OmegaConf.load(CONFIGS_DIR / "ham10000_stage3.yaml").auxiliary_classifier
 
 
-def _fixture(workspace: Path, **overrides):
+def _committed_v2():
+    return OmegaConf.load(CONFIGS_DIR / "ham10000_stage3.yaml").auxiliary_classifier_v2
+
+
+def _fixture(workspace: Path, block=None, **overrides):
     """A tiny real-shaped split pair plus the committed config pointed at it, with a 1-step budget."""
     splits, images = workspace / "splits" / NAMESPACE, workspace / "images" / NAMESPACE
     rng = np.random.default_rng(0)
@@ -60,7 +64,7 @@ def _fixture(workspace: Path, **overrides):
         pd.DataFrame(rows).to_csv(splits / f"{split}.csv", index=False)
 
     auxiliary = OmegaConf.merge(
-        _committed_auxiliary(),
+        block if block is not None else _committed_auxiliary(),
         {
             "checkpoint_dir": str(workspace / "checkpoints"),
             "pretrained_source": "random",
@@ -209,3 +213,207 @@ def test_cam_model_identity_rejects_a_manifest_this_entry_point_would_never_writ
     broken = {**manifest, **{k: ({**manifest[k], **v} if isinstance(v, dict) else v) for k, v in damage.items()}}
     with pytest.raises(ReferenceLeakageError):
         cam_model_identity(broken, ENTRY, reference_split="gen_train")
+
+
+# --------------------------------------------------------------------------------------------
+# v2: a separate, class-balanced model with orientation flips. v1 must not move.
+# --------------------------------------------------------------------------------------------
+
+def test_the_v1_block_is_still_the_plain_model_every_v1_artifact_names():
+    auxiliary = _committed_auxiliary()
+    assert auxiliary.class_weighting == "none"
+    assert "augmentation" not in auxiliary and "acceptance" not in auxiliary
+    assert str(auxiliary.checkpoint_dir).endswith("checkpoints/ham10000/asism_auxiliary")
+    assert (int(auxiliary.seed), int(auxiliary.max_steps), int(auxiliary.resolution)) == (42, 3000, 512)
+    _module().validate_config(auxiliary, "auxiliary_classifier")
+
+
+def test_the_v1_block_refuses_augmentation():
+    module = _module()
+    auxiliary = OmegaConf.merge(_committed_auxiliary(), {"augmentation": "flips"})
+    with pytest.raises(module.AuxiliaryClassifierConfigError):
+        module.validate_config(auxiliary, "auxiliary_classifier")
+
+
+def test_the_v2_block_differs_from_v1_only_in_weighting_flips_acceptance_and_directory():
+    v1, v2 = _committed_auxiliary(), _committed_v2()
+    _module().validate_config(v2, "auxiliary_classifier_v2")
+    assert v2.class_weighting == "inverse_frequency" and v2.augmentation == "flips"
+    assert str(v2.checkpoint_dir) != str(v1.checkpoint_dir)
+    assert str(v2.checkpoint_dir).endswith("checkpoints/ham10000/asism_auxiliary_v2")
+    assert float(v2.acceptance.min_balanced_accuracy_exclusive) == 0.478
+    assert bool(v2.acceptance.require_nonzero_recall_every_class) is True
+    for key in set(v1) - {"checkpoint_dir", "class_weighting"}:
+        assert v2[key] == v1[key], key
+    assert set(v2) - set(v1) == {"augmentation", "acceptance"}
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"class_weighting": "sqrt_inverse_frequency"},
+        {"augmentation": "rotate90"},
+        {"augmentation": "flips_and_rotate90"},
+    ],
+)
+def test_the_v2_block_refuses_unknown_weighting_or_any_rotation(override):
+    module = _module()
+    with pytest.raises(module.AuxiliaryClassifierConfigError):
+        module.validate_config(OmegaConf.merge(_committed_v2(), override), "auxiliary_classifier_v2")
+
+
+def test_the_v2_block_refuses_to_train_without_its_acceptance_criteria():
+    module = _module()
+    v2 = OmegaConf.to_container(_committed_v2())
+    del v2["acceptance"]["require_nonzero_recall_every_class"]
+    with pytest.raises(module.AuxiliaryClassifierConfigError):
+        module.validate_config(OmegaConf.create(v2), "auxiliary_classifier_v2")
+
+
+def test_an_unknown_config_key_is_refused():
+    module = _module()
+    with pytest.raises(module.AuxiliaryClassifierConfigError):
+        module.validate_config(_committed_v2(), "auxiliary_classifier_v3")
+
+
+@pytest.mark.parametrize("key", ["train_split", "selection_split"])
+@pytest.mark.parametrize("split", ["gen_train", "asism_tuning_heldout", "final_eval_heldout"])
+def test_the_v2_block_refuses_the_same_splits_v1_does(key, split):
+    module = _module()
+    with pytest.raises(module.AuxiliaryClassifierConfigError):
+        module.validate_config(OmegaConf.merge(_committed_v2(), {key: split}), "auxiliary_classifier_v2")
+
+
+# --- the dataset flips ------------------------------------------------------------------------
+
+def _one_image_dataset(workspace: Path, augment: bool):
+    from scripts.utils.ham10000_classifier import LesionRecordDataset
+
+    rng = np.random.default_rng(3)
+    path = workspace / "lesion.jpg"
+    Image.fromarray(rng.integers(0, 255, (32, 32, 3), dtype=np.uint8)).save(path)
+    return LesionRecordDataset([{"image_path": str(path), "class_index": 4}], 32, augment=augment), path
+
+
+def test_without_augment_the_transform_is_the_old_one_and_draws_no_random_numbers():
+    import torch
+
+    with fixture_workspace("ham-aux-noaug") as workspace:
+        dataset, path = _one_image_dataset(workspace, augment=False)
+        state = torch.get_rng_state()
+        item = dataset[0]
+        assert torch.equal(state, torch.get_rng_state())
+        with Image.open(path) as image:
+            expected = torch.from_numpy(np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0).permute(2, 0, 1)
+        assert torch.equal(item["image"], (expected - 0.5) / 0.5)
+        assert item["target"] == 4
+
+
+def test_with_augment_every_output_is_a_flip_of_the_image_and_the_label_never_changes():
+    import torch
+    from scripts.utils.ham10000_classifier import LesionRecordDataset
+
+    with fixture_workspace("ham-aux-aug") as workspace:
+        dataset, _ = _one_image_dataset(workspace, augment=True)
+        base = LesionRecordDataset(dataset.records, 32)[0]["image"]
+        variants = {
+            "identity": base,
+            "horizontal": torch.flip(base, dims=[2]),
+            "vertical": torch.flip(base, dims=[1]),
+            "both": torch.flip(base, dims=[1, 2]),
+        }
+        torch.manual_seed(0)
+        seen = set()
+        for _ in range(64):
+            item = dataset[0]
+            assert item["target"] == 4
+            matches = [name for name, tensor in variants.items() if torch.equal(item["image"], tensor)]
+            assert matches, "an augmented image must be one of the four flips of the original"
+            seen.add(matches[0])
+        # 64 draws at p = 0.5 per flip: missing any of the four has probability below 1e-7.
+        assert seen == set(variants)
+
+
+# --- v2 end to end, and the acceptance rule ---------------------------------------------------
+
+def test_one_step_v2_run_uses_balanced_weights_and_flips_and_records_its_acceptance(monkeypatch):
+    from scripts.utils.ham10000_classifier import class_weights_from_records
+
+    module = _module()
+    captured = {}
+    original = module.train_classifier
+
+    def spy(train_records, *args, **kwargs):
+        captured["records"], captured["kwargs"] = train_records, kwargs
+        return original(train_records, *args, **kwargs)
+
+    monkeypatch.setattr(module, "train_classifier", spy)
+    with fixture_workspace("ham-aux-v2-run") as workspace:
+        auxiliary, splits_root, images_root = _fixture(workspace, block=_committed_v2())
+        result = module.run(
+            auxiliary, splits_root, images_root, NAMESPACE, device="cpu", config_key="auxiliary_classifier_v2"
+        )
+        manifest = result["manifest"]
+        model_path = Path(result["out_dir"]) / "model.pt"
+
+        expected = class_weights_from_records(captured["records"])
+        assert np.allclose(captured["kwargs"]["class_weights"], expected)
+        assert captured["kwargs"]["augment"] is True
+        assert manifest["config_key"] == "auxiliary_classifier_v2"
+        assert manifest["class_weighting"] == "inverse_frequency" and manifest["augmentation"] == "flips"
+        assert np.allclose(manifest["class_weights"], expected) and len(manifest["class_weights"]) == 7
+        assert manifest["data"]["synthetic_images"] == 0 and manifest["final_eval_heldout_read"] is False
+
+        acceptance = manifest["acceptance"]
+        assert acceptance["evaluated_once_on"] == "classifier_val"
+        assert acceptance["passed"] == (acceptance["criterion_a"]["passed"] and acceptance["criterion_b"]["passed"])
+        assert set(acceptance["criterion_b"]["per_class_recall"]) == set(CLASSIFIER_TARGET_LABELS)
+
+        identity = cam_model_identity(manifest, model_path, reference_split="gen_train")
+        assert identity["cam_model_id"] == manifest["cam_model_id"]
+
+
+def test_the_v1_run_still_trains_unweighted_and_unaugmented_with_no_acceptance(monkeypatch):
+    module = _module()
+    captured = {}
+    original = module.train_classifier
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "train_classifier", spy)
+    with fixture_workspace("ham-aux-v1-run") as workspace:
+        auxiliary, splits_root, images_root = _fixture(workspace)
+        manifest = module.run(auxiliary, splits_root, images_root, NAMESPACE, device="cpu")["manifest"]
+    assert captured["class_weights"] is None and captured["augment"] is False
+    assert manifest["config_key"] == "auxiliary_classifier" and manifest["augmentation"] == "none"
+    assert "acceptance" not in manifest
+
+
+def _metrics(balanced: float, recalls: dict) -> dict:
+    return {"balanced_accuracy": balanced, "per_class": {label: {"recall": value} for label, value in recalls.items()}}
+
+
+_ACCEPTANCE = {"min_balanced_accuracy_exclusive": 0.478, "require_nonzero_recall_every_class": True}
+_ALL_POSITIVE = {label: 0.5 for label in CLASSIFIER_TARGET_LABELS}
+
+
+def test_acceptance_passes_only_when_both_criteria_hold():
+    verdict = _module().evaluate_acceptance(_metrics(0.55, _ALL_POSITIVE), _ACCEPTANCE)
+    assert verdict["criterion_a"]["passed"] and verdict["criterion_b"]["passed"] and verdict["passed"]
+
+
+@pytest.mark.parametrize("balanced", [0.478, 0.40])
+def test_acceptance_fails_at_or_below_the_threshold(balanced):
+    verdict = _module().evaluate_acceptance(_metrics(balanced, _ALL_POSITIVE), _ACCEPTANCE)
+    assert not verdict["criterion_a"]["passed"] and not verdict["passed"]
+
+
+@pytest.mark.parametrize("bad", [0.0, float("nan")])
+def test_acceptance_fails_when_any_class_recall_is_zero_or_unmeasurable(bad):
+    recalls = {**_ALL_POSITIVE, "df": bad}
+    verdict = _module().evaluate_acceptance(_metrics(0.60, recalls), _ACCEPTANCE)
+    assert verdict["criterion_a"]["passed"]
+    assert not verdict["criterion_b"]["passed"] and verdict["criterion_b"]["classes_failing"] == ["df"]
+    assert not verdict["passed"]
