@@ -124,14 +124,70 @@ A pair is **redundant** if |ρ| is **≥ 0.7** pooled, and also within **≥ 4**
 | Q1 not sensible, or Q2 influential | **Build v3**, aimed at the classifier itself. |
 | Q3 degenerate | **Not on its own a reason for v3.** The cause may be the MC Dropout method, not the classifier. Replacing it (for example with TTA or an ensemble) is a separate design decision for Walaa, fixed in writing before it is tried. |
 | Q5 redundant | Does not change the v3 decision. Recorded as an input to the later ranking. |
-| Q1 sensible and Q2 not influential, but Q4 discriminative in < 4 classes | **OPEN — to be decided by Walaa before the analysis runs.** |
+| Q1 sensible and Q2 not influential, but Q4 discriminative in < 4 classes | **v2 is sufficient.** Explainability is recorded as a weak signal, and its fate is decided in the ranking. The weakness may lie in Grad-CAM itself rather than in the classifier. (Decided by Walaa on 2026-09-27, before the analysis ran.) |
 
-If v3 is built:
+## The v3 design, fixed now and built only if the rule above calls for it
 
-- a new split, separate from `classifier_val`, selects the checkpoint. `classifier_val` stays the
-  acceptance split only;
-- one change at a time. The first change is checkpoint selection in place of the last checkpoint;
-- acceptance criteria A and B are unchanged.
+v3 is written down before the analysis runs so that, if it is needed, it is not designed after the
+result is seen. Nothing below is trained until the decision rule says "build v3".
+
+**One change per step.** Each step is judged before the next one starts.
+
+### Step v3a — checkpoint selection
+
+Everything else is the same as v2, including the following:
+
+- architecture;
+- loss and inverse-frequency class weights;
+- flips;
+- `max_steps` 3000, batch size, learning rate and seed.
+
+The only change is which checkpoint is kept:
+
+- a checkpoint is saved every **250 steps**, which gives 12 candidates;
+- the checkpoint with the highest **balanced accuracy on the selection data** is kept. Two
+  checkpoints are tied if their balanced accuracies differ by **< 0.005**. The tie goes to the
+  lower **NLL** on the same data;
+- `classifier_val` is **not** used to choose anything. It stays the acceptance split, and the
+  acceptance is measured once, on the chosen checkpoint, with criteria A and B unchanged.
+
+The source of the selection data is **OPEN — to be decided by Walaa before v3a is trained.** It may
+not be `gen_train`, which is the Grad-CAM reference, or `final_eval_heldout`, which is protected. The
+counts that make this hard, from `splits/ham-stratified-v1`:
+
+| Split | Images | vasc | df | Role today |
+|---|---|---|---|---|
+| classifier_train | 1,641 | 21 | 25 | trains the classifier |
+| asism_tuning_heldout | 1,377 | 20 | 13 | ASISM tuning (utility / set model) |
+| gen_val | 388 | 6 | 4 | LoRA validation (finished) |
+
+Options:
+
+1. **A held-out part of `classifier_train`.** Split by `lesion_id` and stratified, about 15%. This
+   leaves about 3 vasc and 4 df images to select on, and takes them out of training.
+2. **`asism_tuning_heldout`.** It is larger, but it mixes the classifier's model selection into the
+   split that U1 (utility) will tune on.
+3. **Cross-validated step selection on `classifier_train`.** Use 5 folds, split by `lesion_id` and
+   stratified. For each fold, train on 4 folds and score the 12 checkpoints on the 5th. Pick the
+   step with the best mean balanced accuracy across the folds, with the same NLL tie rule. Then
+   retrain on all of `classifier_train` and keep that step. No other split is touched and no
+   training data is lost. It costs about 6 trainings instead of 1.
+
+### Step v3b — calibration (only if v3a is kept and a confidence problem remains)
+
+Temperature scaling, with one scalar fitted by NLL on the same selection data as v3a.
+`classifier_val` is not used to fit it.
+
+Temperature scaling does not change the argmax. It cannot move the match rate in Q1 or the mel→nv
+share in Q2. It can only change `agreement_score`, the probabilities, and the uncertainty
+quantities. So v3b runs only if, after v3a:
+
+- Q1 is sensible,
+- Q2 is not influential,
+- and Q3 is still degenerate.
+
+If Q1 or Q2 still fail after v3a, v3b is not the fix. The next change is chosen from the evidence
+and written here before it is tried.
 
 ## Out of scope for this analysis
 
