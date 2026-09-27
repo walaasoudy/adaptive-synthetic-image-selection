@@ -19,6 +19,12 @@ produces what is missing, instead of substituting a default.
 Usage:
     python scripts/asism/ham10000_01_compute_signals.py --namespace ham-stratified-v1 --signal all
     python scripts/asism/ham10000_01_compute_signals.py --namespace ham-stratified-v1 --signal iqa
+    python scripts/asism/ham10000_01_compute_signals.py --namespace ham-stratified-v1         --config-key auxiliary_classifier_v2 --signal uncertainty --signal agreement --signal explainability
+
+`--config-key auxiliary_classifier_v2` recomputes only the three signals that depend on the auxiliary
+classifier, with the v2 model, reading the v2 Grad-CAM reference and writing under
+paths.aux_v2_outputs_dir. Similarity and IQA do not depend on that model and are refused there, so
+they cannot be recomputed by accident. The default (v1) reads and writes exactly as before.
 """
 from __future__ import annotations
 
@@ -33,7 +39,12 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.asism.ham10000_00_build_cam_reference import load_cam_model  # noqa: E402
+from scripts.asism.ham10000_00_build_cam_reference import (  # noqa: E402
+    CONFIG_KEYS,
+    V1_CONFIG_KEY,
+    auxiliary_outputs_dir,
+    load_cam_model,
+)
 from scripts.asism.ham10000_explainability import explainability_rows, gradcam  # noqa: E402
 from scripts.asism.ham10000_signals import (  # noqa: E402
     calibrate_explainability,
@@ -59,6 +70,8 @@ from scripts.utils.manifest import get_git_commit_hash, read_json, sha256_file  
 
 SIGNALS = ("iqa", "similarity", "uncertainty", "agreement", "explainability")
 REFERENCE_SPLIT = "gen_train"
+# The signals computed from the auxiliary classifier. The only ones a non-v1 config key may run.
+CLASSIFIER_SIGNALS = ("uncertainty", "agreement", "explainability")
 
 
 class UpstreamGate(SystemExit):
@@ -387,14 +400,15 @@ def run_similarity(frame, stage1, stage3, splits_cfg, out_dir: Path, provenance:
 
 
 def run_uncertainty_and_agreement(
-    frame, stage3, out_dir: Path, provenance: dict, which: list[str], device: str
+    frame, stage3, out_dir: Path, provenance: dict, which: list[str], device: str,
+    config_key: str = V1_CONFIG_KEY,
 ) -> None:
     """Both read the same stochastic forward passes — the expensive part — but are written and
     gated separately. They answer different questions (how sure is the model / does it see the class
     that was asked for) and the Go/No-Go gate may admit one and exclude the other."""
     namespace = provenance["split_namespace"]
     model, resolution, identity, _ = load_cam_model(
-        Path(stage3.auxiliary_classifier.checkpoint_dir), namespace
+        Path(stage3[config_key].checkpoint_dir), namespace
     )
     records = candidate_records(frame)
     passes = int(stage3.signals.uncertainty.mc_dropout_passes)
@@ -457,15 +471,18 @@ def run_uncertainty_and_agreement(
 # ----------------------------------------------------------------------------------------------
 
 
-def run_explainability(frame, stage1, stage3, splits_cfg, out_dir: Path, provenance: dict, device: str) -> None:
+def run_explainability(
+    frame, stage1, stage3, splits_cfg, out_dir: Path, provenance: dict, device: str,
+    config_key: str = V1_CONFIG_KEY,
+) -> None:
     namespace = provenance["split_namespace"]
-    reference_path = Path(stage3.paths.outputs_dir) / namespace / "explainability_reference.json"
+    reference_path = auxiliary_outputs_dir(stage3, config_key) / namespace / "explainability_reference.json"
     if not reference_path.is_file():
         raise UpstreamGate(
             f"UPSTREAM GATE: no Grad-CAM reference at {reference_path}.\n"
             "Without it every candidate's typicality is NaN and the selection guard refuses the "
             "feature. Run: python scripts/asism/ham10000_00_build_cam_reference.py "
-            f"--namespace {namespace}"
+            f"--namespace {namespace} --config-key {config_key}"
         )
     split_dir = Path(splits_cfg.paths.splits_root) / namespace
     references = references_from_artifact(
@@ -475,7 +492,7 @@ def run_explainability(frame, stage1, stage3, splits_cfg, out_dir: Path, provena
     )
 
     model, resolution, identity, _ = load_cam_model(
-        Path(stage3.auxiliary_classifier.checkpoint_dir), namespace
+        Path(stage3[config_key].checkpoint_dir), namespace
     )
     reference_model_id = read_json(reference_path)["cam_model_id"]
     if identity["cam_model_id"] != reference_model_id:
@@ -544,8 +561,21 @@ def run_explainability(frame, stage1, stage3, splits_cfg, out_dir: Path, provena
 # ----------------------------------------------------------------------------------------------
 
 
-def run(namespace: str, signals: list[str], device: str | None = None, limit: int | None = None) -> dict:
+def run(
+    namespace: str, signals: list[str], device: str | None = None, limit: int | None = None,
+    config_key: str = V1_CONFIG_KEY,
+) -> dict:
     from scripts.utils.classifier import require_torch
+
+    if config_key not in CONFIG_KEYS:
+        raise SystemExit(f"Unknown auxiliary classifier config key {config_key!r}; expected one of {CONFIG_KEYS}.")
+    if config_key != V1_CONFIG_KEY:
+        outside = [name for name in signals if name not in CLASSIFIER_SIGNALS]
+        if outside:
+            raise SystemExit(
+                f"{config_key} recomputes only {CLASSIFIER_SIGNALS}; {outside} do not depend on the "
+                "auxiliary classifier and are not recomputed with it."
+            )
 
     stage1 = load_named_config("ham10000_stage1.yaml", "ham_stage1")
     stage2 = load_named_config("ham10000_stage2.yaml", "ham_stage2")
@@ -559,9 +589,9 @@ def run(namespace: str, signals: list[str], device: str | None = None, limit: in
 
     candidates_path = Path(stage2.paths.stage2_root) / namespace / "all_candidates.csv"
     frame = load_candidates(Path(stage2.paths.stage2_root), namespace, limit)
-    provenance = base_provenance(namespace, candidates_path, frame)
+    provenance = {**base_provenance(namespace, candidates_path, frame), "auxiliary_config_key": config_key}
 
-    out_dir = Path(stage3.paths.outputs_dir) / namespace / "signals"
+    out_dir = auxiliary_outputs_dir(stage3, config_key) / namespace / "signals"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if "iqa" in signals:
@@ -570,11 +600,11 @@ def run(namespace: str, signals: list[str], device: str | None = None, limit: in
         run_similarity(frame, stage1, stage3, splits_cfg, out_dir, provenance, device)
     shared = [name for name in ("uncertainty", "agreement") if name in signals]
     if shared:
-        run_uncertainty_and_agreement(frame, stage3, out_dir, provenance, shared, device)
+        run_uncertainty_and_agreement(frame, stage3, out_dir, provenance, shared, device, config_key)
     if "explainability" in signals:
-        run_explainability(frame, stage1, stage3, splits_cfg, out_dir, provenance, device)
+        run_explainability(frame, stage1, stage3, splits_cfg, out_dir, provenance, device, config_key)
 
-    return {"out_dir": str(out_dir), "signals": signals, "n_candidates": len(frame)}
+    return {"out_dir": str(out_dir), "signals": signals, "n_candidates": len(frame), "config_key": config_key}
 
 
 def main() -> int:
@@ -586,6 +616,11 @@ def main() -> int:
     )
     parser.add_argument("--device", default=None)
     parser.add_argument(
+        "--config-key", choices=CONFIG_KEYS, default=V1_CONFIG_KEY,
+        help="Which auxiliary classifier the classifier-dependent signals come from. Default: v1. "
+             "Any other key runs only uncertainty, agreement and explainability.",
+    )
+    parser.add_argument(
         "--limit", type=int, default=None,
         help="Score only the first N candidates. Smoke runs only: a partial artifact is still "
              "written and is still read by the Go/No-Go gate.",
@@ -595,7 +630,7 @@ def main() -> int:
     requested = args.signal or ["all"]
     signals = list(SIGNALS) if "all" in requested else [name for name in SIGNALS if name in requested]
 
-    result = run(args.namespace, signals, device=args.device, limit=args.limit)
+    result = run(args.namespace, signals, device=args.device, limit=args.limit, config_key=args.config_key)
     print(json.dumps(result, indent=2))
     return 0
 

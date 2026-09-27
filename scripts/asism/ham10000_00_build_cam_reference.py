@@ -22,6 +22,11 @@ WHAT IT REFUSES
 
 Usage:
     python scripts/asism/ham10000_00_build_cam_reference.py --namespace ham-stratified-v1
+    python scripts/asism/ham10000_00_build_cam_reference.py --namespace ham-stratified-v1         --config-key auxiliary_classifier_v2
+
+`--config-key` picks the auxiliary classifier the CAMs come from. The default is v1, which reads and
+writes exactly where it always did. v2 reads its own checkpoint and writes under
+paths.aux_v2_outputs_dir, so the v1 reference is never overwritten.
 """
 from __future__ import annotations
 
@@ -51,6 +56,28 @@ from scripts.utils.ham10000_geometry import load_content_boxes  # noqa: E402
 from scripts.utils.manifest import get_git_commit_hash, read_json, write_json  # noqa: E402
 
 REFERENCE_SPLIT = "gen_train"
+V1_CONFIG_KEY = "auxiliary_classifier"
+V2_CONFIG_KEY = "auxiliary_classifier_v2"
+CONFIG_KEYS = (V1_CONFIG_KEY, V2_CONFIG_KEY)
+
+
+def auxiliary_outputs_dir(stage3, config_key: str = V1_CONFIG_KEY) -> Path:
+    """The root the reference and the classifier-dependent signals of this CAM model live under.
+
+    v1 keeps paths.outputs_dir. v2 gets its own root, and is refused if that root is the v1 one:
+    the two references name different models, and one written over the other would leave the v1
+    signals calibrated against a reference that no longer describes them.
+    """
+    if config_key == V1_CONFIG_KEY:
+        return Path(stage3.paths.outputs_dir)
+    if config_key == V2_CONFIG_KEY:
+        root = Path(stage3.paths.aux_v2_outputs_dir)
+        if root.resolve() == Path(stage3.paths.outputs_dir).resolve():
+            raise SystemExit(
+                "paths.aux_v2_outputs_dir is the v1 outputs_dir; the v2 artifacts would overwrite v1's."
+            )
+        return root
+    raise SystemExit(f"Unknown auxiliary classifier config key {config_key!r}; expected one of {CONFIG_KEYS}.")
 
 
 def load_cam_model(checkpoint_dir: Path, namespace: str, resolution_hint: int | None = None):
@@ -113,7 +140,9 @@ def cam_rows(model, records: list[dict], resolution: int, content_boxes: dict, e
     )
 
 
-def build(namespace: str, device: str | None = None, limit: int | None = None) -> dict:
+def build(
+    namespace: str, device: str | None = None, limit: int | None = None, config_key: str = V1_CONFIG_KEY
+) -> dict:
     from scripts.utils.classifier import require_torch
 
     torch = require_torch()
@@ -122,6 +151,7 @@ def build(namespace: str, device: str | None = None, limit: int | None = None) -
     stage1 = load_named_config("ham10000_stage1.yaml", "ham_stage1")
     stage3 = load_named_config("ham10000_stage3.yaml", "ham_stage3")
     splits_cfg = load_named_config("splits_ham10000.yaml", "ham_splits")
+    outputs_root = auxiliary_outputs_dir(stage3, config_key)
 
     split_dir = Path(splits_cfg.paths.splits_root) / namespace
     images_root = Path(stage1.paths.images_dir) / namespace
@@ -149,7 +179,7 @@ def build(namespace: str, device: str | None = None, limit: int | None = None) -
     content_boxes = load_content_boxes(box_path)
 
     model, resolution, identity, model_manifest = load_cam_model(
-        Path(stage3.auxiliary_classifier.checkpoint_dir), namespace
+        Path(stage3[config_key].checkpoint_dir), namespace
     )
     print(
         f"CAM model {identity['cam_model_id'][:28]}... trained on "
@@ -196,7 +226,7 @@ def build(namespace: str, device: str | None = None, limit: int | None = None) -
             f"details: {json.dumps(undersized, indent=2)}"
         )
 
-    out_dir = Path(stage3.paths.outputs_dir) / namespace
+    out_dir = outputs_root / namespace
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = reference_artifact_payload(
         references,
@@ -207,6 +237,7 @@ def build(namespace: str, device: str | None = None, limit: int | None = None) -
             "resolution": resolution,
             "content_box_source_file": str(box_path),
             "cam_model": identity,
+            "auxiliary_config_key": config_key,
             "cam_model_run_manifest_git_commit": model_manifest.get("git_commit_hash"),
             "split_csv_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
             "final_eval_heldout_id_count": len(final_eval_ids),
@@ -234,13 +265,17 @@ def main() -> int:
     parser.add_argument("--namespace", required=True)
     parser.add_argument("--device", default=None)
     parser.add_argument(
+        "--config-key", choices=CONFIG_KEYS, default=V1_CONFIG_KEY,
+        help="Which auxiliary classifier the CAMs come from. Default: v1.",
+    )
+    parser.add_argument(
         "--limit", type=int, default=None,
         help="Score only the first N reference images. Smoke runs only: a truncated reference is "
              "still written and is still used by anything that reads it.",
     )
     args = parser.parse_args()
 
-    result = build(args.namespace, device=args.device, limit=args.limit)
+    result = build(args.namespace, device=args.device, limit=args.limit, config_key=args.config_key)
     payload = result["payload"]
     print(json.dumps({
         "artifact": result["path"],
