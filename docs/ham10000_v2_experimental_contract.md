@@ -60,7 +60,7 @@ leakage checks are zero, and the split files are md5-verified on the pod.
 | Split construction | 42 | `splits_ham10000.yaml: split_seed` | FROZEN |
 | Generation base seed | 20260917; per image `sha256(seed:recipe_id)` | `ham10000_stage2.yaml: seed` | FROZEN |
 | Auxiliary classifier / CAM model | 42 | `ham10000_stage3.yaml: auxiliary_classifier_v3.seed` | FROZEN |
-| V3a fold assignment | 42 | `auxiliary_classifier_v3.cv.fold_seed` | FROZEN |
+| V3a fold assignment | 42 | `auxiliary_classifier_v3.checkpoint_selection.fold_seed` | FROZEN |
 | v1 utility subsets | 42 | `ham10000_stage3.yaml: subset_design.seed` | FROZEN for v1 |
 | Stage 4 classifier | 42, 43, 44 | `ham10000_stage4.yaml: seeds` | FROZEN for v1. The v2 count is PENDING (§11). |
 | Bootstrap | 42 | `scripts/eval/ham10000_compare_conditions.py: run(seed=42)` | FROZEN |
