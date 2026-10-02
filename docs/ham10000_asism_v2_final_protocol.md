@@ -25,6 +25,16 @@ the source in an existing approved document or in the code.
 
 ## 2. Within-class ranking (contract §9 / audit decision D-A)
 
+> **Status correction, 2026-10-02 (audit, before any E4 result was read): NOT APPROVED.** The
+> composite below is the methodology's named *baseline* (`ham10000_stage3.yaml`: "the weighted
+> composite remains as the baseline"; methodology §3.4.1 names a hand-weighted sum as what the
+> method avoids). `docs/ham10000_results_and_limitations.md` §12.0.1 reserves C for a
+> learned-utility selection and forbids substituting another score under C's name. The record does
+> not show option (a) of the CPU audit (SC2 for selection) as chosen: option (c) was. Whether
+> "which" uses a repaired learned ranker (a new supervision instrument), SC2 with this composite
+> run only as a named baseline, or no C at all is a decision for Walaa and the supervisor. Until it
+> is made, C and D are not built from this section.
+
 The learned ranking network (contract §9) is not used. The CPU audit
 (`docs/ham10000_e4_cpu_audit.md`) measured the same-size selection ICC at 0.0–0.04. On that basis,
 E4 was reduced to quantity only. Measured subset utility therefore cannot supervise a ranking
