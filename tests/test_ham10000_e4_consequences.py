@@ -108,7 +108,7 @@ def test_coarse_splits_q_star_and_matches_d_counts():
     assert q >= 250
     assert result["count"]["condition_c_total"] == q
     assert result["count"]["per_class"] == cons.allocate(q, POOL_COUNTS)
-    assert "pending" in result["within_class_selection"]
+    assert "ham10000_asism_v2_select" in result["within_class_selection"]
 
 
 def test_no_gives_zero_and_no_condition_d():
