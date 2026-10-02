@@ -10,6 +10,7 @@ paths:
   # explainability) recomputed with auxiliary_classifier_v2. A separate root, so the v1 artifacts
   # under outputs_dir are never overwritten. Similarity and IQA are not recomputed there.
   aux_v2_outputs_dir: ${paths.project_root}/outputs/ham10000/stage3_aux_v2
+  aux_v3_outputs_dir: ${paths.project_root}/outputs/ham10000/stage3_aux_v3
 
 signals:
   iqa:

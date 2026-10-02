@@ -25,8 +25,8 @@ Usage:
     python scripts/asism/ham10000_00_build_cam_reference.py --namespace ham-stratified-v1         --config-key auxiliary_classifier_v2
 
 `--config-key` picks the auxiliary classifier the CAMs come from. The default is v1, which reads and
-writes exactly where it always did. v2 reads its own checkpoint and writes under
-paths.aux_v2_outputs_dir, so the v1 reference is never overwritten.
+writes exactly where it always did. v2 and v3 each read their own checkpoint and write under their
+own root (paths.aux_v2_outputs_dir, paths.aux_v3_outputs_dir), so no reference is ever overwritten.
 """
 from __future__ import annotations
 
@@ -58,26 +58,36 @@ from scripts.utils.manifest import get_git_commit_hash, read_json, write_json  #
 REFERENCE_SPLIT = "gen_train"
 V1_CONFIG_KEY = "auxiliary_classifier"
 V2_CONFIG_KEY = "auxiliary_classifier_v2"
-CONFIG_KEYS = (V1_CONFIG_KEY, V2_CONFIG_KEY)
+V3_CONFIG_KEY = "auxiliary_classifier_v3"
+CONFIG_KEYS = (V1_CONFIG_KEY, V2_CONFIG_KEY, V3_CONFIG_KEY)
+# Every classifier after v1 has its own outputs root, named here so that each can be checked
+# against all the others and not only against v1's.
+AUXILIARY_ROOT_KEYS = {V2_CONFIG_KEY: "aux_v2_outputs_dir", V3_CONFIG_KEY: "aux_v3_outputs_dir"}
 
 
 def auxiliary_outputs_dir(stage3, config_key: str = V1_CONFIG_KEY) -> Path:
     """The root the reference and the classifier-dependent signals of this CAM model live under.
 
-    v1 keeps paths.outputs_dir. v2 gets its own root, and is refused if that root is the v1 one:
-    the two references name different models, and one written over the other would leave the v1
-    signals calibrated against a reference that no longer describes them.
+    v1 keeps paths.outputs_dir. v2 and v3 each get their own root, and a root shared with any other
+    classifier is refused: the references name different models, and one written over another would
+    leave that classifier's signals calibrated against a reference that no longer describes them.
     """
     if config_key == V1_CONFIG_KEY:
         return Path(stage3.paths.outputs_dir)
-    if config_key == V2_CONFIG_KEY:
-        root = Path(stage3.paths.aux_v2_outputs_dir)
-        if root.resolve() == Path(stage3.paths.outputs_dir).resolve():
+    if config_key not in AUXILIARY_ROOT_KEYS:
+        raise SystemExit(f"Unknown auxiliary classifier config key {config_key!r}; expected one of {CONFIG_KEYS}.")
+    root = Path(stage3.paths[AUXILIARY_ROOT_KEYS[config_key]])
+    others = {"v1 outputs_dir": Path(stage3.paths.outputs_dir)}
+    for other_key, path_key in AUXILIARY_ROOT_KEYS.items():
+        if other_key != config_key and path_key in stage3.paths:
+            others[f"paths.{path_key}"] = Path(stage3.paths[path_key])
+    for name, other in others.items():
+        if root.resolve() == other.resolve():
             raise SystemExit(
-                "paths.aux_v2_outputs_dir is the v1 outputs_dir; the v2 artifacts would overwrite v1's."
+                f"paths.{AUXILIARY_ROOT_KEYS[config_key]} is the {name}; the {config_key} artifacts "
+                "would overwrite another classifier's."
             )
-        return root
-    raise SystemExit(f"Unknown auxiliary classifier config key {config_key!r}; expected one of {CONFIG_KEYS}.")
+    return root
 
 
 def load_cam_model(checkpoint_dir: Path, namespace: str, resolution_hint: int | None = None):

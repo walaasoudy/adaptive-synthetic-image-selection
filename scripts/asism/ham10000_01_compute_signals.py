@@ -21,9 +21,9 @@ Usage:
     python scripts/asism/ham10000_01_compute_signals.py --namespace ham-stratified-v1 --signal iqa
     python scripts/asism/ham10000_01_compute_signals.py --namespace ham-stratified-v1         --config-key auxiliary_classifier_v2 --signal uncertainty --signal agreement --signal explainability
 
-`--config-key auxiliary_classifier_v2` recomputes only the three signals that depend on the auxiliary
-classifier, with the v2 model, reading the v2 Grad-CAM reference and writing under
-paths.aux_v2_outputs_dir. Similarity and IQA do not depend on that model and are refused there, so
+`--config-key auxiliary_classifier_v2` (or `_v3`) recomputes only the three signals that depend on
+the auxiliary classifier, with that model, reading its own Grad-CAM reference and writing under its
+own root (paths.aux_v2_outputs_dir, paths.aux_v3_outputs_dir). Similarity and IQA do not depend on that model and are refused there, so
 they cannot be recomputed by accident. The default (v1) reads and writes exactly as before.
 """
 from __future__ import annotations
