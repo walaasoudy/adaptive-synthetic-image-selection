@@ -99,7 +99,7 @@ nv 112, mel 276, bkl 273, bcc 400, akiec 486, vasc 736, df 885.
 | Signal | Definition and fixed parameters | Source model | Status |
 |---|---|---|---|
 | Similarity | DINOv2 `vit_small_patch14_dinov2.lvd142m`, revision `936966a8…`; k-NN, k = 15, against `gen_train` of the same class; near-duplicate if similarity ≥ 0.95 | DINOv2, frozen | FROZEN |
-| IQA | 5 defect flags plus continuous sharpness and contrast. Blur threshold 17.53, border threshold 0.329, both calibrated on `gen_train` | — | FROZEN; used as a safety filter (S2 in the audit) |
+| IQA | 5 defect flags plus continuous sharpness and contrast. Blur threshold 17.53, calibrated on `gen_train`; border flag measured on the content box at the inherited constant 0.30 (border calibration disabled, `ham10000_stage3.yaml`; the artifact records `inherited_constant_uncalibrated`). Corrected 2026-10-02: this row earlier read "border threshold 0.329, calibrated", which no artifact used | — | FROZEN. Role in v2: **safety filter only**, through `safety.reject_invalid_iqa` (§10); not a ranking input (decision of 2026-09-27, "IQA: keep, but as a safety filter"; the quality flags are not safety criteria, E4 D2 approved 2026-10-02). Clarified 2026-10-02: this cell earlier read "used as a safety filter (S2 in the audit)"; no audit document defines an item S2 for IQA |
 | Uncertainty | MC dropout, 20 passes; mutual information normalised by ln 7 | V3a (`6849c456…`) | FIXED (passed Q3) |
 | Explainability | Grad-CAM for the intended class; two-sided conformal typicality against the `gen_train` reference of the same class | V3a, reference in `stage3_aux_v3/` | FIXED (passed Q4) |
 | Agreement | `P(intended) − 0.5 · P(best rival)` if the rival's probability is ≥ 0.5, else `P(intended)` (`compute_agreement_scores`, `rival_confidence_threshold`, `penalty_weight`) | **the agreement judge** | Formula FROZEN; **judge PENDING** |
@@ -182,7 +182,7 @@ PENDING: the architecture, the loss, the correlation threshold.
 - `selection.min_accepted_per_class: 50` and `max_accepted_per_class: 2000`;
 - the v2 follow-up `fill_to_total: 300`.
 
-**Kept:** the safety filters (`safety.reject_invalid_iqa`, `safety.reject_near_duplicates`).
+**Kept:** the safety filters (`safety.reject_invalid_iqa`, `safety.reject_near_duplicates`). They remove a candidate whose image cannot be decoded and scored (`iqa_valid` false) or that is a near-duplicate of a real image (`novelty_is_near_duplicate`). The IQA defect flags (blur, low contrast, border) are not safety criteria (E4 D2, approved 2026-10-02). On the frozen pool they remove 0 of 3,168.
 
 **Requirements:**
 
