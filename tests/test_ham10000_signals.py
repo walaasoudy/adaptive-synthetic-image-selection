@@ -15,6 +15,7 @@ sys.dont_write_bytecode = True
 from pathlib import Path
 
 import numpy as np
+import pytest
 import pandas as pd
 from omegaconf import OmegaConf
 from PIL import Image
@@ -1011,3 +1012,27 @@ if __name__ == "__main__":
             failed += 1
     print(f"\n{passed} passed, {failed} failed, {len(tests)} total")
     raise SystemExit(1 if failed else 0)
+
+
+def test_iqa_composite_is_reproducible_from_its_own_reported_fields():
+    """The artifact must be auditable: every flag and the composite follow from the reported
+    measurements and the resolved thresholds, with no hidden term."""
+    iqa = CONFIG.signals.iqa
+    with fixture_workspace("ham-iqa-reconstruct") as workspace:
+        images = [_colourful_lesion(seed=i) for i in range(6)] + [np.full((128, 128, 3), 130, dtype=np.uint8)]
+        rows = [compute_iqa_scores(_write(workspace, f"r{i}.jpg", img), CONFIG, content_box=UNPADDED_BOX)
+                for i, img in enumerate(images)]
+    for row in rows:
+        assert row["iqa_valid"] is True
+        assert row["iqa_is_near_uniform"] == (row["iqa_contrast_std"] < float(iqa.blank_std_threshold))
+        assert row["iqa_is_blurry"] == (row["iqa_sharpness"] < float(iqa.laplacian_blur_threshold))
+        assert row["iqa_is_low_contrast"] == (row["iqa_contrast_std"] < float(iqa.low_contrast_std))
+        assert row["iqa_has_border_artifact"] == (row["iqa_border_uniform_fraction"] > float(iqa.border_uniform_fraction))
+        clipped = row["iqa_clipped_low_fraction"] + row["iqa_clipped_high_fraction"] > 0.20
+        penalties = (0.40 * row["iqa_is_near_uniform"] + 0.20 * row["iqa_is_blurry"] + 0.10 * row["iqa_is_low_contrast"]
+                     + 0.10 * row["iqa_has_border_artifact"] + 0.10 * clipped)
+        continuous = 0.5 * (np.tanh(row["iqa_sharpness"] / (2 * float(iqa.laplacian_blur_threshold)))
+                            + np.tanh(row["iqa_contrast_std"] / (2 * float(iqa.low_contrast_std))))
+        expected = max(0.0, 1.0 - penalties) * (1.0 - CONTINUOUS_WEIGHT) + CONTINUOUS_WEIGHT * continuous
+        assert row["iqa_composite"] == pytest.approx(expected, abs=1e-12)
+        assert 0.0 <= row["iqa_composite"] <= 1.0
