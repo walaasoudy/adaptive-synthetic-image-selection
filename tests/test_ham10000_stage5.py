@@ -310,5 +310,29 @@ def test_an_outcome_read_of_the_protected_split_outside_stage5_is_refused():
     assert_final_eval_access_allowed("existence_check", caller="test")
 
 
+def test_resumed_predictions_require_the_same_checkpoint_and_split():
+    """A resume with unchanged image IDs but different model weights is stale."""
+    from scripts.eval.ham10000_stage5_evaluate import validate_reusable_predictions
+    from scripts.utils.manifest import write_json
+
+    with fixture_workspace("stage5-resume") as root:
+        path = root / "A_seed42.parquet"
+        frame = _prediction_frame("A", 42)
+        frame.to_parquet(path, index=False)
+        expected = {
+            "final_eval_run_id": RUN_ID, "namespace": NAMESPACE, "condition": "A", "seed": 42,
+            "checkpoint_sha256": "checkpoint-a", "split": "final_eval_heldout",
+            "split_csv_sha256": "split-a", "n_images": len(frame),
+        }
+        write_json(path.with_suffix(".provenance.json"), expected)
+        ids = frame["image_id"].astype(str).tolist()
+        truth = frame["true_class_index"].to_numpy()
+        validate_reusable_predictions(path, expected, ids, truth)
+        with pytest.raises(SystemExit, match="checkpoint_sha256"):
+            validate_reusable_predictions(path, {**expected, "checkpoint_sha256": "checkpoint-b"}, ids, truth)
+        with pytest.raises(SystemExit, match="split_csv_sha256"):
+            validate_reusable_predictions(path, {**expected, "split_csv_sha256": "split-b"}, ids, truth)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -35,6 +35,10 @@ rather than merely reported.
 
 Usage:
     python scripts/asism/ham10000_02_gonogo.py --namespace ham-stratified-v1
+
+    # Audit an alternate signal directory without replacing the canonical v1 report.
+    python scripts/asism/ham10000_02_gonogo.py --namespace ham-stratified-v1 \
+        --scores-dir /path/to/signals --out /path/to/audit_gonogo_report.json
 """
 
 from __future__ import annotations
@@ -660,12 +664,30 @@ def build_report(per_signal: dict, absent: list[str], scores_dir: Path, namespac
     }
 
 
-def run(namespace: str, scores_dir: Path | None = None) -> dict:
+def run(
+    namespace: str,
+    scores_dir: Path | None = None,
+    out_path: Path | None = None,
+) -> dict:
+    """Evaluate one signal set and write its report.
+
+    ``scores_dir`` is intentionally independent from ``out_path``.  Earlier versions always
+    wrote to the namespace's canonical ``gonogo_report.json`` even when auditing another signal
+    directory, which could silently replace the v1 report consumed by downstream code.  The
+    default remains the canonical location for the canonical signal directory; callers auditing
+    an alternate directory must name an explicit output path.
+    """
     stage2 = load_named_config("ham10000_stage2.yaml", "ham_stage2")
     stage3 = load_named_config("ham10000_stage3.yaml", "ham_stage3")
 
     namespace_dir = Path(stage3.paths.outputs_dir) / namespace
-    scores_dir = Path(scores_dir) if scores_dir else namespace_dir / "signals"
+    canonical_scores_dir = namespace_dir / "signals"
+    scores_dir = Path(scores_dir) if scores_dir else canonical_scores_dir
+    if out_path is None and scores_dir.resolve() != canonical_scores_dir.resolve():
+        raise UpstreamGate(
+            "--scores-dir points outside the canonical signal directory. Supply --out explicitly "
+            "so this audit cannot overwrite the canonical gonogo_report.json."
+        )
 
     frames, absent = load_artifacts(scores_dir)
     pool_hash = assert_one_candidate_pool(scores_dir, frames)
@@ -674,7 +696,7 @@ def run(namespace: str, scores_dir: Path | None = None) -> dict:
     per_signal = evaluate(frames, diagnoses, scores_dir, stage3)
     report = build_report(per_signal, absent, scores_dir, namespace, pool_hash)
 
-    report_path = namespace_dir / "gonogo_report.json"
+    report_path = Path(out_path) if out_path is not None else namespace_dir / "gonogo_report.json"
     write_json(report_path, report)
     report["report_path"] = str(report_path)
     return report
@@ -684,9 +706,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--namespace", required=True)
     parser.add_argument("--scores-dir", default=None)
+    parser.add_argument("--out", default=None, help="Report path; required with a non-canonical --scores-dir.")
     args = parser.parse_args()
 
-    report = run(args.namespace, Path(args.scores_dir) if args.scores_dir else None)
+    report = run(
+        args.namespace,
+        Path(args.scores_dir) if args.scores_dir else None,
+        Path(args.out) if args.out else None,
+    )
 
     print("HAM10000 ASISM Go/No-Go", flush=True)
     print("=" * 72, flush=True)
