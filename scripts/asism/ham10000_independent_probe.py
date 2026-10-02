@@ -17,11 +17,19 @@ The verdict is read on Q2 alone. D1 (near or far misses of v3) and D2 (does v3 a
 are descriptive and decide nothing. Nothing is written outside the output directory; no signal,
 threshold, ranking, selection or earlier artifact is touched. CPU only.
 
+P1b (Amendment 4) is the same probe on the images v3 saw: trained on all of classifier_train, gated
+and Q1-normalised on classifier_val, read on the same synthetic embeddings. Its real embeddings come
+from `embed-real` (GPU pod), written to outputs/ham10000/diagnostics/independent_probe/<namespace>/.
+
 Usage (after approval only):
-    python scripts/asism/ham10000_independent_probe.py \
+    python scripts/asism/ham10000_independent_probe.py p1 \
         --embeddings-dir <dir with embeddings.npz + provenance.json> \
         --metadata <HAM10000_metadata.csv> \
         --v3-signals-dir <dir with the v3 *_scores.parquet + provenance> \
+        --candidates <all_candidates.csv> --output-dir <dir>
+    python scripts/asism/ham10000_independent_probe.py embed-real --namespace ham-stratified-v1
+    python scripts/asism/ham10000_independent_probe.py p1b \
+        --embeddings-dir <separability dir> --real-embeddings-dir <embed-real dir> \
         --candidates <all_candidates.csv> --output-dir <dir>
 """
 
@@ -52,6 +60,18 @@ LBFGS_MAX_ITERATIONS = 1000
 # Acceptance criteria A and B of the auxiliary classifier (configs/ham10000_stage3.yaml,
 # min_balanced_accuracy_exclusive), applied to the probe's out-of-fold predictions.
 GATE_MIN_BALANCED_ACCURACY_EXCLUSIVE = 0.478
+# Amendment 4 (P1b): the v3 classifier's own training and selection splits.
+P1B_TRAIN_SPLIT = "classifier_train"
+P1B_GATE_SPLIT = "classifier_val"
+PROBE_OUTPUT_SUBDIR = Path("outputs/ham10000/diagnostics/independent_probe")
+ENCODER_FIELDS = ("encoder", "weights_repo_id", "weights_revision", "weights_sha256")
+P1B_READING = {
+    "classifier_specific": "the caveat is closed; the nv reading belongs to the DenseNet classifier; "
+                           "a classifier-side change is chosen and written in an Amendment 5 before it is tried",
+    "class_fidelity_likelier": "P1's result came from training on the generator's own images; the reading "
+                               "is mixed; written as it is, and Walaa decides",
+    "not_informative": "P1b says nothing; P1 stands, with the gen_train caveat; nothing is retried",
+}
 
 
 # ==============================================================================================
@@ -189,6 +209,20 @@ def real_records(image_ids: np.ndarray, dx: np.ndarray, metadata: pd.DataFrame) 
     return records
 
 
+def synthetic_frame(ids: np.ndarray, dx: np.ndarray, predicted_index: np.ndarray,
+                    candidates: pd.DataFrame, expected_n: int) -> pd.DataFrame:
+    """The probe's reading of the pool, in the columns Q1 and Q2 read, checked against the pool."""
+    pool_dx = dict(zip(candidates["image_id"].astype(str), candidates["dx"].map(normalize_diagnosis)))
+    if set(ids) != set(pool_dx) or len(pool_dx) != expected_n:
+        raise SystemExit("the synthetic embeddings and all_candidates.csv do not hold the same images.")
+    frame = pd.DataFrame({"image_id": ids, "dx": dx,
+                          "agreement_predicted_diagnosis": np.array(CLASSES, dtype=object)[predicted_index]})
+    if (frame["dx"] != frame["image_id"].map(pool_dx)).any():
+        raise SystemExit("the embeddings' dx disagrees with all_candidates.csv.")
+    frame["agreement_is_argmax_match"] = frame["agreement_predicted_diagnosis"] == frame["dx"]
+    return frame
+
+
 def run(embeddings_dir: Path, metadata_path: Path, v3_dir: Path, candidates_path: Path,
         expected_n: int = diag.EXPECTED_CANDIDATES) -> dict:
     x, y, source = load_embeddings(embeddings_dir)
@@ -206,15 +240,8 @@ def run(embeddings_dir: Path, metadata_path: Path, v3_dir: Path, candidates_path
     gate_result = gate(oof_counts)
 
     weights, bias = fit_probe(x[real], y_real, _class_weights(y_real))
-    predicted = np.array(CLASSES, dtype=object)[predict(x[syn], weights, bias)]
     candidates = pd.read_csv(candidates_path)
-    pool_dx = dict(zip(candidates["image_id"].astype(str), candidates["dx"].map(normalize_diagnosis)))
-    if set(ids[syn]) != set(pool_dx) or len(pool_dx) != expected_n:
-        raise SystemExit("the synthetic embeddings and all_candidates.csv do not hold the same images.")
-    probe_frame = pd.DataFrame({"image_id": ids[syn], "dx": y[syn], "agreement_predicted_diagnosis": predicted})
-    if (probe_frame["dx"] != probe_frame["image_id"].map(pool_dx)).any():
-        raise SystemExit("the embeddings' dx disagrees with all_candidates.csv.")
-    probe_frame["agreement_is_argmax_match"] = probe_frame["agreement_predicted_diagnosis"] == probe_frame["dx"]
+    probe_frame = synthetic_frame(ids[syn], y[syn], predict(x[syn], weights, bias), candidates, expected_n)
 
     q1 = diag.q1_agreement(probe_frame, oof_counts)
     q2 = diag.q2_mel_to_nv(probe_frame)
@@ -240,18 +267,143 @@ def run(embeddings_dir: Path, metadata_path: Path, v3_dir: Path, candidates_path
     }
 
 
+# ==============================================================================================
+# P1b (Amendment 4)
+# ==============================================================================================
+
+
+def embed_real(namespace: str, device: str | None = None, limit: int | None = None) -> dict:
+    """DINOv2 embeddings of classifier_train and classifier_val, with the similarity signal's pinned
+    encoder and embedding code, from the same preprocessed images the v3 classifier was trained and
+    accepted on (records_from_split, which skips absent images exactly as v3's training did)."""
+    from scripts.asism import ham10000_01_compute_signals as signals
+    from scripts.utils.config import load_named_config
+    from scripts.utils.ham10000_classifier import records_from_split
+
+    stage1 = load_named_config("ham10000_stage1.yaml", "ham_stage1")
+    stage3 = load_named_config("ham10000_stage3.yaml", "ham_stage3")
+    splits_cfg = load_named_config("splits_ham10000.yaml", "ham_splits")
+    if device is None:
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    split_dir = Path(splits_cfg.paths.splits_root) / namespace
+    images_root = Path(stage1.paths.images_dir) / namespace
+    final_eval = signals.load_final_eval_image_ids(split_dir)
+
+    rows, counts = [], {}
+    for split in (P1B_TRAIN_SPLIT, P1B_GATE_SPLIT):
+        frame = pd.read_csv(split_dir / f"{split}.csv")
+        if limit:
+            frame = frame.groupby("dx", group_keys=False).head(max(1, int(limit) // len(CLASSES)))
+        records = records_from_split(frame, images_root / split)
+        counts[split] = {"in_split": int(len(frame)), "embedded": int(len(records))}
+        rows += [{**record, "split": split} for record in records]
+    ids = [row["image_id"] for row in rows]
+    leaked = sorted(set(ids) & final_eval)
+    if leaked:
+        raise SystemExit(f"{len(leaked)} image(s) are in final_eval_heldout (e.g. {leaked[:3]}).")
+    if len(set(ids)) != len(ids):
+        raise SystemExit("an image appears in both classifier_train and classifier_val.")
+
+    similarity_cfg = stage3.signals.similarity
+    encoder, transform, weights_path = signals.load_encoder(similarity_cfg, device)
+    print(f"embedding {len(rows)} real images ({counts}) on {device}", flush=True)
+    embeddings = np.asarray(signals.embed_images(
+        encoder, transform, [Path(row["image_path"]) for row in rows], int(similarity_cfg.batch_size), device,
+    ), dtype=np.float32)
+    out_dir = Path(stage3.paths.project_root) / PROBE_OUTPUT_SUBDIR / namespace
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(out_dir / "real_embeddings.npz", embeddings=embeddings, image_id=np.array(ids),
+                        dx=np.array([CLASSES[row["class_index"]] for row in rows]),
+                        split=np.array([row["split"] for row in rows]))
+    provenance = {
+        "namespace": namespace,
+        "encoder": str(similarity_cfg.encoder),
+        "weights_repo_id": str(similarity_cfg.weights_repo_id),
+        "weights_revision": str(similarity_cfg.weights_revision),
+        "weights_sha256": sha256_file(weights_path),
+        "splits": counts,
+        "limit": limit,
+        "embeddings_sha256": sha256_file(out_dir / "real_embeddings.npz"),
+        "git_commit_hash": get_git_commit_hash(),
+    }
+    write_json(out_dir / "provenance.json", provenance)
+    return {"out_dir": str(out_dir), **provenance}
+
+
+def load_real_embeddings(real_dir: Path, separability_dir: Path):
+    """(embeddings, image_id, dx, split) of embed-real, after the hash and same-encoder checks."""
+    from scripts.utils.manifest import read_json
+
+    provenance = read_json(real_dir / "provenance.json")
+    if provenance.get("embeddings_sha256") != sha256_file(real_dir / "real_embeddings.npz"):
+        raise SystemExit("real_embeddings.npz does not match its provenance hash.")
+    if provenance.get("limit"):
+        raise SystemExit("the real embeddings are a smoke run (limit set); P1b reads full runs only.")
+    other = read_json(separability_dir / "provenance.json")
+    differing = [field for field in ENCODER_FIELDS if provenance.get(field) != other.get(field)]
+    if differing:
+        raise SystemExit(f"the two embedding files differ in {differing}; refusing to compare them.")
+    data = np.load(real_dir / "real_embeddings.npz", allow_pickle=False)
+    return data["embeddings"], data["image_id"].astype(str), data["dx"].astype(str), data["split"].astype(str)
+
+
+def run_p1b(separability_dir: Path, real_dir: Path, candidates_path: Path,
+            expected_n: int = diag.EXPECTED_CANDIDATES) -> dict:
+    x, y, source = load_embeddings(separability_dir)
+    ids = np.load(separability_dir / "embeddings.npz", allow_pickle=False)["image_id"].astype(str)
+    syn = source == "synthetic"
+    x_real, _, real_dx, split = load_real_embeddings(real_dir, separability_dir)
+    x_real = l2_normalise(x_real)
+    y_real = np.array([CLASSES.index(name) for name in real_dx])
+    train, held = split == P1B_TRAIN_SPLIT, split == P1B_GATE_SPLIT
+    if not train.any() or not held.any() or not (train | held).all():
+        raise SystemExit(f"the real embeddings must hold {P1B_TRAIN_SPLIT} and {P1B_GATE_SPLIT} only.")
+
+    weights, bias = fit_probe(x_real[train], y_real[train], _class_weights(y_real[train]))
+    gate_counts = recall_counts(y_real[held], predict(x_real[held], weights, bias))
+    gate_result = gate(gate_counts)
+    frame = synthetic_frame(ids[syn], y[syn], predict(l2_normalise(x[syn]), weights, bias),
+                            pd.read_csv(candidates_path), expected_n)
+    q1 = diag.q1_agreement(frame, gate_counts)
+    q2 = diag.q2_mel_to_nv(frame)
+    decision = decide_p1(gate_result, q2)
+    return {
+        "probe": "P1b",
+        "inputs": {"embeddings_sha256": sha256_file(separability_dir / "embeddings.npz"),
+                   "real_embeddings_sha256": sha256_file(real_dir / "real_embeddings.npz"),
+                   "candidates_sha256": sha256_file(candidates_path),
+                   "n_train": int(train.sum()), "n_gate": int(held.sum()), "n_synthetic": int(syn.sum())},
+        "settings": {"train_split": P1B_TRAIN_SPLIT, "gate_split": P1B_GATE_SPLIT, "l2_penalty": L2_PENALTY,
+                     "lbfgs_tolerance": LBFGS_TOLERANCE, "lbfgs_max_iterations": LBFGS_MAX_ITERATIONS,
+                     "class_weights": [float(w) for w in _class_weights(y_real[train])]},
+        "git_commit_hash": get_git_commit_hash(),
+        "gate": gate_result,
+        "oof_recall_counts": {k: list(v) for k, v in gate_counts.items()},
+        "q1": q1, "q2": q2,
+        "decision": decision,
+        "reading_with_p1": P1B_READING[decision["verdict"]],
+    }
+
+
 def render_markdown(report: dict) -> str:
     g, q1, q2, d = report["gate"], report["q1"], report["q2"], report["decision"]
-    lines = ["# HAM10000 P1: independent DINOv2 probe", "",
-             "Criteria: `docs/ham10000_v2_signal_criteria.md`, Amendment 3 (applied as written).", "",
+    p1b = report.get("probe") == "P1b"
+    lines = [f"# HAM10000 {'P1b' if p1b else 'P1'}: independent DINOv2 probe", "",
+             f"Criteria: `docs/ham10000_v2_signal_criteria.md`, Amendment {4 if p1b else 3} (applied as written).", "",
              f"**Decision: {d['verdict']}**. {d['next']}.", ""]
+    if p1b:
+        lines += [f"Read with P1: {report['reading_with_p1']}.", ""]
     if d.get("conditions_held"):
         lines += [f"- Q2 conditions held: {', '.join(d['conditions_held'])}"
                   + (" (rests on one condition only)" if d["rests_on_one_condition"] else ""), ""]
-    lines += ["## Gate (out-of-fold, real gen_train)", "",
+    gate_label = "classifier_val, trained on classifier_train" if p1b else "out-of-fold, real gen_train"
+    real_label = "real recall (classifier_val)" if p1b else "real recall (OOF)"
+    lines += [f"## Gate ({gate_label})", "",
               f"- balanced accuracy {g['balanced_accuracy']:.3f} (must be > {g['min_balanced_accuracy_exclusive']}); "
               f"zero-recall classes {g['zero_recall_classes'] or 'none'}; **passed = {g['passed']}**", "",
-              "| Class | real recall (OOF) | synthetic match | normalised |", "|---|---|---|---|"]
+              f"| Class | {real_label} | synthetic match | normalised |", "|---|---|---|---|"]
     for name in CLASSES:
         c, s = report["oof_recall_counts"][name]
         e = q1["per_class"][name]
@@ -260,8 +412,10 @@ def render_markdown(report: dict) -> str:
               f"Spearman {diag._num(q1['spearman_match_vs_real_recall'])}; sensible = {q1['sensible']}",
               f"- Q2: mel predicted nv {diag._ci(q2['mel_predicted_nv'])}; nv share of mismatches "
               f"{diag._ci(q2['nv_share_of_mismatches'])}; mismatches predicted as {q2['mismatches_predicted_as']}; "
-              f"**influential = {q2['influential']}**", "",
-              "## Descriptive (decide nothing)", ""]
+              f"**influential = {q2['influential']}**", ""]
+    if "descriptive" not in report:
+        return "\n".join(lines) + "\n"
+    lines += ["## Descriptive (decide nothing)", ""]
     d1, d2 = report["descriptive"]["d1"], report["descriptive"]["d2"]
     lines.append(f"- D1, v3's {d1['n']} synthetic mel predicted nv: p(mel) quartiles "
                  f"{', '.join(diag._num(q) for q in d1['p_mel_quartiles'])}; median p(nv) {diag._num(d1['p_nv_median'])}; "
@@ -276,16 +430,35 @@ def render_markdown(report: dict) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--embeddings-dir", type=Path, required=True)
-    parser.add_argument("--metadata", type=Path, required=True)
-    parser.add_argument("--v3-signals-dir", type=Path, required=True)
-    parser.add_argument("--candidates", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    sub = parser.add_subparsers(dest="step", required=True)
+    p1 = sub.add_parser("p1", help="Amendment 3: trained on real gen_train (CPU)")
+    p1.add_argument("--embeddings-dir", type=Path, required=True)
+    p1.add_argument("--metadata", type=Path, required=True)
+    p1.add_argument("--v3-signals-dir", type=Path, required=True)
+    p1.add_argument("--candidates", type=Path, required=True)
+    p1.add_argument("--output-dir", type=Path, required=True)
+    e = sub.add_parser("embed-real", help="Amendment 4: classifier_train + classifier_val embeddings (GPU pod)")
+    e.add_argument("--namespace", required=True)
+    e.add_argument("--device", default=None)
+    e.add_argument("--limit", type=int, default=None, help="smoke runs only; P1b refuses them")
+    b = sub.add_parser("p1b", help="Amendment 4: trained on classifier_train, gated on classifier_val (CPU)")
+    b.add_argument("--embeddings-dir", type=Path, required=True)
+    b.add_argument("--real-embeddings-dir", type=Path, required=True)
+    b.add_argument("--candidates", type=Path, required=True)
+    b.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    report = run(args.embeddings_dir, args.metadata, args.v3_signals_dir, args.candidates)
+    if args.step == "embed-real":
+        import json
+
+        print(json.dumps(embed_real(args.namespace, args.device, args.limit), indent=2))
+        return 0
+    if args.step == "p1":
+        report, name = run(args.embeddings_dir, args.metadata, args.v3_signals_dir, args.candidates), "probe"
+    else:
+        report, name = run_p1b(args.embeddings_dir, args.real_embeddings_dir, args.candidates), "probe_p1b"
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    write_json(args.output_dir / "probe.json", report)
-    (args.output_dir / "probe.md").write_text(render_markdown(report), encoding="utf-8")
+    write_json(args.output_dir / f"{name}.json", report)
+    (args.output_dir / f"{name}.md").write_text(render_markdown(report), encoding="utf-8")
     print(render_markdown(report))
     return 0
 
