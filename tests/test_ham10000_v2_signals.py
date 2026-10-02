@@ -212,10 +212,11 @@ def test_a_v1_reference_placed_in_the_v2_root_is_refused_by_model_hash(workspace
 
 
 def test_an_unknown_config_key_is_refused(workspace):
+    # v3 became a known key on 2026-10-02 (test_ham10000_v3_signals.py); an unlisted one is still refused.
     with pytest.raises(SystemExit, match="Unknown auxiliary classifier config key"):
-        _run(["agreement"], "auxiliary_classifier_v3")
+        _run(["agreement"], "auxiliary_classifier_v9")
     with pytest.raises(SystemExit, match="Unknown auxiliary classifier config key"):
-        _build("auxiliary_classifier_v3")
+        _build("auxiliary_classifier_v9")
 
 
 def test_a_v2_root_equal_to_the_v1_root_is_refused(workspace, monkeypatch):
