@@ -177,6 +177,12 @@ def run(namespace: str, candidates: Path, scores_dir: Path, gonogo_report: Path,
     if evidence["safe_pool_per_class"] != consequences["v3_pool_counts"]:
         raise SelectionError(f"the safe pool {evidence['safe_pool_per_class']} differs from the pool E4 "
                              f"split over {consequences['v3_pool_counts']}")
+    # Equal class counts do not make equal pools: the ids must be the ones E4 froze in its plan.
+    safe_ids_sha = e4.ids_sha256(list(safe.index.astype(str)))
+    if consequences.get("v3_pool_ids_sha256") != safe_ids_sha:
+        raise SelectionError(f"the safe pool's ids (sha256 {safe_ids_sha}) are not the pool E4 measured "
+                             f"({consequences.get('v3_pool_ids_sha256')})")
+    evidence["safe_pool_ids_sha256"] = safe_ids_sha
     manifest = {
         "stage": "ham10000_asism_v2_select", "namespace": namespace, "protocol": "asism_v2",
         "e4_consequences": str(consequences_path), "e4_consequences_sha256": sha256_file(consequences_path),

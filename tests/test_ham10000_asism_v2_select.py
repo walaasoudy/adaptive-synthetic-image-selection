@@ -173,3 +173,81 @@ def test_v2_selection_has_no_quality_floor_or_v1_bounds():
     for key in ("quality_floor", "target_synthetic_to_real_ratio", "min_accepted_per_class",
                 "max_accepted_per_class", "fill_to_total"):
         assert key not in cfg and key not in str(cfg.get("selection", "")) and key not in text
+
+
+# ---- run end to end, and the pool E4 measured ---------------------------------------------------
+
+def _write_inputs(tmp_path, monkeypatch, n_per_class=40):
+    frame = _frame(n_per_class=n_per_class)
+    ids = list(frame.index)
+    pool = pd.DataFrame({"image_id": ids, "image_path": [f"/x/{i}.png" for i in ids], "dx": frame["dx"].to_list()})
+    pool.to_csv(tmp_path / "all_candidates.csv", index=False)
+    scores = tmp_path / "scores"
+    scores.mkdir()
+    sha = sel.sha256_file(tmp_path / "all_candidates.csv")
+    monkeypatch.setattr(sel, "CANDIDATES_SHA256", sha)
+    artifacts = {
+        "iqa": pd.DataFrame({"image_id": ids, IQA: frame[IQA].to_list(), "iqa_valid": [i != "df_000" for i in ids]}),
+        "similarity": pd.DataFrame({"image_id": ids, SIM: frame[SIM].to_list(),
+                                    "novelty_is_near_duplicate": [i == "mel_001" for i in ids]}),
+        "explainability": pd.DataFrame({"image_id": ids, EXPL: frame[EXPL].to_list()}),
+        "uncertainty": pd.DataFrame({"image_id": ids, "uncertainty_mutual_information":
+                                     frame["uncertainty_mutual_information"].to_list()}),
+    }
+    for name, art in artifacts.items():
+        art.to_parquet(scores / f"{name}_scores.parquet")
+        (scores / f"{name}_scores.provenance.json").write_text(json.dumps({"candidates_csv_sha256": sha}))
+    report = tmp_path / "gonogo_report.json"
+    report.write_text(json.dumps({"surviving_signals": ADMITTED, "candidates_csv_sha256": sha}))
+    safe_ids = [i for i in ids if i not in ("df_000", "mel_001")]
+    counts = pd.Series([frame.loc[i, "dx"] for i in safe_ids]).value_counts().sort_index()
+    return tmp_path / "all_candidates.csv", scores, report, safe_ids, {c: int(n) for c, n in counts.items()}
+
+
+def _consequences(path, q, counts, ids_sha, verdict="COARSE"):
+    per_class = sel.e4c.allocate(q, counts) if verdict == "COARSE" else None
+    path.write_text(json.dumps({"verdict": verdict, "v1": {"q_star": q}, "v3_pool_counts": counts,
+                                "v3_pool_ids_sha256": ids_sha, "count": {"per_class": per_class}}))
+    return path
+
+
+def test_run_writes_c_and_every_d_draw_with_their_hashes(tmp_path, monkeypatch):
+    candidates, scores, report, safe_ids, counts = _write_inputs(tmp_path, monkeypatch)
+    cons = _consequences(tmp_path / "e4_consequences.json", 30, counts, sel.e4.ids_sha256(safe_ids))
+    m = sel.run("ns", candidates, scores, report, cons, tmp_path / "out")
+    out = tmp_path / "out" / "ns"
+    seeds = m["stage4_seeds"]
+    assert len(seeds) == 20
+    assert set(m["files_sha256"]) == {sel.C_NAME} | {sel.D_TEMPLATE.format(seed=s) for s in seeds}
+    for name, sha in m["files_sha256"].items():
+        assert sel.sha256_file(out / name) == sha
+    c = pd.read_csv(out / sel.C_NAME)
+    assert len(c) == m["n_selected_c"] == 30 and c["dx"].value_counts().to_dict() == m["per_class"]
+    assert not set(c["image_id"]) & {"df_000", "mel_001"}
+    for s in seeds:
+        d = pd.read_csv(out / sel.D_TEMPLATE.format(seed=s))
+        assert d["dx"].value_counts().to_dict() == m["per_class"] and d["image_id"].is_unique
+        assert not set(d["image_id"]) & {"df_000", "mel_001"}
+    assert m["safe_pool_ids_sha256"] == sel.e4.ids_sha256(safe_ids)
+    assert m["ranking"]["safety_only"] == ["iqa"] and m["ranking"]["not_scored_no_direction"] == ["uncertainty"]
+
+
+def test_run_refuses_a_pool_with_the_e4_counts_but_other_ids(tmp_path, monkeypatch):
+    candidates, scores, report, safe_ids, counts = _write_inputs(tmp_path, monkeypatch)
+    other = sel.e4.ids_sha256(safe_ids[:-1] + ["nv_999"])
+    for ids_sha in (other, None):
+        with pytest.raises(sel.SelectionError, match="not the pool E4 measured"):
+            sel.run("ns", candidates, scores, report, _consequences(tmp_path / "c.json", 30, counts, ids_sha),
+                    tmp_path / "o")
+
+
+def test_run_under_no_writes_only_the_manifest_and_under_go_refuses(tmp_path, monkeypatch):
+    candidates, scores, report, safe_ids, counts = _write_inputs(tmp_path, monkeypatch)
+    sha = sel.e4.ids_sha256(safe_ids)
+    m = sel.run("ns", candidates, scores, report, _consequences(tmp_path / "n.json", 0, counts, sha, "NO"),
+                tmp_path / "o")
+    assert m["n_selected_c"] == 0
+    assert sorted(p.name for p in (tmp_path / "o" / "ns").iterdir()) == [sel.MANIFEST_NAME]
+    with pytest.raises(sel.SelectionError, match="E4b"):
+        sel.run("ns", candidates, scores, report, _consequences(tmp_path / "g.json", 3168, counts, sha, "GO"),
+                tmp_path / "g")

@@ -107,3 +107,67 @@ def test_grid_refuses_a_file_the_selection_did_not_hash(tmp_path, monkeypatch):
     with pytest.raises(grid.GridError):
         grid.verify_inputs(protocol, None, 42, "C", {"c_selected.csv": "0" * 64})
     assert grid.verify_inputs(protocol, None, 42, "B", {}) is None
+
+
+def test_asism_v2_stage4_recipe_is_the_v1_recipe_e4_checked():
+    """E4 checked its recipe against ham10000_stage4.yaml (D1); the final grid trains with the
+    asism_v2 config. Everything but the data paths and the seed list must be the same."""
+    from scripts.utils.config import load_named_config
+
+    v1 = load_named_config("ham10000_stage4.yaml", "ham_stage4")
+    v2 = load_named_config(get_protocol("asism_v2").stage4_config, "ham_stage4")
+    for key in ("model", "training", "loss", "classes", "real_train_split", "selection_split",
+                "selection_metric", "split_namespace", "dataset"):
+        assert v1[key] == v2[key], key
+    assert list(v2.seeds) == list(range(42, 62))
+    assert list(v2.seeds)[:3] == list(v1.seeds)
+
+
+def test_classifier_val_comparison_end_to_end(tmp_path, monkeypatch):
+    """Fake A/B/C/D Stage 4 runs (D with its own manifest per seed) -> gather, the frozen compare
+    and the seed-robustness analysis, all on the monitoring split."""
+    from omegaconf import OmegaConf
+
+    from scripts.followup import ham10000_asism_v2_compare as cmp
+    from scripts.utils.manifest import write_json
+
+    seeds = [42, 43, 44]
+    reference, rng = _reference(n=140)
+    truth = reference["true_class_index"].to_numpy()
+    accuracy = {"A": 0.5, "B": 0.6, "C": 0.7, "D": 0.6}
+    synthetic = {"A": 0, "B": 3168, "C": 300, "D": 300}
+    results = tmp_path / "results"
+    for condition in "ABCD":
+        for frame in _frames(truth, accuracy[condition], seeds, rng):
+            seed = int(frame["seed"].iloc[0])
+            run_dir = results / "ns" / condition / f"seed{seed}"
+            run_dir.mkdir(parents=True)
+            frame.assign(image_id=[f"i{k}" for k in range(len(truth))], lesion_id=reference["lesion_id"],
+                         true_class_index=truth, condition=condition).to_parquet(
+                run_dir / "selection_predictions.parquet")
+            if not synthetic[condition]:
+                manifest = None
+            elif condition == "D":
+                manifest = f"/m/d_selected_seed{seed}.csv"
+            else:
+                manifest = f"/m/{condition}.csv"
+            write_json(run_dir / "run_manifest.json", {
+                "final_eval_heldout_read": False, "loss": "cross_entropy", "class_weighting": "none",
+                "class_weight_basis": None, "class_weights": None,
+                "budget": {"max_steps": 3000, "batch_size": 32, "learning_rate": 1e-4, "weight_decay": 1e-4},
+                "model": {"architecture": "densenet121", "pretrained_source": "imagenet", "resolution": 512,
+                          "dropout_p": 0.2},
+                "data": {"real_train_split": "classifier_train", "selection_split": "classifier_val",
+                         "synthetic_images": synthetic[condition], "synthetic_manifest": manifest,
+                         "real_train_images": 1641}})
+            write_json(run_dir / "selection_metrics.json", {"balanced_accuracy": 0.0})
+    fake = OmegaConf.create({"seeds": seeds, "paths": {"results_dir": str(results)}})
+    monkeypatch.setattr(cmp, "load_named_config", lambda *a, **k: fake)
+    out = cmp.run("asism_v2", "classifier_val", "ns")
+    assert out["label"].startswith("MONITORING") and out["split"] == "classifier_val"
+    assert list(out["confirmatory"]) == ["C_vs_D:balanced_accuracy"]
+    assert out["seed_robustness"]["per_seed"]["D"]["seeds"] == seeds
+    assert set(out["seed_robustness"]["comparisons"]) >= {"C_vs_D", "B_vs_A"}
+    written = results / "ns" / "_classifier_val_comparison"
+    assert (written / "asism_v2_comparison_classifier_val.json").is_file()
+    assert len(list((written / "predictions").glob("*.parquet"))) == 12

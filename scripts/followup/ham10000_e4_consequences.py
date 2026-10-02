@@ -10,8 +10,10 @@ run. V1 and V3 are transcribed here; V2 (E4b, only after GO) is not designed and
       class name), applied when the count is q*: under COARSE. Under NO, q* = 0 and nothing is
       split. Under GO the count is decided by E4b, so no split is made here.
 
-This module counts only. Which images fill each class's count needs ASISM v2's within-class ranking,
-which does not exist yet (contract section 9 is pending); it is recorded as pending, not improvised.
+This module counts only. Which images fill each class's count is ASISM v2's within-class ranking,
+defined in docs/ham10000_asism_v2_final_protocol.md section 2 and applied by
+scripts/followup/ham10000_asism_v2_select.py, which reads this file. The pool's id hash is carried
+over from the plan so the selector can check it fills the counts from exactly the pool E4 measured.
 
 Reads e4_plan.json and e4_runs.jsonl, refuses an incomplete grid (the same guard as --phase analyze),
 and writes e4_consequences.json next to them. It never trains anything and never reads a split.
@@ -99,9 +101,10 @@ def consequences(plan: dict, rows: list[dict]) -> dict:
         "verdict": verdict,
         "v1": v1,
         "v3_pool_counts": dict(sorted(pool_counts.items())),
+        "v3_pool_ids_sha256": plan["safe_pool"].get("ids_sha256"),
         "count": count,
-        "within_class_selection": "pending: ASISM v2's within-class ranking of the 4 signals is not "
-                                  "implemented (contract section 9). Not chosen here.",
+        "within_class_selection": "not chosen here: the ranking of docs/ham10000_asism_v2_final_protocol.md "
+                                  "section 2, applied by scripts.followup.ham10000_asism_v2_select.",
     }
 
 
