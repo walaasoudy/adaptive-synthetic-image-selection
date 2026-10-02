@@ -600,3 +600,33 @@ Amendment 5.
   and inputs.
 - No earlier artifact is rewritten.
 - CPU only.
+
+### Amendment 7 — 2026-10-02: the J1 outcome under Amendment 6 as written
+
+J1 ran on 2026-10-02 from commit `670c4b9`, on the CPU. The output is in
+`ham10000_work/v3_signals/judge_j1/`.
+
+| Criterion | Result | Passed |
+|---|---|---|
+| V1 real validity | `classifier_val` balanced accuracy 0.672, no class with zero recall | yes |
+| V2 Q1 | one class at or below chance (bkl, 0/273), Spearman 0.679 | yes |
+| V3 Q2 | mel predicted nv 11.6% (32/276), nv share of mismatches 19.0% | yes |
+| V4 no class sink | df receives **50.2%** (570/1,135) of the synthetic mismatches; the limit is < 50% | **no** |
+| V5 not a restatement | 0 classes with \|ρ\| ≥ 0.7 against similarity, uncertainty or explainability | yes |
+| V6 Go/No-Go | agreement "include" | yes |
+
+**J1 is not accepted.** As fixed in Amendment 6:
+
+- agreement is left out of ASISM v2;
+- ASISM v2 runs on similarity, IQA, uncertainty (V3a) and explainability (V3a);
+- no other judge is tried on this synthetic pool.
+
+V4 failed by 0.2 percentage points. The limit is not revisited: it was written before J1 existed,
+and moving it after seeing 50.2% would be choosing the criterion from the result.
+
+Recorded, and deciding nothing:
+
+- J1 is the strongest real-data judge so far (balanced accuracy 0.672, against 0.582 for V3a and
+  0.575 for P1b). It reads 67.4% of synthetic mel as mel.
+- Synthetic bkl is read as bkl by no judge: V3a 1.8%, P1 1.5%, P1b 3.7%, J1 0.0%.
+- The df sink seen in P1b remains in J1 at about half the mismatches.
