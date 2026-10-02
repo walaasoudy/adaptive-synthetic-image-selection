@@ -1,8 +1,7 @@
 # HAM10000 E4: quantity curve. Design for pre-registration
 
-Status: **PROPOSED, 2026-10-02.** Nothing here is fixed until Walaa approves it. After approval, no
-number in this document changes once any E4 result exists. No code exists for E4 yet, and no GPU
-run has started.
+Status: **APPROVED by Walaa, 2026-10-02 (D1–D7), before any E4 code or result.** No
+number in this document changes once any E4 result exists. No GPU run has started.
 
 ## 1. Why E4 is quantity-only
 
