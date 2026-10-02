@@ -496,3 +496,35 @@ D1 and D2 are not repeated, because they do not depend on the probe.
 
 **Out of scope:** the same list as Amendment 3. P1b embeds real images on a GPU pod, then trains and
 reads the probe on the CPU.
+
+### Amendment 5 — 2026-10-02: how the Q5 result for v3 is to be read (no criterion changed)
+
+Q5's rule is unchanged. A pair is redundant if |ρ| ≥ 0.7 pooled **and** in ≥ 4 classes. Under that
+rule v3 passes Q5, and that verdict stands.
+
+The pooled correlation does not describe the within-class relation, however. For agreement against
+uncertainty under v3 it is −0.009, while 6 of 7 classes have |ρ| ≥ 0.7:
+
+| akiec | bcc | bkl | df | mel | nv | vasc |
+|---|---|---|---|---|---|---|
+| 0.340 | −0.822 | 0.911 | 0.884 | 0.904 | −0.958 | −0.865 |
+
+The sign is positive in the classes the judge mostly misreads (bkl, df, mel) and negative in those it
+mostly reads correctly (bcc, nv, vasc). Pooled, the two cancel.
+
+The change in the pooled value from 0.473 (v2) to −0.009 (v3) is therefore **not** evidence that
+agreement and uncertainty became less redundant. Within class they remain strongly associated.
+
+- No new Q5 criterion is introduced here.
+- v3 is not re-evaluated under any other rule.
+- Any revised criterion would be its own dated amendment, written before it is applied to a new
+  judge.
+
+**Related fix.** The Go/No-Go redundancy check (`scripts/asism/ham10000_02_gonogo.py`) averaged
+signed per-class ρ.
+
+- Branch `fix/ham10000-gonogo-abs-rho`, commits `89de88b` and `4fc0294`.
+- It now averages |ρ|, weighted by class size. The 0.90 threshold is unchanged.
+- On the v3 signal set (v1 similarity and IQA with the v3 classifier signals), agreement against
+  uncertainty moves from a signed 0.118 to an |ρ| aggregate of 0.795.
+- That is still below 0.90, so all five signals remain "include", as before the fix.
