@@ -211,7 +211,20 @@ def _consequences(path, q, counts, ids_sha, verdict="COARSE"):
     return path
 
 
+def test_run_refuses_to_build_c_or_d_while_the_ranking_is_not_approved(tmp_path, monkeypatch):
+    """Protocol §2 is NOT APPROVED: the composite is a named baseline, so no c_selected.csv and no
+    d_selected_seed*.csv may be written under COARSE, whatever the inputs."""
+    assert sel.RANKING_APPROVED_FOR_CONDITION_C is False
+    candidates, scores, report, safe_ids, counts = _write_inputs(tmp_path, monkeypatch)
+    cons = _consequences(tmp_path / "e4_consequences.json", 30, counts, sel.e4.ids_sha256(safe_ids))
+    with pytest.raises(sel.SelectionError, match="NOT APPROVED"):
+        sel.run("ns", candidates, scores, report, cons, tmp_path / "out")
+    assert not list((tmp_path / "out" / "ns").glob("*.csv"))
+
+
 def test_run_writes_c_and_every_d_draw_with_their_hashes(tmp_path, monkeypatch):
+    """The mechanics once a ranking is approved; the flag is set here only to exercise them."""
+    monkeypatch.setattr(sel, "RANKING_APPROVED_FOR_CONDITION_C", True)
     candidates, scores, report, safe_ids, counts = _write_inputs(tmp_path, monkeypatch)
     cons = _consequences(tmp_path / "e4_consequences.json", 30, counts, sel.e4.ids_sha256(safe_ids))
     m = sel.run("ns", candidates, scores, report, cons, tmp_path / "out")

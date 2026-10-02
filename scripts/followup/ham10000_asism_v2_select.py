@@ -8,7 +8,10 @@ Protocol: docs/ham10000_asism_v2_final_protocol.md, frozen before any E4 result 
               COARSE  C takes the V3 per-class counts; D draws the same counts at random.
               NO      q* = 0: C = A and D is not built. Only the manifest is written.
               GO      refused: the count belongs to E4b, which is not designed.
-  WHICH     the gate's equal-weight reference composite (configs/ham10000_asism_v2_selection.yaml,
+  WHICH     NOT APPROVED (protocol §2, status correction of 2026-10-02): run() refuses to build C or
+            D under COARSE until RANKING_APPROVED_FOR_CONDITION_C is set by that decision. The code
+            below implements the proposed ranking, which is the methodology's named baseline:
+            the gate's equal-weight reference composite (configs/ham10000_asism_v2_selection.yaml,
             ranking) over ranking.scored_signals: similarity and explainability. IQA acts only
             through the safety filter (reject_invalid_iqa), never in the ranking; uncertainty has no
             a-priori direction and is not scored. Safety runs before ranking.
@@ -54,6 +57,12 @@ class SelectionError(SystemExit):
 # differs is refused rather than run, so the ranking cannot drift through the config alone.
 SCORED_SIGNALS = ("similarity", "explainability")
 SAFETY_ONLY_SIGNALS = ("iqa",)
+
+# §2 is NOT APPROVED (status correction of 2026-10-02): this composite is the methodology's named
+# baseline, and results §12.0.1 reserves C for learned-utility selection. Until Walaa and the
+# supervisor decide what "which" is, no C (and so no D matched to it) is built. Re-enabling this is
+# that decision, made in the protocol document first, never here alone.
+RANKING_APPROVED_FOR_CONDITION_C = False
 
 
 def ranking_columns(admitted: list[str], scored: list[str]) -> list[str]:
@@ -204,6 +213,10 @@ def run(namespace: str, candidates: Path, scores_dir: Path, gonogo_report: Path,
         write_json(out_dir / MANIFEST_NAME, manifest)
         return manifest
 
+    if not RANKING_APPROVED_FOR_CONDITION_C:
+        raise SelectionError("the within-class ranking of docs/ham10000_asism_v2_final_protocol.md §2 is "
+                             "NOT APPROVED; the equal-weight composite is a named baseline, not condition C. "
+                             "Nothing is selected.")
     per_class = {str(c): int(n) for c, n in consequences["count"]["per_class"].items()}
     if per_class != e4c.allocate(int(consequences["v1"]["q_star"]), evidence["safe_pool_per_class"]):
         raise SelectionError("the per-class counts in e4_consequences.json are not V3 of q*")
