@@ -225,3 +225,118 @@ def test_refuses_a_candidate_list_that_differs_from_the_embeddings(tmp_path, fak
     fake_v3["frame"] = _fake_v3(ws["ids"])
     with pytest.raises(SystemExit, match="do not hold the same images"):
         probe.run(ws["emb"], ws["meta"], tmp_path, ws["cand"], expected_n=ws["n"])
+
+
+# ----------------------------------------------------------------------------------------------
+# P1b (Amendment 4)
+# ----------------------------------------------------------------------------------------------
+
+ENCODER = {"encoder": "vit_small_patch14_dinov2", "weights_repo_id": "timm/x",
+           "weights_revision": "936966a8", "weights_sha256": "abc"}
+
+
+def _p1b_workspace(tmp_path: Path, mel_like: str, encoder=None, limit=None, seed: int = 3) -> dict:
+    """The separability file (synthetic as in _workspace) plus an embed-real file whose
+    classifier_train and classifier_val clouds sit on the same class centres."""
+    ws = _workspace(tmp_path, mel_like, seed=seed)
+    write_json(ws["emb"] / "provenance.json",
+               {"embeddings_sha256": sha256_file(ws["emb"] / "embeddings.npz"), **ENCODER})
+    data = np.load(ws["emb"] / "embeddings.npz")
+    real = data["source"] == "real"
+    x, dx = data["embeddings"][real], data["dx"][real]
+    rng = np.random.default_rng(seed + 1)
+    noise = 0.5 * rng.standard_normal(x.shape)
+    split = np.where(np.arange(len(x)) % 2 == 0, probe.P1B_TRAIN_SPLIT, probe.P1B_GATE_SPLIT)
+    real_dir = tmp_path / "real"; real_dir.mkdir()
+    np.savez(real_dir / "real_embeddings.npz", embeddings=(x + noise).astype(np.float32),
+             image_id=np.array([f"R{i}" for i in range(len(x))]), dx=dx, split=split)
+    write_json(real_dir / "provenance.json", {"embeddings_sha256": sha256_file(real_dir / "real_embeddings.npz"),
+                                              "limit": limit, **(encoder or ENCODER)})
+    return {**ws, "real": real_dir}
+
+
+@pytest.mark.parametrize("mel_like, verdict", [("nv", "class_fidelity_likelier"), ("mel", "classifier_specific")])
+def test_p1b_end_to_end(tmp_path, mel_like, verdict):
+    ws = _p1b_workspace(tmp_path, mel_like)
+    report = probe.run_p1b(ws["emb"], ws["real"], ws["cand"], expected_n=ws["n"])
+    assert report["gate"]["passed"]
+    assert report["decision"]["verdict"] == verdict
+    assert report["reading_with_p1"] == probe.P1B_READING[verdict]
+    assert report["inputs"]["n_train"] + report["inputs"]["n_gate"] == N_REAL * len(probe.CLASSES)
+    text = probe.render_markdown(report)
+    assert "P1b" in text and "Amendment 4" in text and "Descriptive" not in text
+
+
+def test_p1b_reading_table_covers_every_verdict():
+    assert set(probe.P1B_READING) == {"classifier_specific", "class_fidelity_likelier", "not_informative"}
+    assert probe.P1B_TRAIN_SPLIT == "classifier_train" and probe.P1B_GATE_SPLIT == "classifier_val"
+
+
+def test_p1b_refuses_embeddings_from_another_encoder(tmp_path):
+    ws = _p1b_workspace(tmp_path, "nv", encoder={**ENCODER, "weights_revision": "main"})
+    with pytest.raises(SystemExit, match=r"differ in \['weights_revision'\]"):
+        probe.run_p1b(ws["emb"], ws["real"], ws["cand"], expected_n=ws["n"])
+
+
+def test_p1b_refuses_a_smoke_run(tmp_path):
+    ws = _p1b_workspace(tmp_path, "nv", limit=14)
+    with pytest.raises(SystemExit, match="smoke run"):
+        probe.run_p1b(ws["emb"], ws["real"], ws["cand"], expected_n=ws["n"])
+
+
+def test_p1b_refuses_real_embeddings_that_do_not_match_their_hash(tmp_path):
+    ws = _p1b_workspace(tmp_path, "nv")
+    (ws["real"] / "real_embeddings.npz").write_bytes(b"tampered")
+    with pytest.raises(SystemExit, match="does not match its provenance hash"):
+        probe.run_p1b(ws["emb"], ws["real"], ws["cand"], expected_n=ws["n"])
+
+
+@pytest.fixture
+def embed_pipeline(monkeypatch):
+    from fixture_workspace import fixture_workspace
+    from test_ham10000_cam_reference_build import NAMESPACE, _overlay, _workspace as _cam_workspace, _write_images
+
+    from scripts.asism import ham10000_01_compute_signals as signals
+
+    with fixture_workspace("probe-embed-real") as path:
+        layout = _cam_workspace(path)
+        for split in (probe.P1B_TRAIN_SPLIT, probe.P1B_GATE_SPLIT):
+            rows = [{"image_id": f"ISIC_{split}_{name}_{i}", "lesion_id": f"HAM_{split}_{name}_{i}", "dx": name}
+                    for name in probe.CLASSES for i in range(2)]
+            pd.DataFrame(rows).to_csv(layout["splits_dir"] / f"{split}.csv", index=False)
+            _write_images(layout["images_dir"] / split, [r["image_id"] for r in rows][:-1])  # one absent
+        monkeypatch.setenv("PROJECT_ROOT", str(path))
+        monkeypatch.setenv("THESIS_CONFIG_OVERLAY", str(_overlay(path)))
+        weights = path / "weights.safetensors"
+        weights.write_bytes(b"fake")
+        seen = {}
+        monkeypatch.setattr(signals, "load_encoder", lambda cfg, device: (None, None, weights))
+
+        def fake_embed(encoder, transform, paths, batch_size, device):
+            seen["paths"] = list(paths)
+            return np.ones((len(paths), 4))
+        monkeypatch.setattr(signals, "embed_images", fake_embed)
+        yield {"root": path, "namespace": NAMESPACE, "seen": seen, **layout}
+
+
+def test_embed_real_embeds_the_classifier_splits_into_its_own_directory(embed_pipeline):
+    result = probe.embed_real(embed_pipeline["namespace"], device="cpu")
+    out_dir = embed_pipeline["root"] / probe.PROBE_OUTPUT_SUBDIR / embed_pipeline["namespace"]
+    assert Path(result["out_dir"]) == out_dir
+    data = np.load(out_dir / "real_embeddings.npz")
+    assert set(data["split"]) == {probe.P1B_TRAIN_SPLIT, probe.P1B_GATE_SPLIT}
+    # records_from_split skips the absent image, as v3's training did, and the count says so
+    assert result["splits"][probe.P1B_TRAIN_SPLIT] == {"in_split": 14, "embedded": 13}
+    assert all(Path(p).parent.name in (probe.P1B_TRAIN_SPLIT, probe.P1B_GATE_SPLIT) for p in embed_pipeline["seen"]["paths"])
+    assert result["embeddings_sha256"] == sha256_file(out_dir / "real_embeddings.npz")
+    assert not (embed_pipeline["root"] / "outputs/ham10000/diagnostics/synthetic_separability").exists()
+
+
+def test_embed_real_refuses_final_eval_images(embed_pipeline):
+    splits = embed_pipeline["splits_dir"]
+    leaked = pd.read_csv(splits / f"{probe.P1B_GATE_SPLIT}.csv")["image_id"].iloc[0]
+    final_eval = pd.read_csv(splits / "final_eval_heldout.csv")
+    final_eval.loc[len(final_eval)] = {"image_id": leaked, "lesion_id": "HAM_x", "dx": "nv"}
+    final_eval.to_csv(splits / "final_eval_heldout.csv", index=False)
+    with pytest.raises(SystemExit, match="final_eval_heldout"):
+        probe.embed_real(embed_pipeline["namespace"], device="cpu")
