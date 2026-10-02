@@ -430,3 +430,69 @@ and a result that rests on one condition only is said to be so.
 **Out of scope:** the generator, the v3 classifier and its signals, similarity and IQA, the ranking
 network, thresholds, selection, Stage 4 and the final evaluation. P1 reads existing files and runs on
 the CPU.
+
+### Amendment 4 — 2026-10-02, after P1 and before P1b exists: the same probe on the classifier's own images
+
+**The P1 outcome, under Amendment 3 as written.** P1 ran on 2026-10-02 from commit `eca89a9`, on the
+CPU. The output is in `ham10000_work/v3_signals/probe_p1/`.
+
+- The gate passed: out-of-fold balanced accuracy 0.643, and no class with zero recall.
+- Q2 **not influential**:
+  - mel predicted nv 12.0% (33/276);
+  - nv receives 25.8% of all mismatches.
+- Synthetic mel was read as mel in 76.8% (212/276) of cases. For v3 the figure was 15.2%.
+- Q1, reported only: Spearman 0.821, one class at or below chance.
+- **Decision: classifier_specific.**
+
+Descriptive, deciding nothing:
+
+- synthetic bkl is read as bkl in 1.5% of cases by the probe and 1.8% by v3, so both classifiers
+  fail on it;
+- v3's mel misses are far misses: median p(nv) 0.956, median p(mel) 0.030;
+- the mel images that v3 read as nv are, in DINOv2, slightly more mel-like than the ones it read as
+  mel (difference −0.0115, interval [−0.0258, −0.0003]).
+
+**A caveat Amendment 3 did not state.** P1 was trained on `gen_train`, the real images the LoRA was
+trained on. v3 was trained on `classifier_train`. The P1 result may therefore come from **which real
+images** the probe learned from, and not only from **which features** it uses.
+
+- A probe that knows the generator's own training images may read the generator's output more
+  easily.
+- This does not change P1's decision, which was read as written. It limits what that decision
+  establishes.
+
+**The next step: P1b.** P1b is the same probe on the images the v3 classifier saw.
+
+- **Unchanged from P1:**
+  - the model, the class weighting, the L2 penalty of 1e-4, and the L-BFGS settings;
+  - the encoder and weights: `vit_small_patch14_dinov2`, `timm/vit_small_patch14_dinov2.lvd142m`
+    at revision `936966a8…`;
+  - the 3,168 synthetic embeddings, sha256 `a82b9311…`;
+  - Q1, Q2 and the P1 decision table.
+- **Changed:**
+  - **Training:** all of `classifier_train`, 1,641 images, as for v3. There is no cross-validation.
+  - **Gate:** the auxiliary classifier's acceptance criteria A and B on `classifier_val` (1,401
+    images), as for v3. That means balanced accuracy > 0.478 and no class with zero recall.
+  - **Q1's normalisation:** the probe's recall on `classifier_val`.
+- **New embeddings:**
+  - `classifier_train` and `classifier_val` only;
+  - same encoder and weights as the separability embeddings, same `embed_images` code as the
+    similarity signal, and the same preprocessed images that v3 was trained and accepted on;
+  - written to a new directory, `outputs/ham10000/diagnostics/independent_probe/`. The separability
+    embeddings are not rewritten.
+  - A `final_eval_heldout` image is refused.
+  - The two files must record the same encoder, weights revision and weights sha256, or P1b
+    refuses to run.
+
+**Reading P1 and P1b together, fixed now.**
+
+| P1b outcome | Reading | Next step |
+|---|---|---|
+| classifier_specific | The caveat is closed. The nv reading belongs to the DenseNet classifier. | A classifier-side change, chosen and written in an Amendment 5 before it is tried |
+| class_fidelity_likelier | P1's result came from training on the generator's own images. The reading is **mixed**. | Written as it is; Walaa decides |
+| not_informative (gate fails) | P1b says nothing. P1 stands, with the caveat above. | Recorded as it is; nothing is retried with other settings |
+
+D1 and D2 are not repeated, because they do not depend on the probe.
+
+**Out of scope:** the same list as Amendment 3. P1b embeds real images on a GPU pod, then trains and
+reads the probe on the CPU.
