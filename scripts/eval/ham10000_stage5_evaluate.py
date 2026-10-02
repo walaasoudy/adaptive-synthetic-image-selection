@@ -180,6 +180,37 @@ def predict(checkpoint: Path, records, resolution: int, dropout_p: float, pretra
     return predict_probabilities(model, records, resolution, device=device)
 
 
+def validate_reusable_predictions(path: Path, expected: dict, image_ids: list[str], truth: np.ndarray) -> None:
+    """Refuse a partial run whose saved predictions came from different inputs."""
+    tag = path.stem
+    provenance_path = path.with_suffix(".provenance.json")
+    if not provenance_path.is_file():
+        raise PreconditionFailed(
+            f"existing predictions for {tag} have no provenance; use a new --final-eval-run-id."
+        )
+    provenance = read_json(provenance_path)
+    mismatches = [key for key, value in expected.items() if provenance.get(key) != value]
+    if mismatches:
+        raise PreconditionFailed(
+            f"existing predictions for {tag} have stale provenance ({', '.join(mismatches)}); "
+            "use a new --final-eval-run-id."
+        )
+    existing = pd.read_parquet(path)
+    required_columns = {"image_id", "true_class_index", "condition", "seed"} | {
+        f"prob_{label}" for label in CLASSIFIER_TARGET_LABELS
+    }
+    if required_columns <= set(existing.columns) and (
+        list(existing["image_id"].astype(str)) == image_ids
+        and list(existing["true_class_index"].astype(int)) == list(truth)
+        and existing["condition"].eq(expected["condition"]).all()
+        and existing["seed"].eq(expected["seed"]).all()
+    ):
+        return
+    raise PreconditionFailed(
+        f"existing predictions for {tag} do not match this evaluation; use a new --final-eval-run-id."
+    )
+
+
 def run(namespace: str, run_id: str, device: str | None = None,
         protocol_name: str = DEFAULT_PROTOCOL) -> dict:
     condition_protocol = get_protocol(protocol_name)
@@ -207,19 +238,25 @@ def run(namespace: str, run_id: str, device: str | None = None,
     for (condition, seed), entry in sorted(runs.items()):
         tag = f"{condition}_seed{seed}"
         path = predictions_dir / f"{tag}.parquet"
-        if path.is_file():
-            existing = pd.read_parquet(path)
-            if list(existing["image_id"].astype(str)) == image_ids:
-                reused.append(tag)
-                continue
-            raise PreconditionFailed(
-                f"existing predictions for {tag} cover a different image set; refusing to reuse "
-                "them. Use a new --final-eval-run-id."
-            )
-
         checkpoint = Path(entry["run_dir"]) / "model.pt"
         if not checkpoint.is_file():
             raise PreconditionFailed(f"missing Stage 4 checkpoint {checkpoint}")
+        checkpoint_hash = sha256_file(checkpoint)
+        if path.is_file():
+            expected = {
+                "final_eval_run_id": run_id,
+                "namespace": namespace,
+                "condition": condition,
+                "seed": int(seed),
+                "checkpoint_sha256": checkpoint_hash,
+                "split": FINAL_EVAL_SPLIT,
+                "split_csv_sha256": split_sha256,
+                "n_images": len(records),
+            }
+            validate_reusable_predictions(path, expected, image_ids, truth)
+            reused.append(tag)
+            continue
+
         print(f"  [{tag}] predicting on {len(records)} protected images", flush=True)
         probabilities = predict(
             checkpoint, records, resolution,
@@ -245,7 +282,7 @@ def run(namespace: str, run_id: str, device: str | None = None,
                 "namespace": namespace,
                 "condition": condition,
                 "seed": int(seed),
-                "checkpoint_sha256": sha256_file(checkpoint),
+                "checkpoint_sha256": checkpoint_hash,
                 "stage4_run_dir": entry["run_dir"],
                 "split": FINAL_EVAL_SPLIT,
                 "split_csv_sha256": split_sha256,

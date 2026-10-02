@@ -565,6 +565,26 @@ def test_artifacts_scored_on_DIFFERENT_candidate_pools_are_refused(workspace):
         _run()
 
 
+def test_an_alternate_scores_directory_requires_an_explicit_report_path(workspace):
+    """An audit must never silently replace the canonical report used downstream."""
+    _write_all(workspace)
+    from scripts.asism.ham10000_02_gonogo import run
+
+    alternate = workspace / "alternate-signals"
+    alternate.mkdir()
+    for source in (workspace / "outputs/ham10000/stage3" / NAMESPACE / "signals").iterdir():
+        target = alternate / source.name
+        target.write_bytes(source.read_bytes())
+
+    with pytest.raises(SystemExit, match="Supply --out explicitly"):
+        run(NAMESPACE, scores_dir=alternate)
+
+    report_path = alternate / "audit_gonogo_report.json"
+    report = run(NAMESPACE, scores_dir=alternate, out_path=report_path)
+    assert report_path.is_file()
+    assert Path(report["report_path"]) == report_path
+
+
 def test_a_scored_image_absent_from_the_manifest_stops_the_gate(workspace):
     _write_all(workspace)
     frame = _iqa_frame()
