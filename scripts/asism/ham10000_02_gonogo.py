@@ -364,17 +364,22 @@ def check_redundancy(merged: pd.DataFrame, diagnoses: pd.Series, signal: str, co
     both would count the same evidence twice. Correlating across the whole pool would instead measure
     class structure: nv candidates differ systematically from mel ones on almost every signal, so two
     unrelated signals both separating nv from mel would read as redundant.
+
+    The decision aggregates |rho| per class, not rho: a pair that is +0.98 in some classes and -0.98
+    in others is redundant in every one of them, and a signed average would cancel it towards zero.
+    The signed average is kept beside it for diagnosis only.
     """
     column, _ = PRIMARY_SCORE_COLUMN[signal]
     threshold = float(config.gonogo.redundancy_abs_correlation_max)
     min_pairs = int(config.gonogo.min_pairs_for_correlation)
 
     correlations: dict[str, float] = {}
+    signed_correlations: dict[str, float] = {}
     per_class: dict[str, dict[str, float]] = {}
     for other, (other_column, _) in PRIMARY_SCORE_COLUMN.items():
         if other == signal or other_column not in merged.columns or column not in merged.columns:
             continue
-        weighted_sum, weight_total = 0.0, 0
+        abs_sum, signed_sum, weight_total = 0.0, 0.0, 0
         for diagnosis, group in _within_class_groups(merged, diagnoses):
             pair = group[[column, other_column]].dropna()
             if len(pair) < min_pairs or pair[column].nunique() < 2 or pair[other_column].nunique() < 2:
@@ -383,18 +388,21 @@ def check_redundancy(merged: pd.DataFrame, diagnoses: pd.Series, signal: str, co
             if not np.isfinite(correlation):
                 continue
             per_class.setdefault(other, {})[diagnosis] = correlation
-            weighted_sum += correlation * len(pair)
+            abs_sum += abs(correlation) * len(pair)
+            signed_sum += correlation * len(pair)
             weight_total += len(pair)
         if weight_total:
-            correlations[other] = weighted_sum / weight_total
+            correlations[other] = abs_sum / weight_total
+            signed_correlations[other] = signed_sum / weight_total
 
-    worst = max(correlations.items(), key=lambda item: abs(item[1]), default=(None, 0.0))
+    worst = max(correlations.items(), key=lambda item: item[1], default=(None, 0.0))
     return {
         # No comparable class survived the minimum-pairs floor: absence of evidence is not evidence
         # of redundancy, so the check does not fail on it.
-        "passed": bool(abs(worst[1]) < threshold),
-        "method": "class_size_weighted_within_class_spearman",
+        "passed": bool(worst[1] < threshold),
+        "method": "class_size_weighted_within_class_abs_spearman",
         "correlations": correlations,
+        "signed_correlations_diagnostic_only": signed_correlations,
         "per_class": per_class,
         "most_correlated_with": worst[0],
         "max_abs_correlation": float(abs(worst[1])),
