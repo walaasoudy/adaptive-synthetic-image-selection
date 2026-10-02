@@ -34,7 +34,7 @@ E4 does not test ranking, and it does not test per-class quantity (see §8).
 | # | Decision | Proposal | Reason |
 |---|---|---|---|
 | D1 | Recipe | Stage 4 recipe, **512 px / 3,000 steps** | The quantity mechanism has to decide for Stage 4. The cheap proxy failed its reliability test (ICC 0.108), and the contract requires a written reason to reuse it. |
-| D2 | Draw pool | The **safe pool**: candidates passing the IQA safety flags (blurry 198, low-contrast 4, border 29, near-uniform 0; the exact union is computed in code) | Selection always starts from the safe pool. Unsafe images are never candidates. |
+| D2 | Draw pool | The **safe pool** as the project defines it, i.e. the output of the safety gate in `load_candidate_pool` (`scripts/asism/ham10000_ranking.py`): candidates with invalid IQA (`iqa_valid` false) and near-duplicates of a real image (`novelty_is_near_duplicate`) are removed, per `learned_asism.safety` in `configs/ham10000_stage3.yaml`. The IQA quality flags (blurry, low-contrast, border, near-uniform) are not safety criteria and do not filter the pool. N and the per-class counts are computed in code and recorded in the frozen plan. | Selection, and later D, start from this same pool. Unsafe images are never candidates. |
 | D3 | Sizes | **0, 250, 500, 1,000, 2,000, all safe** (6 points, roughly doubling) | Covers the range a quantity mechanism has to choose over. The old 60–180 range is far too narrow. |
 | D4 | Draws | **2 nested chains.** Each chain is one random permutation of the safe pool (draw seeds 20261003 and 20261004). Size *s* is the first *s* images of the chain. | Nesting makes each marginal step "these images plus the next ones". Two chains keep the result from depending on one draw. |
 | D5 | Seeds | Classifier seeds **42–46** per chain and size. Size 0 (real only) gets **10 seeds, 42–51**. | 10 runs per size. The noise at this recipe, from Round 2, is σ ≈ 0.011 AUROC and 0.04–0.066 BA. |
@@ -45,6 +45,8 @@ Each run's training data is the 1,641 real images plus the drawn synthetic image
 everything else identical across runs.
 
 ## 4. Pre-registered decision rule
+
+Approved by Walaa on 2026-10-02, before any E4 code or result.
 
 Every quantity below is computed from the run records alone. No threshold is chosen, rounded or
 moved after any result exists.
