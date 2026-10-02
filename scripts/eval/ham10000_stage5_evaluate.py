@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 5 — the protected final evaluation of A/B/C on HAM10000's final_eval_heldout.
+"""Stage 5 — the protected final evaluation of one protocol's conditions on final_eval_heldout.
 
 This is the ONLY place in the HAM10000 pipeline that reads final_eval_heldout for an outcome. Every
 earlier stage refuses it by name, and the access here goes through the same declared-purpose gate
@@ -19,8 +19,13 @@ THE PRECONDITIONS, ALL REFUSALS RATHER THAN WARNINGS
   * the conditions trained under one protocol and differ only in data — the Stage 4 aggregator's
     invariant, re-checked here, because a confounded comparison does not become sound by being
     measured on held-out data;
-  * condition C's selection manifest exists and names this namespace, so the run being evaluated is
-    the one the selector actually produced.
+  * the selection manifest behind the selected condition(s) exists and names this namespace, so the
+    run being evaluated is the one the selector actually produced.
+
+WHICH CONDITIONS. --protocol names the condition set and, with it, the Stage 4 config, the selection
+manifest to check and the directory predictions are written to. It defaults to v1, the primary
+result, so every command written before protocols existed still means exactly what it meant. v2
+writes under stage5_v2/: a follow-up evaluation can never land on top of the protected v1 result.
 
 A prediction file that already exists for this run id is REUSED after validation, so an interrupted
 evaluation resumes. That is an engineering property. Re-running under a changed method after seeing
@@ -28,7 +33,9 @@ results is not resuming — it needs a new run id, and produces a separate resul
 
 Usage:
     python scripts/eval/ham10000_stage5_evaluate.py --namespace ham-stratified-v1 \
-        --final-eval-run-id ham-stage5-2026-09-19-a
+        --final-eval-run-id ham-stage5-2026-09-19-a            # v1, the primary result
+    python scripts/eval/ham10000_stage5_evaluate.py --namespace ham-stratified-v1 \
+        --protocol v2 --final-eval-run-id ham-stage5-v2-...    # the A/B/C2/D2 follow-up
 """
 
 from __future__ import annotations
@@ -45,7 +52,6 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.classify.ham10000_aggregate_conditions import (  # noqa: E402
-    CONDITIONS,
     check_fairness,
     check_protected_split,
     check_training_data_differs,
@@ -53,17 +59,26 @@ from scripts.classify.ham10000_aggregate_conditions import (  # noqa: E402
 )
 from scripts.utils.config import load_named_config  # noqa: E402
 from scripts.utils.ham10000 import CLASSIFIER_TARGET_LABELS, normalize_diagnosis  # noqa: E402
+from scripts.utils.ham10000_conditions import DEFAULT_PROTOCOL, PROTOCOLS, get_protocol  # noqa: E402
 from scripts.utils.manifest import get_git_commit_hash, read_json, sha256_file, write_json  # noqa: E402
 from scripts.utils.splits import assert_final_eval_access_allowed  # noqa: E402
 
 FINAL_EVAL_SPLIT = "final_eval_heldout"
 
 
+def conditions_phrase(conditions) -> str:
+    """condition C / conditions C2 and D2, so a refusal names what it is actually about."""
+    names = list(conditions)
+    if len(names) == 1:
+        return f"condition {names[0]}"
+    return "conditions " + ", ".join(names[:-1]) + " and " + names[-1]
+
+
 class PreconditionFailed(SystemExit):
     """A Stage 5 precondition does not hold. Nothing is evaluated and nothing is written."""
 
 
-def enforce_preconditions(namespace: str, run_id: str, stage3, stage4) -> dict:
+def enforce_preconditions(namespace: str, run_id: str, selection_cfg, stage4, condition_protocol) -> dict:
     if not run_id:
         raise PreconditionFailed(
             "Stage 5 requires an explicit --final-eval-run-id. It names the output directory, so a "
@@ -76,10 +91,11 @@ def enforce_preconditions(namespace: str, run_id: str, stage3, stage4) -> dict:
     )
 
     seeds = [int(seed) for seed in stage4.seeds]
-    runs, missing = discover_runs(Path(stage4.paths.results_dir), namespace, seeds)
+    conditions = condition_protocol.conditions
+    runs, missing = discover_runs(Path(stage4.paths.results_dir), namespace, seeds, conditions=conditions)
     if missing:
         raise PreconditionFailed(
-            "Stage 5 evaluates the complete A/B/C grid or nothing. Missing: "
+            f"Stage 5 evaluates the complete {'/'.join(conditions)} grid or nothing. Missing: "
             + ", ".join(f"{condition}/seed{seed}" for condition, seed in missing)
             + "\nEvaluating a partial grid on the protected split spends the one look on an "
               "incomplete comparison."
@@ -87,32 +103,33 @@ def enforce_preconditions(namespace: str, run_id: str, stage3, stage4) -> dict:
 
     # A confounded comparison does not become sound by being measured on held-out data.
     check_protected_split(runs)
-    protocol = check_fairness(runs)
-    data_per_condition = check_training_data_differs(runs)
+    shared = check_fairness(runs)
+    data_per_condition = check_training_data_differs(runs, condition_protocol)
 
-    selection_manifest_path = Path(stage3.paths.outputs_dir) / namespace / "asism_selection_manifest.json"
+    spec = condition_protocol.selection_manifest
+    covered = conditions_phrase(spec.covers)
+    selection_manifest_path = Path(selection_cfg.paths.outputs_dir) / namespace / spec.filename
     if not selection_manifest_path.is_file():
         raise PreconditionFailed(
-            f"condition C's selection manifest is missing at {selection_manifest_path}.\n"
-            "Run: python scripts/asism/ham10000_05_adaptive_thresholds.py --namespace " + namespace
+            f"{covered}'s selection manifest is missing at {selection_manifest_path}.\n"
+            "Run: " + spec.rebuild_command.format(namespace=namespace)
         )
     selection = read_json(selection_manifest_path)
     if str(selection.get("namespace")) != namespace:
         raise PreconditionFailed(
             f"the selection manifest was produced for namespace {selection.get('namespace')!r}, not "
-            f"{namespace!r}; condition C would be evaluated against another experiment's selection"
+            f"{namespace!r}; {covered} would be evaluated against another experiment's selection"
         )
 
     return {
         "final_eval_run_id": run_id,
         "namespace": namespace,
         "runs": runs,
-        "shared_protocol": protocol,
+        "shared_protocol": shared,
         "training_data_per_condition": data_per_condition,
         "selection_manifest": str(selection_manifest_path),
         "selection_manifest_sha256": sha256_file(selection_manifest_path),
-        "selection_threshold_policy": selection.get("threshold_policy"),
-        "selection_n_selected": selection.get("n_selected"),
+        **{f"selection_{key}": selection.get(key) for key in spec.evidence_keys},
     }
 
 
@@ -161,19 +178,22 @@ def predict(checkpoint: Path, records, resolution: int, dropout_p: float, pretra
     return predict_probabilities(model, records, resolution, device=device)
 
 
-def run(namespace: str, run_id: str, device: str | None = None) -> dict:
-    stage3 = load_named_config("ham10000_stage3.yaml", "ham_stage3")
-    stage4 = load_named_config("ham10000_stage4.yaml", "ham_stage4")
+def run(namespace: str, run_id: str, device: str | None = None,
+        protocol_name: str = DEFAULT_PROTOCOL) -> dict:
+    condition_protocol = get_protocol(protocol_name)
+    spec = condition_protocol.selection_manifest
+    selection_cfg = load_named_config(spec.config, spec.section)
+    stage4 = load_named_config(condition_protocol.stage4_config, "ham_stage4")
     splits_cfg = load_named_config("splits_ham10000.yaml", "ham_splits")
 
-    evidence = enforce_preconditions(namespace, run_id, stage3, stage4)
+    evidence = enforce_preconditions(namespace, run_id, selection_cfg, stage4, condition_protocol)
     runs = evidence.pop("runs")
 
     splits_dir = Path(splits_cfg.paths.splits_root) / namespace
     images_root = Path(stage4.paths.images_root) / namespace
     records, lesion_of, split_sha256 = load_protected_split(splits_dir, images_root, run_id)
 
-    out_dir = Path(stage4.paths.results_dir).parent / "stage5" / namespace / run_id
+    out_dir = Path(stage4.paths.results_dir).parent / condition_protocol.stage5_dirname / namespace / run_id
     predictions_dir = out_dir / "predictions"
     predictions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -244,7 +264,8 @@ def run(namespace: str, run_id: str, device: str | None = None) -> dict:
         "class_support": {
             label: int((truth == index).sum()) for index, label in enumerate(CLASSIFIER_TARGET_LABELS)
         },
-        "conditions": list(CONDITIONS),
+        "protocol": condition_protocol.name,
+        "conditions": list(condition_protocol.conditions),
         "seeds": [int(seed) for seed in stage4.seeds],
         "predictions_written": written,
         "predictions_reused": reused,
@@ -260,7 +281,7 @@ def run(namespace: str, run_id: str, device: str | None = None) -> dict:
     }
     write_json(out_dir / "stage5_manifest.json", manifest)
 
-    print(f"Stage 5 — {namespace} / {run_id}", flush=True)
+    print(f"Stage 5 — {condition_protocol.name} — {namespace} / {run_id}", flush=True)
     print(f"  protected split: {len(records)} images across {manifest['n_lesions']} lesions", flush=True)
     print(f"  predictions written {len(written)}, reused {len(reused)} -> {predictions_dir}", flush=True)
     print("  no comparison computed here; run ham10000_compare_conditions.py next", flush=True)
@@ -272,9 +293,10 @@ def main() -> int:
     parser.add_argument("--namespace", required=True)
     parser.add_argument("--final-eval-run-id", required=True)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--protocol", default=DEFAULT_PROTOCOL, choices=sorted(PROTOCOLS))
     args = parser.parse_args()
 
-    manifest = run(args.namespace, args.final_eval_run_id, args.device)
+    manifest = run(args.namespace, args.final_eval_run_id, args.device, args.protocol)
     print(json.dumps({key: manifest[key] for key in ("final_eval_run_id", "n_images", "predictions_dir")}, indent=2))
     return 0
 
