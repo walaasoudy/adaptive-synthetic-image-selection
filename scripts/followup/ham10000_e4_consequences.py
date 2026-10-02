@@ -10,10 +10,11 @@ run. V1 and V3 are transcribed here; V2 (E4b, only after GO) is not designed and
       class name), applied when the count is q*: under COARSE. Under NO, q* = 0 and nothing is
       split. Under GO the count is decided by E4b, so no split is made here.
 
-This module counts only. Which images fill each class's count is ASISM v2's within-class ranking,
-defined in docs/ham10000_asism_v2_final_protocol.md section 2 and applied by
-scripts/followup/ham10000_asism_v2_select.py, which reads this file. The pool's id hash is carried
-over from the plan so the selector can check it fills the counts from exactly the pool E4 measured.
+This module counts only. Which images fill each class's count is not decided: the within-class
+ranking proposed in docs/ham10000_asism_v2_final_protocol.md section 2 is NOT APPROVED (status
+correction of 2026-10-02), and scripts/followup/ham10000_asism_v2_select.py, which reads this file,
+refuses to build C or D until it is. The pool's id hash is carried over from the plan so the
+selector can check it fills the counts from exactly the pool E4 measured.
 
 Reads e4_plan.json and e4_runs.jsonl, refuses an incomplete grid (the same guard as --phase analyze),
 and writes e4_consequences.json next to them. It never trains anything and never reads a split.
@@ -103,8 +104,9 @@ def consequences(plan: dict, rows: list[dict]) -> dict:
         "v3_pool_counts": dict(sorted(pool_counts.items())),
         "v3_pool_ids_sha256": plan["safe_pool"].get("ids_sha256"),
         "count": count,
-        "within_class_selection": "not chosen here: the ranking of docs/ham10000_asism_v2_final_protocol.md "
-                                  "section 2, applied by scripts.followup.ham10000_asism_v2_select.",
+        "within_class_selection": "not chosen here and not decided: section 2 of "
+                                  "docs/ham10000_asism_v2_final_protocol.md is NOT APPROVED; "
+                                  "scripts.followup.ham10000_asism_v2_select refuses to build C or D until it is.",
     }
 
 
