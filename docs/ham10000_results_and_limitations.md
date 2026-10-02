@@ -87,6 +87,8 @@ at equal quantity. This is the most important missing control.
 - Utility labels came from 80 short proxy trainings (224 px, 300 steps), measured on
   `asism_tuning_heldout`.
 - Only 32 of the 80 subsets scored above the real-only baseline (balanced accuracy 0.514).
+  *(The 0.514 came from a single proxy run, and §14 shows it was an outlier one. This bullet is
+  left as it was written; read it together with §14.1.)*
 - The differences between subsets are likely comparable to the run-to-run noise of a single
   proxy training. The noise floor was not measured before training the set model.
 
@@ -274,26 +276,29 @@ to learn, and the −0.36 validation Spearman (§3.2) is what one would expect.
 **Results** (v1-style label; ICC with 95% bootstrap CI over subsets; repeats estimated as
 4 × within / between):
 
-| Metric | Round 1: 224 px, 300 steps | Round 2: 224 px, 1500 steps |
-|---|---|---|
-| balanced accuracy | ICC 0.14 [0.00, 0.40], ~25 repeats | ICC 0.00 [0.00, 0.20], no detectable signal |
-| macro AUROC | ICC 0.18 [0.00, 0.39], ~19 repeats | ICC 0.16 [0.00, 0.40], ~21 repeats |
-| macro-F1 | ICC 0.13 [0.00, 0.43], ~28 repeats | ICC 0.08 [0.00, 0.26], ~49 repeats |
-| accuracy | ICC 0.19 [0.00, 0.38], ~17 repeats | ICC 0.00 [0.00, 0.20], no detectable signal |
-| **Verdict** | every metric: lengthen the proxy | no metric within 5 repeats |
+| Metric | Round 1: 224 px, 300 steps | Round 2: 224 px, 1500 steps | Round 3: 512 px, 3000 steps |
+|---|---|---|---|
+| balanced accuracy | ICC 0.14 [0.00, 0.40], ~25 repeats | ICC 0.00 [0.00, 0.20], no detectable signal | ICC 0.06 [0.00, 0.27], 11 repeats |
+| macro AUROC | ICC 0.18 [0.00, 0.39], ~19 repeats | ICC 0.16 [0.00, 0.40], ~21 repeats | ICC 0.35 [0.00, 0.55], **8 repeats** |
+| macro-F1 | ICC 0.13 [0.00, 0.43], ~28 repeats | ICC 0.08 [0.00, 0.26], ~49 repeats | ICC 0.11 [0.00, 0.34], 11 repeats |
+| accuracy | ICC 0.19 [0.00, 0.38], ~17 repeats | ICC 0.00 [0.00, 0.20], no detectable signal | ICC 0.09 [0.00, 0.25], 11 repeats |
+| **Verdict** | every metric: lengthen the proxy | no metric within 5 repeats | no metric within 5 repeats |
 
 Balanced accuracy in detail:
 
-| | Round 1 | Round 2 |
-|---|---|---|
-| Within-subset SD (seed noise) | 0.033 | 0.032 |
-| Between-subset SD (signal) | 0.013 | 0.000 |
-| Baseline mean over 4 seeds | 0.462 | 0.508 |
-| Mean of the 12 subsets | 0.511 | 0.541 |
+| | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Within-subset SD (seed noise) | 0.033 | 0.032 | 0.040 |
+| Between-subset SD (signal) | 0.013 | 0.000 | 0.010 |
+| Baseline mean over 4 seeds | 0.462 | 0.508 | 0.541 |
+| Mean of the 12 subsets | 0.511 | 0.541 | 0.564 |
 
 Further observations:
 - The paired label v1 used (subset minus the same seed's baseline) is noisier still: ICC 0.07 in
-  round 1 and 0.00 in round 2, for every metric.
+  round 1 and 0.00 in round 2, for every metric. Round 3 is the same picture with one exception:
+  balanced accuracy, macro-F1 and accuracy all give ICC 0.00 (no detectable between-subset signal),
+  while macro AUROC gives 0.20 — still far short of the target, and below its own v1-style 0.35.
+  Subtracting the baseline removes more signal than noise at every budget tested.
 - Re-running v1's own seed 42 on the same GPU type moved the 12 labels by up to 0.031 (mean 0.015):
   a single v1 label is not reproducible to better than a few points.
 - Restricted to subsets of equal size, the round-1 ICC was 0.003. This is a sensitivity check only,
@@ -306,10 +311,42 @@ Further observations:
 2. A five-times longer proxy did not help: the between-subset signal in balanced accuracy vanished
    entirely.
 3. Adding synthetic images does help the proxy (+3 to +5 points of balanced accuracy over the
-   baseline in both rounds). What the proxy cannot detect is *which* synthetic images were added.
+   baseline in both rounds; +2.3 points in round 3). What the proxy cannot detect is *which*
+   synthetic images were added.
+4. Round 3 shows the diagnostic itself was working. Going to the full Stage 4 recipe did recover
+   between-subset signal that round 2 had lost, and macro AUROC reached the highest ICC of the three
+   rounds. The budget is the binding constraint, not the absence of any effect: the labels would
+   need averaging over more runs than this study can pay for.
 
-**Round 3** (Stage 4 recipe: 512 px, 3000 steps; commit `ac813a4`): *running at the time of
-writing. Its result and the branch of the decision rule it triggers will be added here unchanged.*
+**Round 3** (Stage 4 recipe: 512 px, 3000 steps; commit `ac813a4`), completed 2026-09-23 on one
+RTX 5090: 52 of 52 runs, 4 seeds × (12 subsets + baseline), no missing or duplicated cell, mean 578 s
+per run. The columns above are its result, added unchanged.
+
+**Round 3 fails the decision rule.** The threshold was `repeats_needed` ≤ 5 on some metric. The best
+metric, macro AUROC, needs **8**; balanced accuracy, macro-F1 and accuracy need 11. Nothing is within
+budget, so the third and last branch of the rule applies: *the proxy utility is unreliable on this
+dataset at all three budgets, and v2 selects without a learned utility.* There is no fourth round.
+
+Two details are recorded because they qualify that verdict rather than soften it:
+
+- **Macro AUROC came closest, and it is not the metric the thesis is judged on.** Its ICC of 0.35 is
+  the highest of the twelve subset-level ICCs measured across the three rounds, and in 14.9% of
+  bootstrap resamples it did fall within 5 repeats. But the confirmatory comparison in this thesis
+  is balanced accuracy (§1), whose ICC here is 0.06 and whose bootstrap median is 11
+  repeats, with **0%** of resamples within budget. Choosing AUROC now because it is the metric that
+  nearly passed would be selecting the metric after seeing which one survived.
+- **The 5-repeat ceiling was fixed before round 1 and is not revisited here.** `repeats_needed` = 8
+  is close to 5, and raising the ceiling would flip the verdict. That is exactly why it is not
+  raised: the affordability limit was set in advance (`MAX_AFFORDABLE_REPEATS = 5`) precisely so that
+  a near miss could not be argued into a pass after the fact. If the limit is ever revised it must be
+  on a stated cost argument written before the number it would change is looked at again.
+
+What "without a learned utility" means was fixed in §12.0.1 while this round was still running, and
+that text governs: C2 is **not** produced, no other score is substituted under C2's name, and the
+recorded next step is to rebuild the utility *supervision* rather than to abandon learned utility or
+to promote an ablation into the method. A failing ICC here is a statement about how the labels were
+obtained; it is not a test of `ASISM signals → utility → ranking → selection`, and no round of this
+diagnostic tested that claim.
 
 ---
 
@@ -336,5 +373,246 @@ v2 changes only the rules that §2.1, §2.3 and §4.1 identified. It is implemen
 - **Which score orders the candidates** is decided by round 3's rule (§11), not chosen here: a
   retrained ranking network if the proxy proves reliable, a selection without a learned utility if
   not.
+
+**12.0.1 What a failed round 3 does and does not mean, fixed before round 3 finished.**
+
+*Written on 2026-09-23 while round 3 was at 33 of 52 runs. No round-3 number of any kind had been
+computed. §11 named a branch it never defined, and the code requires a score: the per-class floor
+and the top-k rule both order candidates by one. Settling that after reading round 3 would have been
+a post-hoc choice inside a pre-registered protocol, so it is settled here. An earlier draft of this
+subsection, written the same day, made image quality the score for C2 itself; that is corrected
+below, and the correction is also pre-result.*
+
+**What §11 measured, and what it did not.** The three rounds measure one thing: whether a short
+proxy training is a reliable enough instrument to produce the utility labels the ranking network is
+trained on. A failing ICC is a statement about the **supervision** — about how the labels were
+obtained — not about learned utility as an approach. The claim
+`ASISM signals → utility → ranking → selection` is this thesis's contribution, and no round of §11
+tests it. Concluding from a noisy label-generating instrument that learned utility does not work
+would be reading the diagnostic for more than it measured.
+
+**C2 is reserved for a learned-utility selection.** If round 3 reaches `repeats_needed` ≤ 5 on some
+metric, C2 is produced from a ranking network retrained on labels averaged over that many repeats,
+and §12.1's confirmatory C2 vs D2 stands exactly as written.
+
+**If round 3 fails, C2 is not produced.** The follow-up does not substitute a different score into
+C2's place and carry on under C2's name. Doing so would let a table headed *C2 vs D2 — the
+confirmatory test of the selection rule* be read as evidence for ASISM when the images had been
+ordered by something else entirely. Instead:
+
+- **What gets fixed is the supervision, not the pipeline.** The recorded direction is to estimate
+  candidate utility more reliably before any ranking network is trained on it — repeated
+  measurement, a less noisy outcome, or a different instrument altogether. This is written down as
+  the next piece of work and is **not implemented here**: v2 as pre-registered is not modified after
+  the fact.
+- **An IQA arm is available as a named ablation, not as the method.** `iqa_composite`, the calibrated
+  image-quality composite in `outputs/ham10000/stage3/<namespace>/signals/iqa_scores.parquet`, passed
+  the v1 Go/No-Go gate (all five signals did) and covers all 3,168 candidates with no missing values,
+  so `ham10000_v2_select.py --score-column iqa_composite` runs with no code change. If it is run its
+  arm is called **E2** and never C2, and it answers one question: does ordering by image quality
+  within a class, with a per-class floor, beat a random draw of the same size from the same safe
+  pool? That is the whole claim. E2 carries no ASISM claim, and a positive E2 result is not evidence
+  for the contribution.
+- **E2 is in no pre-registered condition set.** `scripts/utils/ham10000_conditions.py` defines v2 as
+  A / B / C2 / D2. Running E2 would need its own protocol entry; that code does not exist and is
+  deliberately not being written before round 3 says whether this branch is reached at all.
+
+**A limitation that holds whichever branch is taken: C2 and D2 overlap heavily.** A read-only dry
+run on 2026-09-23 (nothing written, `final_eval_heldout` not read) shows target policy 5b at N = 300
+meeting every class target — 1,244 images against v1's 616, with vasc at 279 and df at 275 where v1
+stopped at the class floor of 50, which is the §4.2 failure the policy was designed to fix. But
+those targets are a large share of the available candidates (akiec 251 of 486, bcc 213 of 400), so a
+uniform draw of the same size lands on many of the same images: **537 of the 1,244, or 43%, would
+appear in both arms.** The two arms then differ in 57% of their content, which shrinks any
+difference between them; with three seeds and v1's seed SD near 0.06, a null result there is weak
+evidence, not evidence of no effect. This follows from 5b at N = 300 and is independent of which
+score does the ordering. **Neither N nor D2's draw is changed because of it** — it is recorded as a
+limitation and read alongside the result, exactly as §11's noise findings are.
 - **Planned Stage 4 v2 conditions:** C2, D2, B and A. Any v2 result is post-hoc and will be
   reported as such.
+
+### 12.1 The v2 comparison families
+
+*Decided on 2026-09-23, before any v2 Stage 4 run and while round 3 (§11) was still measuring. No
+v2 number of any kind had been produced. Implemented in `scripts/utils/ham10000_conditions.py`,
+commit `0719094`.*
+
+- **Confirmatory family — one test: C2 vs D2 on balanced accuracy**, Holm–Bonferroni corrected
+  (a family of one, so the adjusted p equals the raw p). Balanced accuracy is the primary metric in
+  v2 as in v1.
+- **Exploratory — everything else**, Benjamini–Hochberg corrected and labelled exploratory wherever
+  it appears: C2 vs B, D2 vs B, C2 vs A, D2 vs A and B vs A on every metric, the non-primary metrics
+  of C2 vs D2, and all per-class recall differences.
+
+**Why C2 vs D2 and not C2 vs B.** §2.2 records the absence of a random control as v1's most
+important missing piece, and §2.1 records why C vs B cannot answer the question on its own: C and B
+differ in quantity and in class composition as well as in which images were chosen, so a difference
+between them is not attributable to the selection rule. C2 and D2 differ in the rule and in nothing
+else — the same safe pool, the same per-class counts, the same training budget. It is therefore the
+only comparison in v2 that isolates what ASISM claims to contribute, and it is the only one that
+carries a confirmatory claim. C2 vs B remains informative and is reported, but as exploratory: it
+inherits v1's confound.
+
+**A family of one, deliberately.** Adding C2 vs B to the confirmatory family would halve the
+per-test α under Holm for a comparison that cannot support the claim anyway. The power is spent
+where the question is.
+
+**The equal-count requirement is enforced, not assumed.** D2 is only a control while it has C2's
+per-class counts drawn from a separate draw. `check_training_data_differs` refuses to write the
+Stage 4 table when C2 and D2 differ in their image counts (the comparison would then be a size
+comparison wearing a control's name) or when both read the same manifest (not a separate draw at
+all). The v1 rule that B and C sharing a count signals a fault is unchanged, and still applies to B
+against C2 and against D2.
+
+**Stage 5 support, added afterwards.** When this section was written,
+`scripts/eval/ham10000_stage5_evaluate.py` still named condition C directly, so a v2 run could be
+trained and aggregated but not evaluated. That gap was closed in commit `b8623ff`: Stage 5 takes a
+`--protocol` argument, defaulting to v1, and under v2 it checks the single
+`v2_selection_manifest.json` that covers both C2 and D2 and writes predictions under `stage5_v2/`
+so a follow-up run cannot land on the protected v1 result. The protected split is not read by
+anything described here, and v1's Stage 5 was not re-run.
+
+---
+
+## 13. Post-hoc finding: the classifier trains without augmentation
+
+*Found on 2026-09-23 while reviewing the Stage 4 training recipe, after §1–§12 were written. This
+section records a property of the code that was always true and had not been stated. It changes no
+result and no decision: v1 is frozen, and v2's protocol was fixed before this was noticed.*
+
+**Where it belongs.** This is a limitation of the classifier protocol, so its natural home is §6.
+§1–§12 are kept unchanged so the v1 record stays exactly as it was when `final_eval_heldout` was
+read, which is why it is appended here instead. Read it as an addition to §6.
+
+### 13.1 What the code does
+
+`LesionRecordDataset.__getitem__` (`scripts/utils/ham10000_classifier.py:46–60`) is the entire
+input pipeline for every Stage 4 condition:
+
+1. open the file and convert to RGB;
+2. resize to the configured resolution with bicubic interpolation, if it is not already that size;
+3. divide by 255;
+4. HWC → CHW;
+5. normalise to [−1, 1].
+
+There is no horizontal or vertical flip, no rotation, no random crop or scale jitter, no colour or
+brightness jitter, and no cutout. The word `transforms` does not appear in
+`ham10000_classifier.py` or in `ham10000_train_conditions.py`. Training and validation see the
+identical deterministic transform; the only stochasticity in an epoch is the shuffle order.
+
+`train_classifier` uses AdamW at a fixed learning rate with no scheduler — no warmup, no cosine or
+step decay. (The absence of early stopping and checkpoint selection is *deliberate* and already
+recorded in §6: it avoids tuning on validation data. The absence of augmentation and of a scheduler
+was not a decision; it is a gap.)
+
+### 13.2 Why it matters
+
+- Dermoscopy images have no canonical orientation: a lesion photographed rotated or mirrored is the
+  same lesion with the same diagnosis. Flips and rotations are therefore label-preserving here in a
+  way they are not for, say, handwritten digits. They are standard practice on this dataset.
+- The over-fitting already recorded in §6 is consistent with this. Condition A trains for 3,000
+  steps at batch size 32 over 1,641 images — about 58 epochs — and reaches a training loss near
+  10⁻³. Every one of those 58 passes shows the network the *same pixels*.
+- The rare classes are where this costs most. df and vasc have the fewest real images, so they are
+  the classes for which a finite set of exact repeats is furthest from a description of the class.
+
+### 13.3 What it does and does not explain
+
+**It does not explain the confirmatory result.** The transform is identical for A, B, C and for the
+v2 conditions A, B, C2, D2. It raises or lowers the absolute level of every condition together and
+cannot produce a difference between them. Specifically, it is **not** a candidate explanation for C
+trailing B (§2.1), nor for df recall of 0.20 under C relative to the other conditions.
+
+**It plausibly depresses the absolute numbers.** Every figure in §1 — condition C's balanced
+accuracy of 0.612, B's 0.645, A's 0.566 — was measured without augmentation. A comparable recipe
+with flips and rotations would be expected to score higher. How much higher is unknown and is not
+asserted here: no such run exists, and none is planned for the protected split.
+
+### 13.4 What is not being done about it
+
+- **v1 is frozen.** `final_eval_heldout` has been read once. Re-training v1 with augmentation and
+  re-measuring on that split would replace a held-out result with a tuned one, which is the one
+  thing §7 says cannot be undone. No v1 run will be repeated.
+- **v2 is frozen too.** v2's conditions, selection rules and training budget were fixed before this
+  finding (§12, §12.1). Adding augmentation to v2 now would change the recipe after a limitation was
+  noticed, and would confound the comparison v2 exists to make. v2 runs on the recipe as recorded.
+- **Any future test is a separate experiment.** Adding augmentation would be a sensitivity
+  experiment with its own protocol, measured on `classifier_val` only, reported as a statement about
+  the training recipe and never as a v1 or v2 result. `final_eval_heldout` would not be read for it.
+
+### 13.5 How to report it
+
+As a limitation of the training recipe, in §6's terms: the classifier was trained without data
+augmentation and without a learning-rate schedule, so the absolute performance figures in §1 should
+be read as a floor for this architecture and budget rather than as its ceiling. The comparisons
+between conditions are unaffected, because every condition was trained under the identical
+transform.
+
+---
+
+## 14. Post-hoc correction: the utility baseline was a single run, and an outlier
+
+*Found on 2026-09-24 during the utility-supervision audit, after round 3 (§11) finished. This
+section corrects the reading of one number in §3.1. It changes no v1 result: the baseline is a
+constant subtracted from all 80 labels, so it shifts every label by the same amount and cannot
+change their order, the selection, or anything in §1–§2. §3.1's own wording is left unedited; this
+is how to read it.*
+
+### 14.1 What the number was
+
+Every one of the 80 utility labels is `balanced accuracy with the subset` minus
+`balanced accuracy of a real-only baseline`. That baseline was measured **once**
+(`utility_baseline.json`, seed 42) and reused for all 80 subsets — deliberately, to avoid paying for
+80 identical retrainings. Its value was **0.5136**, and §3.1 reports that only 32 of 80 subsets beat
+it.
+
+Round 1 of the noise-floor diagnostic re-trained that same real-only baseline under the same proxy
+recipe (224 px, 300 steps) at four seeds:
+
+| | balanced accuracy |
+|---|---|
+| v1 baseline, single run, seed 42 | **0.5136** |
+| Round 1 baseline, seeds 42 / 43 / 44 / 45 | 0.4675 / 0.4529 / 0.4737 / 0.4556 |
+| Round 1 baseline, mean of four | **0.4624** |
+
+The v1 baseline sits **+0.051 above** that mean and **outside the whole observed range**
+[0.4529, 0.4737]. The seed-42 runs alone differ by 0.046 between the two, at the same seed and the
+same recipe — so this is not seed noise but environment: a different pod, GPU and commit. A single
+proxy run is not a fixed quantity even with the seed held.
+
+### 14.2 What that means for §3.1
+
+The subtracted constant was about five points too high, so **every** label was pushed five points
+negative. The count "32 of 80 above baseline" therefore measures the baseline run, not the subsets.
+Re-measured against a four-seed baseline of the same recipe, **all twelve** of the subsets that
+round 1 re-ran come out positive, between +0.007 and +0.078.
+
+The corrected statement is: at the v1 proxy budget, adding 60–180 synthetic images to 1,641 real
+ones **raised** the proxy's balanced accuracy on `asism_tuning_heldout`, by roughly +2 to +7 points
+depending on the subset. §11's interpretation already said this from the round-1 and round-2 data
+("adding synthetic images does help the proxy"); §3.1's count is the same fact read through one bad
+constant.
+
+### 14.3 What does *not* change
+
+- **No v1 artifact changes.** The offset is identical for all 80 labels, so the ranking the set
+  model was trained on is unaffected, and so are `ranking_scores.parquet`, the selection, and every
+  number in §1–§2 and §5.
+- **§3.1's headline still holds.** "The utility signal is weak relative to its noise" is confirmed,
+  not weakened, by §11: at this budget the between-subset SD is 0.0134 against a within-subset SD of
+  0.0332.
+- **Nothing is re-run.** v1 is frozen and `final_eval_heldout` is not read again.
+
+### 14.4 Why a single-run baseline was fragile, recorded for the redesign
+
+The audit found the mechanism, and it is not the number of seeds. Balanced accuracy on
+`asism_tuning_heldout` averages recall over seven classes, and that split holds **13 df images** and
+**20 vasc images**. One df image changing its prediction moves df recall by 1/13 and therefore moves
+balanced accuracy by 1/(7×13) = **0.011**. The between-subset SD this diagnostic is trying to
+resolve is **0.0134**. The finest step the instrument can take is about the size of the entire
+quantity being measured, which is why a single run — of the baseline or of any subset — is not a
+usable label, and why macro AUROC, which is continuous and not quantised by a 13-image class,
+produced the highest ICC of the three rounds (§11).
+
+This is recorded here as the finding. What to do about it belongs to the supervision redesign, which
+is a separate piece of work and is not implemented by this section.
