@@ -104,7 +104,17 @@ def synthetic_records(manifest_path: Path) -> list[dict]:
     return records
 
 
-def build_condition_records(config, condition: str) -> tuple[list[dict], list[dict], dict]:
+def resolve_synthetic_manifest(config, condition: str, seed: int | None):
+    """The condition's synthetic manifest path, with {seed} filled for a per-seed control (D)."""
+    manifest = config.conditions[condition].synthetic_manifest
+    if manifest and "{seed}" in str(manifest):
+        if seed is None:
+            raise Stage4ConfigError(f"condition {condition!r} has a per-seed manifest; a seed is required")
+        manifest = str(manifest).replace("{seed}", str(int(seed)))
+    return manifest
+
+
+def build_condition_records(config, condition: str, seed: int | None = None) -> tuple[list[dict], list[dict], dict]:
     namespace = str(config.split_namespace)
     split_dir = Path(config.paths.splits_root) / namespace
     images_root = Path(config.paths.images_root) / namespace
@@ -115,18 +125,34 @@ def build_condition_records(config, condition: str) -> tuple[list[dict], list[di
     if not train or not selection:
         raise Stage4ConfigError(f"no preprocessed images found for {real_split} ({len(train)}) or {selection_split} ({len(selection)})")
 
-    manifest = config.conditions[condition].synthetic_manifest
+    manifest = resolve_synthetic_manifest(config, condition, seed)
     synthetic = synthetic_records(Path(manifest)) if manifest else []
     provenance = {
         "real_train_split": real_split,
         "real_train_images": len(train),
         "synthetic_manifest": str(manifest) if manifest else None,
         "synthetic_images": len(synthetic),
+        "synthetic_manifest_sha256": hashlib.sha256(Path(manifest).read_bytes()).hexdigest() if manifest else None,
+        "synthetic_ids_sha256": hashlib.sha256("\n".join(sorted(r["image_id"] for r in synthetic)).encode()).hexdigest() if synthetic else None,
         "selection_split": selection_split,
         "selection_images": len(selection),
         "split_csv_sha256": {name: hashlib.sha256((split_dir / f"{name}.csv").read_bytes()).hexdigest() for name in (real_split, selection_split)},
     }
     return train + synthetic, selection, provenance
+
+
+def write_selection_predictions(path: Path, records: list[dict], probabilities, condition: str, seed: int) -> None:
+    """One row per selection-split image, in the layout the Stage 5 comparison reads."""
+    frame = pd.DataFrame({
+        "image_id": [str(r["image_id"]) for r in records],
+        "lesion_id": [str(r.get("lesion_id")) for r in records],
+        "true_class_index": true_class_indices(records),
+        "condition": condition,
+        "seed": int(seed),
+    })
+    for index, label in enumerate(CLASSIFIER_TARGET_LABELS):
+        frame[f"prob_{label}"] = probabilities[:, index]
+    frame.to_parquet(path, index=False)
 
 
 def run(config, condition: str, seed: int, device: str | None = None, protocol_name: str = DEFAULT_PROTOCOL) -> dict:
@@ -136,7 +162,7 @@ def run(config, condition: str, seed: int, device: str | None = None, protocol_n
 
     import torch
 
-    train_records, selection_records, provenance = build_condition_records(config, condition)
+    train_records, selection_records, provenance = build_condition_records(config, condition, seed)
     training = config.training
     budget = TrainingBudget(
         max_steps=int(training.max_steps),
@@ -160,6 +186,8 @@ def run(config, condition: str, seed: int, device: str | None = None, protocol_n
     out_dir.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), out_dir / "model.pt")
     write_json(out_dir / "selection_metrics.json", {"split": str(config.selection_split), **metrics})
+    # The monitoring split's probabilities, so its comparison can be bootstrapped without retraining.
+    write_selection_predictions(out_dir / "selection_predictions.parquet", selection_records, probabilities, condition, seed)
     manifest = {
         "dataset": "ham10000",
         "protocol": protocol_name,

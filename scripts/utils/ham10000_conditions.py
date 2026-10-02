@@ -137,7 +137,67 @@ V2 = ConditionProtocol(
     stage5_dirname="stage5_v2",
 )
 
-PROTOCOLS = {protocol.name: protocol for protocol in (V1, V2)}
+# ASISM v2 final (docs/ham10000_asism_v2_final_protocol.md), frozen before any E4 result. Which of
+# the two applies is decided by the E4 verdict alone: COARSE -> asism_v2, NO -> asism_v2_none.
+_ASISM_V2_SELECTION = SelectionManifest(
+    config="ham10000_asism_v2_selection.yaml",
+    section="ham_asism_v2_selection",
+    filename="asism_v2_selection_manifest.json",
+    covers=("C", "D"),
+    rebuild_command=(
+        "python -m scripts.followup.ham10000_asism_v2_select --namespace {namespace} --candidates <csv> "
+        "--scores-dir <four_signal set> --gonogo-report <report> --e4-consequences <e4_consequences.json>"
+    ),
+    evidence_keys=("e4_verdict", "q_star", "per_class", "n_selected_c", "n_selected_d", "c_ids_sha256"),
+)
+
+ASISM_V2 = ConditionProtocol(
+    name="asism_v2",
+    stage4_config="ham10000_asism_v2_stage4.yaml",
+    conditions=("A", "B", "C", "D"),
+    baseline="A",
+    synthetic_conditions=("B", "C", "D"),
+    confirmatory=(("C", "D"),),
+    exploratory=(("C", "B"), ("D", "B"), ("C", "A"), ("D", "A"), ("B", "A")),
+    equal_counts_suspect=(("B", "C"), ("B", "D")),
+    equal_counts_required=(("C", "D"),),
+    interpretation=(
+        "C vs D is the confirmatory test of ASISM v2's within-class ranking: the same safe pool, "
+        "the same E4-derived number of images per class, the ranking the only difference. The "
+        "count itself is E4's result, not tested here. Comparisons with A and B are exploratory. "
+        "Every p-value is reported with its effect size and interval; significance alone is not a "
+        "result."
+    ),
+    selection_manifest=_ASISM_V2_SELECTION,
+    stage5_dirname="stage5_asism_v2",
+)
+
+ASISM_V2_NONE = ConditionProtocol(
+    name="asism_v2_none",
+    stage4_config="ham10000_asism_v2_stage4.yaml",
+    conditions=("A", "B"),
+    baseline="A",
+    synthetic_conditions=("B",),
+    confirmatory=(),
+    exploratory=(("B", "A"),),
+    equal_counts_suspect=(),
+    equal_counts_required=(),
+    interpretation=(
+        "E4 = NO: ASISM v2 adds no synthetic image (q* = 0), so C = A and D does not exist. There is "
+        "no selection comparison to make. B vs A is reported, exploratory."
+    ),
+    selection_manifest=SelectionManifest(
+        config="ham10000_asism_v2_selection.yaml",
+        section="ham_asism_v2_selection",
+        filename="asism_v2_selection_manifest.json",
+        covers=(),
+        rebuild_command=_ASISM_V2_SELECTION.rebuild_command,
+        evidence_keys=("e4_verdict", "q_star"),
+    ),
+    stage5_dirname="stage5_asism_v2",
+)
+
+PROTOCOLS = {protocol.name: protocol for protocol in (V1, V2, ASISM_V2, ASISM_V2_NONE)}
 DEFAULT_PROTOCOL = "v1"
 
 

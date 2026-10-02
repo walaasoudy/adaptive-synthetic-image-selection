@@ -1,0 +1,44 @@
+# HAM10000 ASISM v2 — the final selection: condition C and its matched random control D.
+#
+# Frozen 2026-10-02, before any E4 result had been read (docs/ham10000_asism_v2_final_protocol.md).
+# Nothing below may change after an E4, Stage 4 or Stage 5 result is seen.
+#
+# HOW MANY comes from E4 alone (docs/ham10000_e4_verdict_consequences.md, V1 + V3), read from
+# e4_consequences.json. This file never sets a count. WHICH comes from the ranking below.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  outputs_dir: ${paths.project_root}/outputs/ham10000/stage3_asism_v2
+
+real_train_split: "classifier_train"
+
+# The four signals the gate admitted (docs/ham10000_v2_gonogo_four_signals.md). The selector refuses
+# a Go/No-Go report whose surviving set differs.
+admitted_signals: ["similarity", "iqa", "uncertainty", "explainability"]
+
+ranking:
+  # The equal-weight reference composite already defined by the gate
+  # (scripts/asism/ham10000_02_gonogo.py, PRIMARY_SCORE_COLUMN + check_usefulness): each scored
+  # signal contributes its headline column, min-max normalised WITHIN the class; the composite is
+  # their mean; a missing composite takes the class minimum. No weight, direction or column is new.
+  method: "equal_weight_within_class_minmax"
+  # Which admitted signals are scored, and why the other two are not. Admission by the gate is not a
+  # role in the ranking (docs/ham10000_v2_gonogo_four_signals.md: "this gate does not start ... ranking").
+  #   similarity, explainability  scored; both have an a-priori direction (higher is better).
+  #   iqa          safety filter only (safety.reject_invalid_iqa below), never a ranking input:
+  #                v2 decision of 2026-09-27 ("IQA: keep, but as a safety filter"), contract §6.
+  #   uncertainty  not scored: no a-priori direction (PRIMARY_SCORE_COLUMN None; methodology §3.3).
+  scored_signals: ["similarity", "explainability"]
+  # Ties are broken by image_id so the order is a pure function of the scores.
+  tie_break: "image_id_ascending"
+
+safety:
+  reject_invalid_iqa: true
+  reject_near_duplicates: true
+
+# D: for each Stage 4 seed s, an independent uniform draw without replacement from the SAFE pool of
+# each class, at C's per-class counts, with numpy.random.default_rng([draw_seed_base, s]). One draw
+# per seed, so D's spread carries the variation of random selection as well as of training.
+d:
+  draw_seed_base: 20261002
+  source_pool: "safe"

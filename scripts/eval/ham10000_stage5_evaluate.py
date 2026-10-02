@@ -69,6 +69,8 @@ FINAL_EVAL_SPLIT = "final_eval_heldout"
 def conditions_phrase(conditions) -> str:
     """condition C / conditions C2 and D2, so a refusal names what it is actually about."""
     names = list(conditions)
+    if not names:
+        return "the protocol (no selected condition)"
     if len(names) == 1:
         return f"condition {names[0]}"
     return "conditions " + ", ".join(names[:-1]) + " and " + names[-1]
