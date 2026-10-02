@@ -246,3 +246,68 @@ value of the column had been read.
   reproduces `uncertainty_band`.
 - **No second verdict:** no result existed under the old wording, so there is none to report beside
   the new one.
+
+### Amendment 2 — 2026-10-02, after v3a was trained and before any v3 signal exists: applying the rule to v3
+
+v3a finished on 2026-10-02 and passed acceptance on `classifier_val`. Cross-validation chose step 1500,
+with a pooled out-of-fold balanced accuracy of 0.618 and no tie within 0.005. The final model scored
+balanced accuracy 0.582 and macro-F1 0.569, and no class had zero recall. Its identity is
+`ham10000-classifier:6849c456a9581c598a423b93b9c2cdbdbb79118fd6d31c72fe68eefcbe5f8bfd`.
+
+This amendment was written before the v3 Grad-CAM reference or any v3 signal was computed. No
+synthetic image had been scored by v3, so no Q1–Q5 number for v3 existed.
+
+**Which classifier is frozen for the recompute (decided by Walaa, 2026-10-02).** v3a is the frozen
+auxiliary classifier for the three classifier-dependent signals, because it passed acceptance criteria
+A and B unchanged. Its balanced accuracy on `classifier_val` is 0.018 below v2's 0.600, and that gap
+decides nothing:
+
+- it is smaller than the seed-to-seed spread measured on this recipe, which is about 0.04;
+- the criteria judge a classifier by how it reads the synthetic pool (Q1, Q2), not by its real
+  balanced accuracy;
+- v2 has already failed Q1 and Q2, so it is not a fallback.
+
+Both classifiers are **not** scored on the synthetic pool so that the better-looking one can be kept.
+That would choose the instrument after seeing its output.
+
+**The rule, applied to v3 as written.** Q1–Q5, every threshold in this document, and the decision
+table are applied to v3 unchanged. v1 and v2 are reported beside it for comparison only. The rows of
+the decision table are read with "v3" in place of "v2":
+
+| v3 outcome | Next step |
+|---|---|
+| Q1 sensible, Q2 not influential, Q4 discriminative in ≥ 4 classes | v3 is sufficient. Move on to U1 (utility). |
+| Q1 sensible, Q2 not influential, Q4 discriminative in < 4 classes | v3 is sufficient, and explainability is recorded as a weak signal. |
+| Q1 and Q2 pass, Q3 degenerate | Step v3b (temperature scaling), as written above. |
+| Q1 not sensible, or Q2 influential | Training length was not the cause. The next change is chosen from the evidence and written here before it is tried. It is not chosen now. |
+
+**v3's real recall, for Q1's normalisation.** These are the correct predictions and the support per
+class, from the diagonal and row sums of the v3 acceptance confusion matrix
+(`selection_metrics.json`, `classifier_val`, 1,401 images):
+
+| nv | mel | bkl | bcc | akiec | vasc | df |
+|---|---|---|---|---|---|---|
+| 786/955 | 92/149 | 98/149 | 50/68 | 19/45 | 11/20 | 4/15 |
+
+**A caution recorded before the result.** v3 predicts mel far more often than v2 does:
+
+- 100 of the 955 real nv images in `classifier_val` were predicted mel;
+- the precision for mel is 0.387.
+
+So a higher mel match rate for synthetic mel is not on its own evidence that v3 recognises synthetic
+mel. It could come from a general shift towards predicting mel. Q1's normalisation by real recall
+covers part of this. The v3 mel match rate is to be read together with three things:
+
+- its normalised value;
+- how often synthetic nv is predicted mel;
+- the mel share of all mismatches.
+
+This caution changes no threshold and adds no criterion. It says how a passing number is to be read,
+and it is written now so that it cannot be written to suit the result.
+
+**Unchanged:**
+
+- similarity and IQA;
+- the v1 and v2 artifacts, which are not rewritten;
+- every threshold;
+- the out-of-scope list above.
