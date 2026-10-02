@@ -311,3 +311,122 @@ and it is written now so that it cannot be written to suit the result.
 - the v1 and v2 artifacts, which are not rewritten;
 - every threshold;
 - the out-of-scope list above.
+
+### Amendment 3 — 2026-10-02, after the v3 verdict and before any probe exists: the next step, chosen from the evidence
+
+**The v3 outcome, under Amendment 2 as written.** The v3 signals were computed on 2026-10-02 from
+commit `357f98b`. The v1, v2 and Stage 2 files were hash-identical before and after the run. The
+diagnostic gave:
+
+- Q1 **not sensible**:
+  - one class at or below chance (bkl, 1.8%);
+  - Spearman 0.321, below 0.5.
+- Q2 **influential**:
+  - mel predicted nv 84.8% (234/276);
+  - nv receives 89.4% of all mismatches.
+- Q3 not degenerate, Q4 discriminative in 6 classes, Q5 no redundant pair.
+
+The row "Q1 not sensible, or Q2 influential" applies: **training length was not the cause.** The
+reading aids of Amendment 2 show that the rise in the mel match rate (0.4% to 15.2%) is not a
+general shift towards mel. Only 1 of 112 synthetic nv images was predicted mel, and mel takes 3.1%
+of all mismatches.
+
+**What the evidence does and does not say.**
+
+- The v3 classifier recognises real mel (recall 0.617) but reads 84.8% of synthetic mel as nv.
+- v2 and v3 were both trained with inverse-frequency class weights. The nv share of the training
+  data is therefore already compensated in the loss.
+- The DINOv2 check (`docs/ham10000_synthetic_separability.md`, S3) found that synthetic mel and bkl
+  lean towards nv **less** than real ones do.
+
+Two explanations remain, and the evidence so far does not separate them:
+
+1. **Classifier-specific.** The DenseNet classifier responds to the synthetic images differently
+   from real ones, through domain shift or reliance on cues the synthetic images lack.
+2. **Class fidelity.** The synthetic images do not carry the features by which real mel is
+   recognised. They may still be separable by a cue of the generator's own, which is what S1's
+   higher synthetic separability would also allow.
+
+**The next step: an independent probe (P1).** A second classifier is trained on real images only,
+from features that are not DenseNet's, and is read on the synthetic pool with the same Q2.
+
+- If it does not read synthetic mel as nv, the behaviour is specific to the DenseNet classifier.
+- If it does, real-trained classifiers of two kinds agree, and the images become the likelier
+  cause.
+
+**P1, fixed now:**
+
+- **Features:**
+  - the DINOv2 embeddings of the separability check;
+  - `ham10000_work/separability/embeddings.npz`, sha256 `a82b9311…`;
+  - encoder `vit_small_patch14_dinov2`, 384 dimensions;
+  - 3,586 real `gen_train` images and 3,168 synthetic candidates.
+  - Each vector is L2-normalised.
+- **Model:** multinomial logistic regression with a weight matrix and a bias. The loss is the
+  class-weighted mean cross-entropy plus 1e-4 × the squared L2 norm of the weights (not the bias).
+  - The weights are inverse-frequency, normalised to mean 1 (`class_weights_from_records`), as for
+    v2 and v3.
+  - 1e-4 is the weight decay of the v2 and v3 recipe. It is a single value and is not tuned.
+  - Optimiser: full-batch L-BFGS from zeros, run until the loss changes by less than 1e-9 or 1,000
+    iterations.
+- **Real-data check (cross-validation):**
+  - five lesion-grouped folds on the real `gen_train` images, `lesion_grouped_folds` with seed 42;
+  - lesion ids come from `HAM10000_metadata.csv`;
+  - out-of-fold predictions give the probe's real recall per class.
+- **Validity gate:** the out-of-fold predictions must pass the auxiliary classifier's own acceptance
+  criteria A and B:
+  - balanced accuracy > 0.478;
+  - no class with zero recall.
+  - A probe that fails the gate says nothing about the synthetic images.
+- **Synthetic scoring:**
+  - the probe is refitted on all 3,586 real images;
+  - it predicts the 3,168 synthetic candidates;
+  - Q1 and Q2 are computed exactly as defined above;
+  - Q1 is normalised by the probe's own out-of-fold real recall.
+
+**Decision table for P1.** It is read on Q2 alone, because Q2 is the question that failed and the
+one the two explanations disagree on. Q1 for the probe is reported beside it.
+
+| P1 outcome | Reading | Next step |
+|---|---|---|
+| Gate fails | P1 is not informative | Recorded as it is. Walaa decides; nothing is retried with other settings. |
+| Gate passes, Q2 not influential | The nv reading is specific to the DenseNet classifier | A classifier-side change, chosen and written here before it is tried |
+| Gate passes, Q2 influential | Two kinds of real-trained classifier read synthetic mel as nv; class fidelity is the likelier cause | A generator-side step, chosen and written here before it is tried |
+
+Q2 is influential if either of its two conditions holds, as above. Which condition held is reported,
+and a result that rests on one condition only is said to be so.
+
+**Descriptive only.** These decide nothing.
+
+- **D1, near or far misses.** These are the 234 synthetic mel images that v3 predicted nv.
+  - Read from `agreement_intended_prob` (mel), `agreement_best_rival_prob` (nv) and
+    `agreement_margin`.
+  - Reported: the median and quartiles of p(mel).
+  - Reported: the share where mel is certainly the runner-up, that is
+    p(mel) > 1 − p(nv) − p(mel).
+  - The full probability vector was not stored, so the exact rank of mel is not known when this
+    condition fails.
+- **D2, does DenseNet agree with DINOv2?**
+  - For every synthetic mel image, take its cosine similarity to the real mel centroid minus its
+    similarity to the real nv centroid. The centroids are built from all real `gen_train` images.
+  - Compare the 42 images v3 read as mel with the 234 it read as nv.
+  - Reported: the medians and the difference, with a 95% bootstrap interval (1,000 resamples,
+    seed 42).
+
+**Dropped, with the reason, before any value was read:**
+
+- **A prior correction of the v3 logits.** v3 was trained with inverse-frequency weights, so its
+  outputs do not carry the training prior in a form that can be subtracted once. Adjusting them
+  would correct twice, and the full logits were not stored.
+- **A comparison across generation settings.** `all_candidates.csv` records only a seed, distinct
+  for every image. No prompt, guidance or other setting varies, so there is nothing to group by.
+
+**Deferred.** A blind visual audit of synthetic mel, predicted mel against predicted nv:
+
+- the full candidate images are on the network volume only;
+- it is exploratory, not a clinical reading;
+- it is done only if Walaa asks for it.
+
+**Out of scope:** the generator, the v3 classifier and its signals, similarity and IQA, the ranking
+network, thresholds, selection, Stage 4 and the final evaluation. P1 reads existing files and runs on
+the CPU.
