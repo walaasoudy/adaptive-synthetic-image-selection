@@ -457,6 +457,57 @@ def test_class_structure_alone_does_not_manufacture_redundancy(workspace):
     assert set(result["per_class"]["agreement"]) == set(labels)
 
 
+def _two_signals_by_class(signs: dict[str, int], per_class: int = 60, seed: int = 21):
+    """iqa and agreement locked together within every class, with the given sign per class."""
+    rng = np.random.default_rng(seed)
+    image_ids, names, iqa, agreement = [], [], [], []
+    for name, sign in signs.items():
+        base = rng.normal(0, 1, per_class)
+        image_ids += [f"SYN_{name}_{index:03d}" for index in range(per_class)]
+        names += [name] * per_class
+        iqa += list(base)
+        agreement += list(sign * base + rng.normal(0, 0.05, per_class))
+    merged = pd.DataFrame({"iqa_composite": iqa, "agreement_score": agreement}, index=image_ids)
+    return merged, pd.Series(names, index=image_ids)
+
+
+def test_opposite_signs_across_classes_do_not_cancel_redundancy(workspace):
+    """The bug this guards: +0.98 in some classes and -0.98 in others averaged to near zero."""
+    from scripts.asism.ham10000_02_gonogo import check_redundancy
+
+    signs = {"nv": -1, "mel": +1, "bkl": +1, "bcc": -1, "akiec": +1, "vasc": -1, "df": +1}
+    merged, diagnoses = _two_signals_by_class(signs)
+    result = check_redundancy(merged, diagnoses, "iqa", _config())
+
+    per_class = result["per_class"]["agreement"]
+    assert all(abs(rho) > 0.95 for rho in per_class.values())
+    assert all(np.sign(per_class[name]) == sign for name, sign in signs.items())
+    assert abs(result["signed_correlations_diagnostic_only"]["agreement"]) < 0.2  # what the old rule saw
+    assert result["correlations"]["agreement"] > 0.95
+    assert result["max_abs_correlation"] > 0.95
+    assert result["method"] == "class_size_weighted_within_class_abs_spearman"
+    assert result["passed"] is False
+
+
+def test_same_sign_classes_give_the_same_aggregate_as_the_signed_rule(workspace):
+    from scripts.asism.ham10000_02_gonogo import check_redundancy
+
+    for sign in (+1, -1):
+        merged, diagnoses = _two_signals_by_class({name: sign for name in ["nv", "mel", "bkl", "bcc", "akiec", "vasc", "df"]})
+        result = check_redundancy(merged, diagnoses, "iqa", _config())
+        signed = result["signed_correlations_diagnostic_only"]["agreement"]
+        assert result["correlations"]["agreement"] == pytest.approx(abs(signed))
+        assert result["passed"] is False
+    # and with no redundancy at all, both read low and the check passes
+    rng = np.random.default_rng(5)
+    labels = ["nv", "mel", "bkl", "bcc", "akiec", "vasc", "df"]
+    ids = [f"SYN_{name}_{index:03d}" for name in labels for index in range(60)]
+    merged = pd.DataFrame({"iqa_composite": rng.normal(size=len(ids)), "agreement_score": rng.normal(size=len(ids))}, index=ids)
+    result = check_redundancy(merged, pd.Series([n for n in labels for _ in range(60)], index=ids), "iqa", _config())
+    assert result["passed"] is True
+    assert result["threshold"] == pytest.approx(0.90)
+
+
 def test_a_signal_that_changes_nothing_about_the_selection_is_ablation_only():
     """Measured directly on the check: a score whose within-class ranking already matches the
     composite of the others keeps exactly the same candidates whether it is weighted or not."""
