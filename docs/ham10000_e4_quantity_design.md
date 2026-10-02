@@ -46,18 +46,57 @@ everything else identical across runs.
 
 ## 4. Pre-registered decision rule
 
-Let U(s) be the mean primary metric over the 10 runs at size s. Let Δk = U(sk) − U(sk−1) for
-adjacent sizes, with a 95% Welch interval over runs.
+Every quantity below is computed from the run records alone. No threshold is chosen, rounded or
+moved after any result exists.
+
+**Data.**
+
+- Sizes S = (s0, …, s5) = (0, 250, 500, 1000, 2000, N), where N is the size of the safe pool.
+- R(s) is the set of 10 runs at size s:
+  - s = 0: seeds 42–51;
+  - s > 0: chains 1 and 2 × seeds 42–46.
+- y(r) is run r's macro AUROC (one-vs-rest, mean over the 7 classes), computed on
+  `asism_tuning_heldout` from that run's own predictions. Seeds are not averaged, and probabilities
+  are not ensembled.
+- U(s) is the mean of y(r) over R(s).
+
+**Comparison of two sizes a < b.**
+
+- D(a, b) = U(b) − U(a).
+- SE = √(var_a/10 + var_b/10), with sample variances (ddof = 1).
+- Welch–Satterthwaite degrees of freedom.
+- The 20 runs are treated as independent: no pairing by seed or chain.
+
+**The two tests.**
+
+1. **Overall effect.** Δall = D(s0, s5). It passes if and only if the lower end of its two-sided
+   95% Welch interval is > 0.
+2. **Marginal steps beyond the first.**
+   - Δk = D(sk−1, sk) for k = 2, 3, 4, 5, that is 250→500, 500→1000, 1000→2000 and 2000→N.
+   - Each is tested one-sided, H0: Δk ≤ 0 against H1: Δk > 0, with a Welch t.
+   - The four p-values are Holm-adjusted together at familywise α = 0.05.
+   - Step k is **resolved** if and only if its Holm-adjusted p ≤ 0.05.
+   - Δ1 (0→250) is reported but is not part of the rule. The overall test already covers whether
+     adding synthetic images helps at all.
+
+**Outcomes.** These are exhaustive and mutually exclusive, and are evaluated at full floating-point
+precision.
 
 | Outcome | Condition | What follows |
 |---|---|---|
-| **GO** | U(all) − U(0) has lower 95% bound > 0, **and** at least one Δk with k ≥ 2 (beyond 0 → 250) has lower bound > 0 | Marginal utility is resolvable past the first step, so a stopping rule has a signal to stop on. Next: the E4b per-class design (§8), then the quantity mechanism. |
-| **COARSE** | U(all) − U(0) has lower bound > 0, but no Δk with k ≥ 2 does | Adding synthetic images helps, but the marginal utility beyond the first step cannot be resolved. No learned stopping rule. Quantity is set by a pre-written rule and reported as a limitation. |
-| **NO** | U(all) − U(0) has lower bound ≤ 0 | At the Stage 4 recipe, quantity is not measurable either. SC2 applies to quantity, and the thesis reports this as a finding. |
+| **GO** | Δall passes **and** at least one of Δ2–Δ5 is resolved | Marginal utility is resolvable past the first step, so a stopping rule has a signal to stop on. Next: the E4b per-class design (§8), then the quantity mechanism. |
+| **COARSE** | Δall passes **and** none of Δ2–Δ5 is resolved | Adding synthetic images helps, but the marginal utility beyond the first step cannot be resolved. No learned stopping rule. Quantity is set by a pre-written rule and reported as a limitation. |
+| **NO** | Δall does not pass, whatever the steps show | At the Stage 4 recipe, quantity is not measurable either. SC2 applies to quantity, and the thesis reports this as a finding. |
 
-The rule is applied once, on the primary metric, with the full curve, both chains pooled, and every
-interval reported. The rule, the sizes, the seeds and the metric are not revised after results, and
-no outcome is followed by "one more" run.
+**Integrity.**
+
+- The analysis refuses an incomplete or duplicated grid, and gives no verdict on part of the grid.
+- A run that crashes is re-run in the same cell, with the same seed and the same chain. No cell is
+  added, replaced or dropped.
+- The rule is applied once, to the primary metric. Secondary metrics and per-chain curves are
+  reported (§5) and decide nothing.
+- The rule, the sizes, the seeds, the metric, α and the Holm family are not revised after results,
+  and no outcome is followed by "one more" run.
 
 ## 5. Reported regardless of outcome
 
