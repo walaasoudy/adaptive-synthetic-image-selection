@@ -528,3 +528,75 @@ signed per-class ρ.
 - On the v3 signal set (v1 similarity and IQA with the v3 classifier signals), agreement against
   uncertainty moves from a signed 0.118 to an |ρ| aggregate of 0.795.
 - That is still below 0.90, so all five signals remain "include", as before the fix.
+
+### Amendment 6 — 2026-10-02, before J1 exists: the agreement-judge protocol and its one candidate
+
+The agreement signal needs a judge that reads the synthetic pool validly. Two candidates are already
+on record:
+
+- V3a DenseNet: fails Q1 and Q2 (Amendment 3);
+- P1b DINOv2 probe: fails Q1 (Spearman 0.000), because its mismatches sink into df (Amendment 4).
+
+Neither is accepted.
+
+This amendment names **one** new candidate, J1, and fixes its acceptance criteria before J1 is
+trained. If J1 fails, no further judge is tried against this synthetic pool, and ASISM v2 runs
+without the agreement signal. That consequence was decided by Walaa on 2026-10-02.
+
+**Why this candidate.** P1b's failure sits on its weakest real classes. df has 25 training images in
+`classifier_train`, and P1b recalled 4 of 15 df images in `classifier_val`. The inverse-frequency
+weight of a class that small pulls synthetic errors towards it. The direct remedy is more real data
+of the same kind. P1, trained on `gen_train` (38 df images), did not show the sink. This choice is
+informed by P1 and P1b on the same synthetic pool, which limits how much J1's pass on that pool can
+show. That is recorded as a limitation.
+
+**J1, fixed now:**
+
+- **Features:** the same pinned DINOv2 embeddings as P1 and P1b. The synthetic and `gen_train`
+  embeddings have sha256 `a82b9311…`; the `classifier_train` and `classifier_val` embeddings have
+  sha256 `d76f3daa…`. Both files must record the same encoder, weights revision and weights sha256.
+  Every vector is L2-normalised.
+- **Training data:** `gen_train` together with `classifier_train`, 3,586 + 1,641 = 5,227 real
+  images. The two splits are lesion-disjoint, and this is checked at run time.
+- **Model:** unchanged from P1 and P1b:
+  - multinomial logistic regression;
+  - inverse-frequency class weights computed on the training data;
+  - L2 penalty 1e-4 on the weights;
+  - L-BFGS from zeros, tolerance 1e-9, at most 1,000 iterations.
+- **Validation data:** `classifier_val` (1,401), used for criteria V1 and V2 only.
+- **Agreement score:** the existing formula with the judge's softmax probabilities
+  (`compute_agreement_scores`, rival threshold 0.5, penalty weight 0.5). There is no temperature
+  scaling or other calibration, since either would be a tuned choice.
+
+**Acceptance criteria.** J1 is accepted only if all six hold.
+
+| # | Criterion | Rule | Origin |
+|---|---|---|---|
+| V1 | Real validity | On `classifier_val`: balanced accuracy > 0.478 and no class with zero recall | criteria A and B |
+| V2 | Q1 sensible | As defined above, normalised by J1's `classifier_val` recall | Q1 |
+| V3 | Q2 not influential | mel predicted nv < 30% and nv share of mismatches < 50% | Q2 |
+| V4 | No class sink | No single class receives ≥ 50% of all synthetic mismatches | Q2's 50%, extended to every class |
+| V5 | Not a restatement of another signal | For J1's `agreement_score` against each of similarity (`similarity_knn_mean`), uncertainty and explainability (V3a), redundant if within-class \|ρ\| ≥ 0.7 in ≥ 4 classes. Any redundant pair fails V5. | Q5's thresholds, read within class (Amendment 5) |
+| V6 | Go/No-Go | The agreement signal from J1 is "include" under the corrected gate, with the five-signal set: similarity and IQA from v1, uncertainty and explainability from V3a, agreement from J1 | the existing gate |
+
+The full `classifier_val` confusion matrix and the synthetic-pool confusion matrix are recorded.
+They decide nothing.
+
+**V5 is new.** It is needed because J1 learns from `gen_train`, the same real images the similarity
+signal compares against. An agreement score that only restates similarity would add nothing. V5
+uses the Q5 thresholds, applied within class without the pooled condition, for the reason given in
+Amendment 5.
+
+**Outcome.**
+
+| J1 | Next step |
+|---|---|
+| All of V1–V6 pass | J1's agreement replaces the V3a agreement in ASISM v2 |
+| Any criterion fails | Agreement is left out of ASISM v2, which runs on similarity, IQA, uncertainty and explainability. No other judge is tried on this pool. |
+
+**Outputs:**
+
+- J1's agreement scores and provenance go to a new directory. The judge id is a hash of its weights
+  and inputs.
+- No earlier artifact is rewritten.
+- CPU only.
