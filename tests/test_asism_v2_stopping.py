@@ -12,7 +12,7 @@ import pytest
 from scripts.asism_v2.contracts import fingerprint
 from scripts.asism_v2.features import SIGNALS
 from scripts.asism_v2.pipeline import fit_ranker
-from scripts.asism_v2.stopping import LOWER_BOUND_QUANTILE, progressive_select
+from scripts.asism_v2.stopping import LOWER_BOUND_QUANTILE, OFFER_ORDER, progressive_select
 
 WEIGHTS = {"a": np.array([.9, .6, .3, .3]), "b": np.array([.1, .1, .05, .05])}
 LAMBDA = 0.04
@@ -71,14 +71,15 @@ def test_the_size_term_is_learned_when_sizes_vary(fitted_and_pool):
 def test_selection_is_progressive_within_class_and_stops_on_the_lower_bound(fitted_and_pool):
     fitted, pool = fitted_and_pool
     result = progressive_select(fitted, pool)
-    scores = fitted.score_frame(pool).set_index("image_id").ranking_score
     for dx in ("a", "b"):
         picked = [t for t in result["trajectory"] if t["dx"] == dx]
-        # each class adds its candidates strictly in within-class rank order, from the top
+        # each class adds its candidates strictly in within-class rank order, from the top; the
+        # rank is by the image's own lower bound (amendment 2026-10-03), not the point score
         assert [t["rank_in_class"] for t in picked] == list(range(len(picked)))
-        top = scores[pool.set_index("image_id").dx == dx].sort_values(ascending=False)
-        assert [t["image_id"] for t in picked] == list(top.index[:len(picked)])
+        bounds = [t["own_lower_bound"] for t in picked]
+        assert bounds == sorted(bounds, reverse=True) and min(bounds) > 0
         assert result["counts"][dx] == len(picked)
+    assert result["offer_order"] == OFFER_ORDER == "lower_bound"
     assert all(t["marginal_lower_bound"] > 0 for t in result["trajectory"])
     for dx, stop in result["stops"].items():
         assert stop["reason"] == "class exhausted" or stop["marginal_lower_bound"] <= 0, dx
@@ -181,3 +182,31 @@ def test_one_class_allocation_is_refused_because_classes_cannot_be_compared():
     assert fitted.history["frozen_unidentifiable"] == ["class_mix"]
     with pytest.raises(ValueError, match="across classes is not identifiable"):
         progressive_select(fitted, pool)
+
+
+def test_an_uncertain_top_scored_image_does_not_stop_its_class(fitted_and_pool):
+    """The image the point model scores highest in a class is made uncertain: 4 of the 30 bootstrap
+    models give it a negative weight. Offered in point-score order it would come first and stop the
+    class at 0. Offered by its own lower bound it comes after the images that are shown to help."""
+    import copy
+    import dataclasses
+
+    import torch
+
+    fitted, pool = fitted_and_pool
+    before = progressive_select(fitted, pool)
+    scored = fitted.score_frame(pool)
+    top = scored[scored.dx == "a"].sort_values("ranking_score", ascending=False).iloc[0]
+    assert top.image_id in set(before["selected"].image_id)
+    row = pool[pool.image_id == top.image_id]
+    x = torch.tensor(fitted.normalizer.transform(row), dtype=torch.float32)[0]
+    a = fitted.classes.index("a")
+    ensemble = [copy.deepcopy(m) for m in fitted.ensemble]
+    for member in ensemble[:4]:
+        with torch.no_grad():
+            weight = float(member.image_weight(x[None], torch.tensor([a])))
+            member.weights[a] -= (weight + 1) * x / float(x @ x)          # this image's weight becomes -1
+    after = progressive_select(dataclasses.replace(fitted, ensemble=tuple(ensemble)), pool)
+    assert top.image_id not in set(after["selected"].image_id)
+    assert after["counts"]["a"] >= 20
+    assert all(t["marginal_lower_bound"] > 0 for t in after["trajectory"])

@@ -52,6 +52,9 @@ def test_no_count_ratio_or_k_is_configured():
         return [k for key, value in node.items() for k in [key, *(keys(value) if isinstance(value, dict) else [])]]
 
     assert FROZEN["stopping"]["minimum_gain"] is None
+    from scripts.asism_v2.stopping import LOWER_BOUND_QUANTILE, OFFER_ORDER
+    assert FROZEN["stopping"]["offer_order"] == OFFER_ORDER
+    assert FROZEN["stopping"]["lower_bound_quantile"] == LOWER_BOUND_QUANTILE
     for key in keys(FROZEN):
         for word in ("target", "ratio", "top_k", "fill_to", "accepted_per_class", "budget", "quota"):
             assert word not in key.replace("concentration", ""), key
