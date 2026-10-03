@@ -192,6 +192,111 @@ hold 1,904 / 632 / 632 images; 1,000 runs planned; every image is in at least 5 
 both the size term and the class term are identifiable. One 200-bootstrap fit at this size takes
 roughly 1.5 CPU-hours, so the five-seed stability report is roughly 8 CPU-hours.
 
-Not built yet: the measurement runner (the only GPU step), saving and loading a fitted ranker, the
-selector that writes condition C and the matched random D, and the Stage 4 aggregator change that
-accepts C equal to all candidates or C empty.
+The measurement runner, saving and loading a fitted ranker, the selector for C and D, and the
+Stage 4 change were built afterwards; see section 10.
+
+## 10. Runner, saved ranker, selector, Stage 4 (CPU only, 2026-10-03)
+
+Walaa confirmed on 2026-10-03 the values listed in section 9 (Dirichlet concentration 20, the tilt
+rule, 10,000 permutations) and the reading of G1: G1 stays a check that the labels are repeatable
+before anything is fitted, and acceptance criterion (a), the within-size Spearman of at least 0.50
+on the test subsets, is the strict gate that shows the ranker learned which images matter and not
+only how many. No threshold changed.
+
+| Piece | Where |
+|---|---|
+| plan / measure / G1. The measure phase is the only GPU step; it refuses to run while `MEASUREMENT_APPROVED` is `False`, and then also without `--i-understand-this-trains-real-models` | `scripts/followup/ham10000_asism_v2_utility.py` |
+| Test-subset outcomes kept in their own file, which G1 never opens | `utility_runs_test.jsonl` |
+| Saved ranker (point model, bootstrap models, normaliser, provenance, content hash) | `scripts/asism_v2/persist.py` |
+| accept / fit / select / stability phases | `scripts/followup/ham10000_asism_v2_learned_select.py` |
+| C, the matched random D per Stage 4 seed, the selection manifest | `scripts/asism_v2/selection_files.py` |
+| Stage 4 protocols `asism_v2_learned` and `asism_v2_learned_all_or_none`, the outcome check in the aggregator | `scripts/utils/ham10000_conditions.py`, `scripts/classify/ham10000_aggregate_conditions.py`, `configs/ham10000_asism_v2_learned_stage4.yaml` |
+| CPU dry run of the whole path | `scripts/smoke/asism_v2_ranker_dry_run.py` |
+
+Order, each step refusing unless the one before it succeeded: plan, measure, G1, accept (test subsets
+read once), fit, select, stability. A failed G1 or a ranker that is not accepted ends the path, and
+that failure is the result.
+
+The count is never configured. The selection manifest records one of three outcomes, all of them
+valid results:
+
+- `subset`: C and D are written and Stage 4 trains A, B, C, D (`asism_v2_learned`).
+- `all`: C is every candidate, which is B's training set, and D would be the same set. No C or D is
+  built; Stage 4 trains A and B (`asism_v2_learned_all_or_none`) and reports the outcome.
+- `none`: C is empty, which is A's training set. Same protocol, same reporting.
+
+The aggregator checks that the protocol matches the recorded outcome and that C trained on the
+recorded images. It no longer treats "C has as many images as B" as a fault for this selector. The
+earlier protocols (`v1`, `v2`, `asism_v2`, `asism_v2_none`) are unchanged.
+
+Still open, and not decided by this code:
+
+- Contract §13 decision 7 (D draws, number of Stage 4 seeds). The new Stage 4 config copies the
+  earlier design's values, 20 seeds and one independent D draw per seed, and D's draw seed base is
+  20261003. They are placeholders until that decision is made; Stage 4 is a GPU step and is not
+  approved.
+- How HOW MANY is tested at Stage 5. C against D holds the count fixed.
+- Test-set policy and the confirmatory statistic (supervisor).
+
+### Dry run (CPU, no training, not evidence)
+
+`scripts/smoke/asism_v2_ranker_dry_run.py` runs plan, measure, G1, accept, fit, select and stability
+on the real signal table (3,168 candidates, the frozen 200 subsets, 1,000 cells, training seeds 42 to
+46) with the classifier replaced by a planted formula of the model's own form,
+`base + lam * log(1 + sum of planted image weights)` plus seed noise. Nothing is trained, no image or
+split is read, and the outputs are stamped `scientific_evidence: false`. The fit used 20 bootstrap
+models instead of 200 to keep the run near one hour. Outputs are under
+`C:\Users\walaa\ham10000_work\asism_v2_dry_run_*`. The planted numbers are arbitrary: they say how
+the code behaves, not what HAM10000 will show.
+
+| Scenario | planted lam / noise SD | G1 | G1 within size 125 / 250 / 500 / 1000 (not gating) | Noise-free truth, within-size Spearman | Ranker, within-size Spearman | Accepted | Path |
+|---|---|---|---|---|---|---|---|
+| 1 | 0.012 / 0.003 | 0.980, passed | 0.82 / 0.48 / 0.37 / 0.09 | 0.74 | 0.39 (p 0.008) | no | stopped at acceptance; fit refused |
+| 2 | 0.012 / 0.001 | 0.998, passed | 0.97 / 0.94 / 0.74 / 0.70 | 0.88 | 0.40 (p 0.007) | no | stopped at acceptance; fit refused |
+| 3 | 0.06 / 0.001 | 0.9999, passed | 1.00 / 1.00 / 0.99 / 0.98 | 1.00 | 0.66 (p 0.0001) | yes | complete |
+
+What the dry run showed about the code:
+
+- Every phase ran and wrote its files; 800 fit rows and 200 test rows, five seeds each.
+- A ranker that is not accepted stops the path: the fit phase refused, nothing was selected.
+- Scenario 3 produced the saved ranker, C (2,513 of 3,168 images), 20 D files at C's per-class counts,
+  the trajectory, the manifest (`selection_outcome: subset`, protocol `asism_v2_learned`) and the
+  stability report for fit seeds 42 to 46: totals 2,368 to 2,718, Jaccard with the seed-42 selection
+  0.89 to 0.95. The class with the widest range was vasc, 299 to 583.
+- Planted values above 1 were refused by the measurement validator (an earlier attempt with
+  base 0.86 and lam 0.06).
+
+What it showed about the approved design, before any real measurement:
+
+1. **G1 passes on size alone.** In scenario 1 the gated number is 0.98 while the same number within
+   size 1,000 is 0.09. This is the behaviour section 9 warned about and the reason acceptance
+   criterion (a) is the strict gate.
+2. **The approved fit settings underfit a truth of the model's own form.** In scenario 2 the noise-free
+   truth ranks the test subsets at 0.88 within size and has a training error of 2.1e-7; the fitted
+   ranker reaches 0.40 and a training error of 2.5e-6, and its best epoch is the last one (599 of
+   600). In scenario 3 the truth is at 1.00 and the ranker at 0.66, again stopped by the epoch limit,
+   and 234 of the 2,513 selected images have a non-positive planted weight. Diagnosis on the planted
+   data of scenario 2, outside the frozen configuration:
+
+   | Fit | Validation error | Within-size Spearman against the noise-free truth |
+   |---|---|---|
+   | approved (lr 0.03, weight decay 1e-5, 600 epochs) | 3.0e-6 | 0.47 |
+   | 5,000 epochs | 2.5e-6 | 0.52 |
+   | lr 0.003, 5,000 epochs | 2.8e-6 | 0.54 |
+   | weight decay 0, 600 epochs | 2.1e-6 | 0.38 |
+   | weight decay 0, 3,000 epochs | 9.1e-7 | 0.63 (still improving at the last epoch) |
+
+   The cause is scale. The target moves by about 0.001 within a size, so the loss gradient on a signal
+   weight is of the order of 1e-6, the same order as the weight-decay term, and the intercept and the
+   size coefficient are nearly collinear, which makes a first-order optimiser slow. Neither more epochs
+   alone nor a smaller learning rate alone repairs it.
+
+   Consequence: with the approved fit settings a real ranker could fail the 0.50 criterion because of
+   the optimiser, not because the signals carry no utility. The settings in section 7 are approved and
+   are NOT changed here. A change is a dated amendment that Walaa approves before any measurement.
+   The amendment to consider: fit on standardised targets (train mean and SD), no weight decay or one
+   set on that scale, and an epoch limit that the fit does not reach, then confirm on planted data that
+   the fitted ranker comes close to the noise-free truth.
+3. **The 0.50 criterion has a ceiling set by the noise.** With the planted noise of scenario 1 even the
+   noise-free truth reaches only 0.74. How much room the real labels leave is known only after they are
+   measured; the within-size reliability that G1 reports is the number to read then.

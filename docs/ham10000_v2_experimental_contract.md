@@ -163,7 +163,10 @@ The cheap proxy (224 px, 300 steps) failed its reliability test on random same-s
 to differ in size, class mix and signal; its direction agreed with the Stage 4 recipe (Spearman
 0.755); and G1 re-tests its reliability on the designed subsets before anything is fitted.
 
-No GPU run is approved by this section. The measurement needs its own approval.
+No GPU run is approved by this section. The measurement needs its own approval; until then
+`scripts/followup/ham10000_asism_v2_utility.py` refuses its measure phase (`MEASUREMENT_APPROVED`).
+Walaa, 2026-10-03: G1 is the check that the labels are repeatable; acceptance criterion (a) in §9 is
+the strict gate for which images matter.
 
 ## 9. Ranking network (APPROVED 2026-10-03; not trained on real labels yet)
 
@@ -261,6 +264,6 @@ the per-class counts are reported for each, with the selection at seed 42 the on
 | 4 | Utility proxy, metric, repeats, reliability target | Step 6 | Walaa — decided 2026-10-03 (§8) |
 | 5 | Ranking correlation threshold | Step 8 | Walaa — decided 2026-10-03 (§9) |
 | 6 | Stopping criterion | Step 9 | Walaa — decided 2026-10-03 (§10) |
-| 7 | D draws, number of Stage 4 seeds | Step 11 | Walaa |
+| 7 | D draws, number of Stage 4 seeds | Step 11 | Walaa (the learned Stage 4 config holds the earlier design's 20 seeds and one D draw per seed as placeholders) |
 | 8 | Test-set policy | before Stage 5 | supervisor |
 | 9 | ECE bins | Step 10 | Walaa |

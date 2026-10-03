@@ -76,7 +76,12 @@ hashes and refuses stale inputs.
 - *ASISM v2* (`scripts/asism_v2/`): `features.py` (four signals, train-only normalisation),
   `models.py` / `pipeline.py` (size-aware additive ranker), `stopping.py` (per-class stopping on the
   lower 95% bound of marginal utility), `contracts.py` (exclusive-create outputs, split-role and
-  grid validation), `instrument.py`, `preserve.py`. This is not yet an integrated, approved runner.
+  grid validation), `instrument.py`, `preserve.py`, `prereg.py` (the approved configuration, frozen in code),
+  `supervision.py`, `gates.py`, `persist.py`, `selection_files.py`. The runner is
+  `scripts/followup/ham10000_asism_v2_utility.py` (plan, measure, G1) followed by
+  `ham10000_asism_v2_learned_select.py` (accept, fit, select, stability). Its GPU measure phase
+  is refused in code until approved; `scripts/smoke/asism_v2_ranker_dry_run.py` runs the whole
+  path on CPU with a planted formula in place of the classifier.
 
 ## Experimental rules that constrain code changes
 
