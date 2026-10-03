@@ -60,6 +60,7 @@ fit:
 stopping:
   lower_bound_quantile: 0.05                 # contract §10, one-sided 95%
   minimum_gain: null                         # none: no "enough benefit" threshold is introduced
+  offer_order: "lower_bound"                 # amendment 2026-10-03: a class offers its images by their own lower bound
   stability_fit_seeds: [42, 43, 44, 45, 46]  # the selection is repeated at each; counts are reported
 
 # ---- ranker acceptance: the test subsets, read once ------------------------------------------------

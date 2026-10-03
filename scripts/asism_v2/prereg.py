@@ -10,6 +10,10 @@ the fit runs on standardised targets with no weight decay, epoch limit 5000 and 
 Before: weight decay 1e-5, epoch limit 600, patience 60, targets in the metric's own units. The
 CPU dry run on planted data showed those settings stop at the epoch limit far from the planted
 truth. Nothing else changed: the model, the learning rate, the seeds and every gate are as approved.
+
+Amendment, 2026-10-03, approved by Walaa before any real utility measurement (design check §12):
+within a class, images are offered in the order of their own lower bound (stopping.offer_order),
+not of the point model's score. The stopping condition is unchanged.
 """
 from __future__ import annotations
 
@@ -45,7 +49,7 @@ FROZEN = {
     "fit": {"seed": 42, "bootstrap_models": 200, "initial_lam": 0.02, "optimizer": "adam",
             "learning_rate": 0.03, "weight_decay": 0.0, "max_epochs": 5000, "patience": 200,
             "standardised_fit": True},
-    "stopping": {"lower_bound_quantile": 0.05, "minimum_gain": None,
+    "stopping": {"lower_bound_quantile": 0.05, "minimum_gain": None, "offer_order": "lower_bound",
                  "stability_fit_seeds": [42, 43, 44, 45, 46]},
     "acceptance": {"min_within_size_spearman": 0.50, "max_one_sided_p": 0.05, "permutations": 10000,
                    "permutation_seed": 42, "must_beat": "size_and_class_only",

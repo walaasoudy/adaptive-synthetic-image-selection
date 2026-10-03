@@ -1,7 +1,8 @@
 """Contract §10: progressive within-class selection with adaptive stopping (WHICH and HOW MANY).
 
 Locked methodology (Walaa, 2026-10-03), implemented here and nowhere else:
-  - candidates are ranked within each class by the learned ranker's score;
+  - candidates are ranked within each class by the lower 95% bound of their own marginal utility
+    (amendment of 2026-10-03, below; before it, by the point model's score);
   - synthetic images are added one at a time, each class offering its next-ranked image;
   - a class keeps adding while the lower 95% confidence bound of the estimated marginal utility of
     its next image is above 0, and stops for good when it reaches 0 or below (or runs out);
@@ -18,7 +19,15 @@ The lower bound is the 5th percentile of that difference across the bootstrap en
 class term was frozen (one class allocation), cannot estimate the value of adding an image and is
 refused.
 
-Within a class the order is by the point model's marginal utility (highest weight first when lam > 0).
+Amendment (Walaa, 2026-10-03, before any utility measurement; design check §12). Within a class the
+order is by the image's own lower bound: the 5th percentile across the bootstrap models of lam * w(x),
+the quantity whose sign is the sign of the image's marginal utility in any set. Highest first, ties by
+image_id. The order and the stop then use the same criterion, so a class stops at the first image that
+is not shown to help. Before the amendment the order was the point model's lam * w(x); the images
+ranked first there have the most extreme signals and the widest bootstrap spread, so a class met its
+least certain images first and could stop at one of them with hundreds of clearly useful images
+behind it (dry run on planted data, design check §11). The stopping condition itself is unchanged.
+
 At each step the image added is the offered one with the highest lower bound (ties: class name), so
 the order of addition is itself a function of the learned utility. E4's q* is not read.
 """
@@ -33,6 +42,7 @@ from .pipeline import FittedRanking
 
 LOWER_BOUND_QUANTILE = 0.05      # one-sided 95% lower confidence bound
 MIN_BOOTSTRAP_MODELS = 20
+OFFER_ORDER = "lower_bound"      # within a class: by the image's own lower bound, not the point score
 
 
 def _utility(lam: float, total: float) -> float:
@@ -73,11 +83,12 @@ def progressive_select(fitted: FittedRanking, candidates: pd.DataFrame) -> dict:
         raise ValueError("Nonfinite ranking score")
 
     ids = candidates.image_id.astype(str).to_numpy()
+    own_lower = np.quantile(lams[1:, None] * weights[1:], LOWER_BOUND_QUANTILE, axis=0)
     order = {}
     for c, name in enumerate(classes):
         members = np.flatnonzero(cls.numpy() == c)
-        # rank within class by the point model's marginal utility, lam * w; ties by image_id
-        order[name] = sorted(members, key=lambda i: (-lams[0] * weights[0, i], ids[i]))
+        # rank within class by the image's own lower bound of lam * w; ties by image_id
+        order[name] = sorted(members, key=lambda i: (-own_lower[i], ids[i]))
 
     n, totals = 0, np.zeros(len(models))
     position = {name: 0 for name in classes}
@@ -109,6 +120,7 @@ def progressive_select(fitted: FittedRanking, candidates: pd.DataFrame) -> dict:
         chosen.append(i)
         trajectory.append({"step": n, "dx": name, "image_id": ids[i], "rank_in_class": position[name] - 1,
                            "ranking_score": float(scores[i]), "image_weight": float(weights[0, i]),
+                           "own_lower_bound": float(own_lower[i]),
                            "marginal_point": point,
                            "marginal_lower_bound": lower, "set_size": n})
         if position[name] == len(order[name]):
@@ -122,4 +134,5 @@ def progressive_select(fitted: FittedRanking, candidates: pd.DataFrame) -> dict:
             "counts": {name: position[name] for name in classes},
             "trajectory": trajectory, "stops": stops,
             "rule": "contract §10: add while the one-sided 95% lower bound of marginal utility > 0",
+            "offer_order": OFFER_ORDER,
             "lower_bound_quantile": LOWER_BOUND_QUANTILE, "bootstrap_models": len(fitted.ensemble)}
