@@ -373,4 +373,53 @@ This is the approved rule working as written, on planted data. It is NOT changed
 decision for Walaa before any measurement: keep the rule as locked and report the stability numbers,
 or amend contract §10 (for example, a class offers its images in the order of their lower bound, so
 that the stop is the first image not shown to help). An amendment would be dated and written before
-the measurement, like this one.
+the measurement, like this one. (Decided the same day: section 12.)
+
+## 12. Amendment to the offer order of contract §10 (APPROVED 2026-10-03, before any measurement)
+
+Walaa approved on 2026-10-03, after reading section 11 and before any real utility measurement, the
+change section 11 left open. Nothing was measured on HAM10000 between section 11 and this amendment.
+
+| | Contract §10 as locked | Amended |
+|---|---|---|
+| Order in which a class offers its images | the point model's lam * w(x), highest first | the image's own lower bound: the 5th percentile across the bootstrap models of lam * w(x), highest first, ties by image_id |
+| Unchanged | | the stopping condition (a class stops for good at the first offered image whose lower bound of marginal utility is 0 or below), the 0.05 quantile, 200 bootstrap models, no minimum gain, fit seeds 42 to 46, the fit, G1, both acceptance criteria |
+
+The order and the stop now use the same quantity, so a class stops at the first image that is not
+shown to help. Code: `scripts/asism_v2/stopping.py` (`OFFER_ORDER`), frozen as
+`stopping.offer_order = "lower_bound"` in `scripts/asism_v2/prereg.py` and the config; the hash of
+the frozen configuration changed, so earlier plans are refused. Each trajectory row records the
+image's `own_lower_bound`.
+
+### The dry run repeated with the amended order (CPU, planted formula, not evidence)
+
+Same script, planted formulas, noise and 200 bootstrap models as section 11. Outputs:
+`C:\Users\walaa\ham10000_work\asism_v2_dry_run_order_s*`. Acceptance does not depend on the order
+and is the same as in section 11 (scenario 1: 0.47, not accepted, path stopped; scenario 2: 0.80;
+scenario 3: 0.99).
+
+| Scenario | C before (section 11) | C amended | Images whose own lower bound is above 0 | Selected with non-positive planted weight |
+|---|---|---|---|---|
+| 2 | 1,048 (akiec 224, bcc 133, bkl 190, df 487, mel 0, nv 12, vasc 2) | 2,429 (akiec 449, bcc 298, bkl 222, df 624, mel 173, nv 53, vasc 610) | 2,429 | 1 (a mel image); before: 0 |
+| 3 | 2,684 (akiec 486, bcc 311, bkl 230, df 638, mel 174, nv 109, vasc 736) | 2,710 (akiec 486, bcc 322, bkl 230, df 651, mel 176, nv 109, vasc 736) | 2,710 | 0; before: 0 |
+
+Stability over fit seeds 42 to 46:
+
+| Scenario | Totals before | Totals amended | Jaccard with seed 42 before | Jaccard amended | Largest per-class range amended |
+|---|---|---|---|---|---|
+| 2 | 772 to 1,048 | 2,396 to 2,441 | 0.68 to 0.80 | 0.975 to 0.982 | vasc 594 to 610 |
+| 3 | 2,623 to 2,687 | 2,707 to 2,714 | 0.975 to 0.996 | 0.996 to 0.997 | df 648 to 653 |
+
+What this shows, on planted data only:
+
+- In both scenarios the selection is exactly the set of images whose own lower bound is above 0. The
+  count is now decided by what the bootstrap ensemble can show, not by where one uncertain image
+  falls in a ranking.
+- The seed-to-seed jumps of section 11 are gone (bcc 3 or 133, bkl 25 or 190, nv 45 or 109).
+- 2,778 images have a positive planted weight. The rule leaves out 350 of them in scenario 2 and 68
+  in scenario 3: images the ensemble cannot show to help at this noise level.
+- One selected image in scenario 2 has a non-positive planted weight. A one-sided 95% bound allows
+  such errors; before the amendment there were none because far fewer images were selected.
+
+None of this is a HAM10000 result. The real within-size reliability of the labels, and so whether the
+ranker is accepted at all, is known only after the measurement, which remains unapproved.

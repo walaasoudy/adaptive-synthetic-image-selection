@@ -237,6 +237,13 @@ ranker; the size term must be identifiable, so the supervision has to span sever
 200 bootstrap models; no minimum-gain threshold; the selection is repeated at fit seeds 42 to 46 and
 the per-class counts are reported for each, with the selection at seed 42 the one that is used.
 
+**AMENDMENT (Walaa, 2026-10-03, before any utility measurement).** Offer order only: within a class
+the "next-ranked image" is the next by the image's own lower bound (5th percentile across the
+bootstrap models of λ·w(x), highest first, ties by image_id), not by the point model's score. The
+stopping condition, the quantile, the 200 models and the seeds are unchanged. Reason and evidence
+(planted data on CPU, no HAM10000 outcome): `docs/asism_v2_quantity_design_check_2026-10-03.md` §11
+and §12.
+
 ## 11. Downstream classifier (Stage 4)
 
 | Item | Value | Source | Status |
