@@ -128,7 +128,7 @@ aggregator also rejects two valid adaptive outcomes (C equal to all candidates, 
 | Lower-bound quantile | 0.05 | contract §10, locked |
 | Fit seed | 42 | repository convention |
 | Starting λ | 0.02 | default; 0.005 to 0.1 changed the toy count by 5 |
-| Optimiser | Adam, lr 0.03, weight decay 1e-5, full batch, up to 600 epochs, patience 60 | as coded |
+| Optimiser | Adam, lr 0.03, weight decay 1e-5, full batch, up to 600 epochs, patience 60 (AMENDED 2026-10-03 before any measurement, see section 11) | as coded |
 | Stability report | the selection repeated at fit seeds 42 to 46; per-class counts reported for each | shows how much of the count is the bootstrap |
 | Minimum-gain threshold | none | not introduced |
 
@@ -300,3 +300,77 @@ What it showed about the approved design, before any real measurement:
 3. **The 0.50 criterion has a ceiling set by the noise.** With the planted noise of scenario 1 even the
    noise-free truth reaches only 0.74. How much room the real labels leave is known only after they are
    measured; the within-size reliability that G1 reports is the number to read then.
+
+## 11. Amendment to the fit settings of section 7 (APPROVED 2026-10-03, before any measurement)
+
+Walaa approved on 2026-10-03, after reading the dry run of section 10 and before any real utility
+measurement, a change to the optimiser row of section 7. Nothing was measured on HAM10000 between
+the original approval and this amendment.
+
+| Setting | Section 7 | Amended |
+|---|---|---|
+| Targets | subset means in the metric's units | (subset mean - train mean) / train SD; the size term is centred on its train mean; the intercept and lam are written back in the metric's units |
+| Weight decay | 1e-5 | 0 |
+| Epoch limit | 600 | 5,000; reaching it is recorded in the fit history |
+| Patience | 60 | 200 |
+| Unchanged | | the model, Adam, learning rate 0.03, full batch, starting lam 0.02, fit seed 42, 200 bootstrap models, the stopping rule, G1, both acceptance criteria |
+
+The learning rate was kept because the amended fit converges with it; learning rates 0.01 and 0.003
+gave the same result on the planted data (0.92 to 0.93 against the noise-free truth in scenario 2).
+The fit now runs on per-class pooled sums, which is the same forward pass computed once
+(`AdditiveUtilityRanker.pool`); a fit takes about 2 seconds instead of about 30. The frozen
+configuration and its hash changed (`scripts/asism_v2/prereg.py`, config key `standardised_fit`), so
+plans frozen under the earlier hash are refused.
+
+### The dry run repeated with the amended settings (CPU, planted formula, not evidence)
+
+Same script, same planted formulas and noise as section 10, with the pre-registered 200 bootstrap
+models. Outputs: `C:\Users\walaa\ham10000_work\asism_v2_dry_run_amended_s*`.
+
+| Scenario | Noise-free truth, within-size Spearman | Ranker before | Ranker amended | Accepted | Best epoch, models at the epoch limit |
+|---|---|---|---|---|---|
+| 1 (lam 0.012, noise 0.003) | 0.74 | 0.39 | 0.47 (p 0.001) | no (below 0.50) | not fitted: path stopped |
+| 2 (lam 0.012, noise 0.001) | 0.88 | 0.40 | 0.80 (p 0.0001) | yes | 725, 0 of 200 |
+| 3 (lam 0.06, noise 0.001) | 1.00 | 0.66 | 0.99 (p 0.0001) | yes | 1,024, 0 of 200 |
+
+The optimiser is no longer what limits the ranker: in scenarios 2 and 3 it comes close to the truth,
+and no fit reached the epoch limit. In scenario 1 the ranker beats the size-and-class-only model on
+test error but stays under 0.50, where the truth itself reaches 0.74 and the measured labels have a
+within-size reliability of 0.09 to 0.82. With labels that noisy the approved criterion is not met,
+and the path stops as designed.
+
+Selection, where the ranker was accepted (2,778 of the 3,168 images have a positive planted weight):
+
+| Scenario | C | Selected with non-positive planted weight | Images whose own lower bound is above 0 | Stability, fit seeds 42 to 46 |
+|---|---|---|---|---|
+| 2 | 1,048 (akiec 224, bcc 133, bkl 190, df 487, mel 0, nv 12, vasc 2) | 0 | 2,429 | totals 772 to 1,048; Jaccard with seed 42: 0.68 to 0.80; bcc 3 or 133, bkl 25 or 190 |
+| 3 | 2,684 (akiec 486, bcc 311, bkl 230, df 638, mel 174, nv 109, vasc 736) | 0 | 2,710 | totals 2,623 to 2,687; Jaccard 0.975 to 0.996; nv 45 at seed 45, 104 to 109 otherwise |
+
+Before the amendment scenario 3 selected 2,513 images, 234 of them with a non-positive planted
+weight. After it, nothing selected in either scenario has a non-positive planted weight.
+
+### What the amended dry run exposed in the stopping rule (not changed)
+
+In scenario 2 the rule selected 1,048 images although 2,429 images have a lower bound above 0 when
+each is judged alone. The cause is the order in which the locked rule of contract §10 offers images:
+
+- A class offers its images in the order of the point model's weight, and stops for good at the
+  first one whose lower bound is 0 or below.
+- An image's weight is a linear function of its four signals, so the images ranked first are the
+  ones with the most extreme signals, and those are the ones whose weight varies most across the
+  bootstrap models. The rule therefore meets its least certain images first.
+- In scenario 2, mel's first-ranked image has a non-positive weight in more than 5% of the bootstrap
+  models, so mel stopped at 0 although 173 mel images have a lower bound above 0. vasc stopped at 2
+  (610 with a lower bound above 0), nv at 12 (53).
+- Where one such image sits in the ranking changes with the fit seed, which is what the stability
+  report shows (bcc 3 or 133, bkl 25 or 190; in scenario 3, nv 45 at one seed).
+
+When the estimates are precise (scenario 3) the two counts nearly agree (2,684 and 2,710). The effect
+grows with label noise. Before the amendment it was hidden: weight decay held the signal weights and
+class terms near 0, so the bootstrap models barely differed.
+
+This is the approved rule working as written, on planted data. It is NOT changed here. It is a
+decision for Walaa before any measurement: keep the rule as locked and report the stability numbers,
+or amend contract §10 (for example, a class offers its images in the order of their lower bound, so
+that the stop is the first image not shown to help). An amendment would be dated and written before
+the measurement, like this one.

@@ -200,6 +200,12 @@ with one-sided permutation p ≤ 0.05, and (b) lower test error than the same mo
 If either fails, the learned ranking is not used and the failure is the reported result. No other
 architecture or stopping formulation is tried at this point.
 
+**AMENDMENT (Walaa, 2026-10-03, before any utility measurement).** Fit settings only: targets
+standardised on the train subsets (mean and SD), weight decay 0, up to 5,000 epochs, patience 200.
+Loss, model, Adam, learning rate 0.03, starting λ 0.02, seed 42, the 200 bootstrap models and both
+acceptance criteria are unchanged. Reason and evidence (planted data on CPU, no HAM10000 outcome):
+`docs/asism_v2_quantity_design_check_2026-10-03.md` §10 and §11.
+
 Documented limitation of this form (design check §4): it is conservative. Helpful images whose weight
 is not confidently above 0 are left out, a mostly harmful class can be nearly excluded, harmless
 images that add nothing can be kept, and there is no stop for diminishing returns.
