@@ -8,8 +8,8 @@ to show, before any GPU run is considered, that every step runs and writes what 
 
 What is real: the frozen configuration, the candidate signal table (3,168 images, four signals), the
 200 designed subsets, and all of the code after the classifier.
-What is fake: each cell's "macro AUROC" is  0.86 + 0.012 * log(1 + sum of planted image weights)
-plus seed noise, where an image's planted weight is 1 + (planted class weights . its four signals).
+What is fake: each cell's "macro AUROC" is  base + lam * log(1 + sum of planted image weights)
+plus seed noise (--noise-sd), where an image's planted weight is 1 + (planted class weights . its four signals).
 Because the truth is planted, the report can also say how many of the images with a positive planted
 weight the selection kept.
 
@@ -32,13 +32,14 @@ from pathlib import Path
 import numpy as np
 
 from scripts.asism_v2.features import SIGNALS
+from scripts.asism_v2.gates import stratified_spearman
 from scripts.asism_v2.prereg import load_prereg
 from scripts.asism_v2.supervision import load_signal_table
 from scripts.followup import ham10000_asism_v2_learned_select as learned
 from scripts.followup import ham10000_asism_v2_utility as utility
 
 NAMESPACE = "ham-stratified-v1"
-PLANT_SEED, NOISE_SD, BASE, LAM = 20261003, 0.003, 0.86, 0.012
+PLANT_SEED = 20261003
 
 
 def planted_weights(frame) -> dict[str, float]:
@@ -54,7 +55,7 @@ def planted_weights(frame) -> dict[str, float]:
     return weights
 
 
-def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int) -> dict:
+def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int, noise_sd: float, lam: float, base: float) -> dict:
     prereg = load_prereg()
     out_dir = Path(out_dir)
     if out_dir.exists() or Path(prereg["paths"]["outputs_dir"]).resolve() in out_dir.resolve().parents:
@@ -68,7 +69,7 @@ def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int) -> di
         ids = [record["image_id"] for record in train]
         rng = np.random.default_rng([int(seed), zlib.crc32("".join(sorted(ids)).encode())])
         total = max(0.0, sum(weight[i] for i in ids))
-        return {"macro_auroc_ovr": float(BASE + LAM * np.log1p(total) + rng.normal(0, NOISE_SD))}
+        return {"macro_auroc_ovr": float(base + lam * np.log1p(total) + rng.normal(0, noise_sd))}
 
     inputs = {"real": [], "tuning": [], "candidates": {i: {"image_id": i} for i in weight},
               "hashes": {"outcome_split": "dry-run", "real_train_split": "dry-run", "measurement_code": "dry-run"}}
@@ -84,20 +85,42 @@ def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int) -> di
         gate = utility.run_gate(NAMESPACE, out_dir)
         args = (NAMESPACE, candidates, scores_dir, out_dir)
         accept = learned.run_accept(*args)
-        fit = learned.run_fit(*args)
-        selection = learned.run_select(*args)
-        stability = learned.run_stability(*args)
+        fit = selection = stability = None
+        if accept["accepted"]:
+            fit = learned.run_fit(*args)
+            selection = learned.run_select(*args)
+            stability = learned.run_stability(*args)
+        else:
+            try:                                  # a refused ranker must stop everything after it
+                learned.run_fit(*args)
+                raise SystemExit("BUG: a ranker that was not accepted was fitted")
+            except learned.LearnedSelectionError as refusal:
+                stopped = str(refusal)
     finally:
         learned.fit_arguments = approved_fit
 
+    # Known only because the truth is planted: how well the noise-free truth itself ranks the
+    # measured test subsets within size. No ranker can be expected to do better than this.
+    plan = utility.load_plan(out_dir, prereg)
+    test_ids = sorted(sid for sid, s in plan["subsets"].items() if s["role"] == "test")
+    measured = {}
+    for row in utility.heldout_measurements(out_dir):
+        measured.setdefault(row["subset_id"], []).append(row["augmented_metric"])
+    truth = [base + lam * np.log1p(max(0.0, sum(weight[i] for i in plan["subsets"][sid]["image_ids"])))
+             for sid in test_ids]
+    oracle = stratified_spearman(truth, [np.mean(measured[sid]) for sid in test_ids],
+                                 [plan["subsets"][sid]["size"] for sid in test_ids], 2000, 42)
+
     chosen = set()
-    if selection["selection_outcome"] == "subset":
+    if selection and selection["selection_outcome"] == "subset":
         import pandas as pd
         chosen = set(pd.read_csv(out_dir / "c_selected.csv")["image_id"].astype(str))
     positive = {i for i, w in weight.items() if w > 0}
     report = {
         "scientific_evidence": False,
         "what_this_is": "CPU dry run; the classifier is a planted formula, not a trained model",
+        "planted": {"base": base, "lam": lam, "seed_noise_sd": noise_sd},
+        "stopped_at": None if fit else f"acceptance: {stopped}",
         "bootstrap_models_used": int(bootstrap), "bootstrap_models_pre_registered": prereg["fit"]["bootstrap_models"],
         "minutes": round((time.perf_counter() - started) / 60, 1),
         "plan": plan_summary,
@@ -109,16 +132,20 @@ def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int) -> di
                                       for size, block in gate["within_size_not_gating"].items()},
         "acceptance": {"accepted": accept["accepted"], "a_correlation_passed": accept["a_correlation_passed"],
                        "b_beats_size_and_class_only": accept["b_beats_size_and_class_only"],
-                       "models": accept["models"]},
-        "fit": {k: fit[k] for k in ("best_epoch", "validation_mse", "frozen_unidentifiable", "bootstrap_models")},
-        "selection": {k: selection[k] for k in ("selection_outcome", "protocol", "per_class", "n_selected_c",
-                                                "n_selected_d", "score_sources")},
-        "selection_files": sorted(selection["files_sha256"]),
-        "planted_truth": {"images_with_positive_weight": len(positive), "selected": len(chosen),
-                          "selected_with_positive_weight": len(chosen & positive),
-                          "selected_with_non_positive_weight": len(chosen - positive)},
-        "stability": stability,
+                       "models": accept["models"],
+                       "noise_free_truth_within_size_spearman": oracle["spearman_within_size"]},
     }
+    if fit:
+        report.update({
+            "fit": {k: fit[k] for k in ("best_epoch", "validation_mse", "frozen_unidentifiable", "bootstrap_models")},
+            "selection": {k: selection[k] for k in ("selection_outcome", "protocol", "per_class", "n_selected_c",
+                                                    "n_selected_d", "score_sources")},
+            "selection_files": sorted(selection["files_sha256"]),
+            "planted_truth": {"images_with_positive_weight": len(positive), "selected": len(chosen),
+                              "selected_with_positive_weight": len(chosen & positive),
+                              "selected_with_non_positive_weight": len(chosen - positive)},
+            "stability": stability,
+        })
     (out_dir / "DRY_RUN_REPORT.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
@@ -129,8 +156,11 @@ def main() -> int:
     parser.add_argument("--scores-dir", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--bootstrap", type=int, default=20)
+    parser.add_argument("--noise-sd", type=float, default=0.003, help="planted seed noise of one run")
+    parser.add_argument("--lam", type=float, default=0.012, help="planted size coefficient")
+    parser.add_argument("--base", type=float, default=0.86, help="planted value of the empty set")
     args = parser.parse_args()
-    report = run(args.candidates, args.scores_dir, args.out_dir, args.bootstrap)
+    report = run(args.candidates, args.scores_dir, args.out_dir, args.bootstrap, args.noise_sd, args.lam, args.base)
     print(json.dumps({k: v for k, v in report.items() if k != "plan"}, indent=2))
     return 0
 
