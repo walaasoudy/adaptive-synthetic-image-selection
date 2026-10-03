@@ -121,7 +121,9 @@ def _matrix(subsets: dict[str, dict], ids: list[str], frame: pd.DataFrame,
 
 def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list[dict],
                seeds: list[int], protocol: dict, *, seed: int = 42, max_epochs: int = 600,
-               patience: int = 60, learning_rate: float = 0.03, bootstrap: int = 0) -> FittedRanking:
+               patience: int = 60, learning_rate: float = 0.03, bootstrap: int = 0,
+               weight_decay: float = 1e-5, initial_lam: float = SIZE_TERM_INITIAL,
+               signal_mask: tuple[bool, ...] | None = None) -> FittedRanking:
     """Train on measured subset outcomes; tune on image-disjoint validation.
 
     The protected test subsets are never inspected in fitting or early stopping.
@@ -133,6 +135,10 @@ def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list
     Their spread gives the confidence bound the contract §10 stopping rule needs. Sizes may differ
     between subsets (contract §8): the size term is identifiable only then, and the stopping rule
     refuses a model whose size term was frozen.
+
+    `signal_mask` (one flag per SIGNALS entry) holds the score weights of the unflagged signals at
+    0 for every class. All False is the size-and-class-only model the acceptance check compares
+    the ranker with; one True is a single-signal baseline. None uses all four.
     """
     validate_frame(frame)
     if "dx" not in frame or frame.dx.isna().any():
@@ -157,8 +163,12 @@ def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list
     # subsets gives the fit nothing to estimate the size or class-mix term from.
     train_subset_ids = [sid for sid, item in subsets.items() if item["role"] == "train"]
     sizes = {len(subsets[sid]["image_ids"]) for sid in train_subset_ids}
-    if max_epochs < 1 or bootstrap < 0 or patience < 1 or learning_rate <= 0:
+    if (max_epochs < 1 or bootstrap < 0 or patience < 1 or learning_rate <= 0 or weight_decay < 0
+            or initial_lam == 0):
         raise ValueError("Invalid training configuration")
+    mask = tuple(bool(v) for v in (signal_mask if signal_mask is not None else (True,) * len(SIGNALS)))
+    if len(mask) != len(SIGNALS):
+        raise ValueError("signal_mask needs one flag per signal")
     memberships: dict[str, set[str]] = {role: set() for role in ("train", "validation", "test")}
     member_map = {}
     for sid, subset in subsets.items():
@@ -209,7 +219,8 @@ def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list
         # The same class fractions in every train subset make the class-mix term a constant,
         # confounded with the intercept: it cannot be identified, so it is not fitted.
         frozen.append("class_mix")
-    config = (len(classes), tuple(frozen), max_epochs, patience, learning_rate)
+    config = (len(classes), tuple(frozen), max_epochs, patience, learning_rate, weight_decay,
+              initial_lam, mask)
     model, best, best_epoch = _train(tensors["train"], targets["train"], tensors["validation"],
                                      targets["validation"], seed, *config)
     ensemble = []
@@ -226,23 +237,33 @@ def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list
                           "validation_subsets": len(targets["validation"]),
                           "subset_sizes": sorted(sizes),
                           "training_seed": seed, "instrument_decision": decision,
-                          "frozen_unidentifiable": frozen, "bootstrap_models": bootstrap},
+                          "frozen_unidentifiable": frozen, "bootstrap_models": bootstrap,
+                          "signals_used": [s for s, used in zip(SIGNALS, mask) if used],
+                          "fit_config": {"max_epochs": max_epochs, "patience": patience,
+                                         "learning_rate": learning_rate, "weight_decay": weight_decay,
+                                         "initial_lam": initial_lam, "optimizer": "adam, full batch"}},
                          frozenset(memberships["train"]), frozenset(memberships["validation"]),
                          tuple(ensemble))
 
 
 def _train(train, train_y, validation, validation_y, seed, n_classes, frozen, max_epochs,
-           patience, learning_rate):
+           patience, learning_rate, weight_decay, initial_lam, mask):
     """One fit with validation early stopping. Frozen parameters keep their initial value."""
     torch.manual_seed(seed)
     model = AdditiveUtilityRanker(n_classes)
+    with torch.no_grad():
+        model.log_count.fill_(initial_lam)
+    if not all(mask):
+        # weights start at 0; a zeroed gradient keeps the unused signals there
+        keep = torch.tensor(mask, dtype=torch.float32)
+        model.weights.register_hook(lambda gradient: gradient * keep)
     for name in frozen:
         getattr(model, name).requires_grad_(False)
     if "log_count" in frozen:
         with torch.no_grad():
             model.log_count.fill_(SIZE_TERM_WHEN_FROZEN)
     optimizer = torch.optim.Adam([p for p in model.parameters() if p.requires_grad],
-                                 lr=learning_rate, weight_decay=1e-5)
+                                 lr=learning_rate, weight_decay=weight_decay)
     best, best_state, best_epoch = float("inf"), None, -1
     for epoch in range(max_epochs):
         model.train()
