@@ -74,6 +74,10 @@ class ConditionProtocol:
     """The directory Stage 5 writes predictions under, beside stage4's results_dir. Separate per
     protocol: a v2 evaluation sharing v1's tree could overwrite the protected result under a
     colliding run id."""
+    selection_outcomes: tuple[str, ...] = ()
+    """For a selector whose COUNT is its own output: the `selection_outcome` values of the selection
+    manifest under which this protocol is the one to train. Empty: the manifest is not consulted
+    (every protocol before asism_v2_learned)."""
 
 
 V1 = ConditionProtocol(
@@ -197,7 +201,73 @@ ASISM_V2_NONE = ConditionProtocol(
     stage5_dirname="stage5_asism_v2",
 )
 
-PROTOCOLS = {protocol.name: protocol for protocol in (V1, V2, ASISM_V2, ASISM_V2_NONE)}
+# ASISM v2 with the learned ranker and the stopping rule (contract §9 and §10, approved 2026-10-03).
+# The selector decides which images AND how many, so three outcomes are valid results: a proper
+# subset, every candidate, or none. The first trains A/B/C/D; in the other two C is B's (or A's)
+# training set by definition, so only A and B are trained and the outcome itself is reported.
+_ASISM_V2_LEARNED_REBUILD = (
+    "python -m scripts.followup.ham10000_asism_v2_learned_select --namespace {namespace} --phase select "
+    "--candidates <csv> --scores-dir <four_signal set>"
+)
+
+ASISM_V2_LEARNED = ConditionProtocol(
+    name="asism_v2_learned",
+    stage4_config="ham10000_asism_v2_learned_stage4.yaml",
+    conditions=("A", "B", "C", "D"),
+    baseline="A",
+    synthetic_conditions=("B", "C", "D"),
+    confirmatory=(("C", "D"),),
+    exploratory=(("C", "B"), ("D", "B"), ("C", "A"), ("D", "A"), ("B", "A")),
+    equal_counts_suspect=(("B", "C"), ("B", "D")),
+    equal_counts_required=(("C", "D"),),
+    interpretation=(
+        "C vs D is the confirmatory test of WHICH images ASISM v2 selects: the same safe pool, the "
+        "same number of images per class, the learned ranking the only difference. HOW MANY is the "
+        "output of ASISM's stopping rule; C vs D holds it fixed and does not test it. C vs B and the "
+        "comparisons with A are exploratory. Every p-value is reported with its effect size and "
+        "interval; significance alone is not a result."
+    ),
+    selection_manifest=SelectionManifest(
+        config="ham10000_asism_v2_ranker.yaml",
+        section="ham_asism_v2_ranker",
+        filename="asism_v2_learned_selection_manifest.json",
+        covers=("C", "D"),
+        rebuild_command=_ASISM_V2_LEARNED_REBUILD,
+        evidence_keys=("selection_outcome", "per_class", "n_selected_c", "n_selected_d", "c_ids_sha256"),
+    ),
+    stage5_dirname="stage5_asism_v2_learned",
+    selection_outcomes=("subset",),
+)
+
+ASISM_V2_LEARNED_ALL_OR_NONE = ConditionProtocol(
+    name="asism_v2_learned_all_or_none",
+    stage4_config="ham10000_asism_v2_learned_stage4.yaml",
+    conditions=("A", "B"),
+    baseline="A",
+    synthetic_conditions=("B",),
+    confirmatory=(),
+    exploratory=(("B", "A"),),
+    equal_counts_suspect=(),
+    equal_counts_required=(),
+    interpretation=(
+        "ASISM v2's stopping rule kept every candidate (C = B) or none (C = A); the selection "
+        "manifest says which. That outcome is the result of the selection. There is no separate "
+        "selected set to compare, so no selection comparison is made. B vs A is reported, exploratory."
+    ),
+    selection_manifest=SelectionManifest(
+        config="ham10000_asism_v2_ranker.yaml",
+        section="ham_asism_v2_ranker",
+        filename="asism_v2_learned_selection_manifest.json",
+        covers=(),
+        rebuild_command=_ASISM_V2_LEARNED_REBUILD,
+        evidence_keys=("selection_outcome", "per_class", "n_selected_c"),
+    ),
+    stage5_dirname="stage5_asism_v2_learned",
+    selection_outcomes=("all", "none"),
+)
+
+PROTOCOLS = {protocol.name: protocol for protocol in (
+    V1, V2, ASISM_V2, ASISM_V2_NONE, ASISM_V2_LEARNED, ASISM_V2_LEARNED_ALL_OR_NONE)}
 DEFAULT_PROTOCOL = "v1"
 
 

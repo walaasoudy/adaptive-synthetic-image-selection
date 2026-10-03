@@ -83,7 +83,7 @@ def run(protocol_name: str, device: str | None) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--protocol", required=True, choices=["asism_v2", "asism_v2_none"])
+    parser.add_argument("--protocol", required=True, choices=["asism_v2", "asism_v2_none", "asism_v2_learned", "asism_v2_learned_all_or_none"])
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
     run(args.protocol, args.device)

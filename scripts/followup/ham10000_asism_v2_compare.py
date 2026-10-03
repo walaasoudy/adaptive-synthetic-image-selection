@@ -92,7 +92,7 @@ def run(protocol_name: str, source: str, namespace: str, run_dir: Path | None = 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--protocol", required=True, choices=["asism_v2", "asism_v2_none"])
+    parser.add_argument("--protocol", required=True, choices=["asism_v2", "asism_v2_none", "asism_v2_learned", "asism_v2_learned_all_or_none"])
     parser.add_argument("--source", required=True, choices=["classifier_val", "final"])
     parser.add_argument("--namespace", default="ham-stratified-v1")
     parser.add_argument("--run-dir", type=Path, default=None)

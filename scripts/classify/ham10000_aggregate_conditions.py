@@ -224,6 +224,44 @@ def check_training_data_differs(runs: dict, protocol=None) -> dict:
     return per_condition
 
 
+def check_selection_outcome(runs: dict, protocol, selection: dict) -> dict:
+    """For a selector that decides its own count, every count is a valid result, including "all"
+    and "none". What is checked is that the protocol being aggregated is the one that outcome
+    calls for, and that C trained on the images the selection recorded.
+
+    "all" means C is B's training set and "none" means C is A's: neither is a broken run, and
+    neither is trained a second time under another name. The outcome is copied into the report.
+    """
+    outcome = selection.get("selection_outcome")
+    if outcome not in protocol.selection_outcomes:
+        raise AggregationError(
+            f"SELECTION OUTCOME: the selection manifest records {outcome!r}; protocol {protocol.name} "
+            f"is for {list(protocol.selection_outcomes)}. Aggregate under --protocol {selection.get('protocol')}."
+        )
+    for (condition, seed), entry in runs.items():
+        if condition == "C" and "C" in protocol.selection_manifest.covers:
+            trained_on = entry["manifest"]["data"].get("synthetic_ids_sha256")
+            if trained_on != selection.get("c_ids_sha256"):
+                raise AggregationError(
+                    f"SELECTION OUTCOME: C/seed{seed} trained on images other than the ones the "
+                    "selection manifest recorded"
+                )
+    meaning = {"subset": "C is a proper subset of the candidates; D is its size-matched random control",
+               "all": "the selector kept every candidate: C = B, and no C or D is trained separately",
+               "none": "the selector kept no candidate: C = A, and no C or D is trained separately"}
+    return {"selection_outcome": outcome, "meaning": meaning[outcome],
+            "per_class": selection.get("per_class"), "n_selected_c": selection.get("n_selected_c")}
+
+
+def _selection_manifest(protocol, namespace: str) -> dict:
+    spec = protocol.selection_manifest
+    path = Path(load_named_config(spec.config, spec.section).paths.outputs_dir) / namespace / spec.filename
+    if not path.is_file():
+        raise AggregationError(f"no selection manifest at {path}.\nRun: "
+                               + spec.rebuild_command.format(namespace=namespace))
+    return read_json(path)
+
+
 def summarise(runs: dict, seeds: list[int], conditions=CONDITIONS) -> tuple[pd.DataFrame, dict]:
     rows = []
     for (condition, seed), entry in sorted(runs.items()):
@@ -305,6 +343,9 @@ def run(namespace: str | None = None, protocol_name: str = DEFAULT_PROTOCOL) -> 
     check_protected_split(runs)
     protocol = check_fairness(runs)
     data_per_condition = check_training_data_differs(runs, condition_protocol)
+    selection_outcome = (check_selection_outcome(runs, condition_protocol,
+                                                 _selection_manifest(condition_protocol, namespace))
+                         if condition_protocol.selection_outcomes else None)
     frame, summary = summarise(runs, seeds, condition_protocol.conditions)
 
     out_dir = results_dir / namespace
@@ -328,6 +369,7 @@ def run(namespace: str | None = None, protocol_name: str = DEFAULT_PROTOCOL) -> 
         "complete": not missing,
         "shared_protocol": protocol,
         "training_data_per_condition": data_per_condition,
+        **({"selection": selection_outcome} if selection_outcome else {}),
         "per_condition": summary,
         f"per_class_recall_delta_vs_{condition_protocol.baseline}": rare_class_deltas(summary, protocol=condition_protocol),
         "table_path": str(table_path),

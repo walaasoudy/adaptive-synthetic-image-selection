@@ -1,0 +1,60 @@
+# HAM10000 Stage 4 (ASISM v2, learned ranker + stopping rule) — conditions A / B / C / D.
+#
+# Written 2026-10-03, before any utility measurement, ranker fit or Stage 4 result of this design.
+# SEPARATE FILE AND RESULTS DIR ON PURPOSE: v1 (ham10000_stage4.yaml), the post-hoc v2 follow-up
+# (ham10000_v2_stage4.yaml) and the composite/E4-count design (ham10000_asism_v2_stage4.yaml) are not
+# edited and cannot be overwritten. Everything that is not a condition path or a results path is
+# copied from ham10000_asism_v2_stage4.yaml unchanged: only the DATA differs.
+#
+#   A   real images only
+#   B   real + all 3,168 safe synthetic candidates
+#   C   real + what ASISM v2 selected: which images and how many are both the stopping rule's output
+#   D   real + a random draw at C's per-class counts; one independent draw per seed
+# Protocol asism_v2_learned (C a proper subset): C vs D is confirmatory.
+# Protocol asism_v2_learned_all_or_none (C = B or C = A): only A and B are trained.
+
+paths:
+  project_root: ${oc.env:PROJECT_ROOT,.}
+  splits_root: ${paths.project_root}/data/ham10000/processed/splits
+  images_root: ${paths.project_root}/data/ham10000/processed/images
+  results_dir: ${paths.project_root}/outputs/ham10000/stage4_asism_v2_learned
+  checkpoints_dir: ${paths.project_root}/checkpoints/ham10000/stage4_asism_v2_learned
+
+dataset: "ham10000"
+split_namespace: "ham-stratified-v1"
+
+loss: "cross_entropy"
+classes: ["nv", "mel", "bkl", "bcc", "akiec", "vasc", "df"]   # must equal CLASSIFIER_TARGET_LABELS
+
+real_train_split: "classifier_train"
+conditions:
+  A:
+    synthetic_manifest: null
+  B:
+    synthetic_manifest: ${paths.project_root}/outputs/ham10000/stage2/${split_namespace}/all_candidates.csv
+  C:
+    synthetic_manifest: ${paths.project_root}/outputs/ham10000/stage3_asism_v2_ranker/${split_namespace}/c_selected.csv
+  D:
+    # {seed} is filled with the training seed: each D run trains on its own draw.
+    synthetic_manifest: ${paths.project_root}/outputs/ham10000/stage3_asism_v2_ranker/${split_namespace}/d_selected_seed{seed}.csv
+
+selection_split: "classifier_val"
+selection_metric: "balanced_accuracy"
+
+model:
+  architecture: "densenet121"
+  pretrained_source: "imagenet"
+  dropout_p: 0.2
+  resolution: 512
+
+training:
+  max_steps: 3000
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  eval_every_n_steps: 500
+  class_weighting: "none"
+  class_weight_basis: "real_train_split"
+
+# k = 20 seeds per condition, as in ham10000_asism_v2_stage4.yaml (protocol document §4), unchanged. Contiguous from v1's first seed; no seed is ever dropped or replaced.
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61]
