@@ -85,7 +85,9 @@ estimate the same quantity with lower variance at the cost of training several f
 the compute budget did not permit; the choice is recorded rather than presented as equivalent.
 
 **(d) Explainability verification — Grad-CAM.** Grad-CAM attributions are computed for each
-candidate under its predicted class. Chest-radiograph anatomical priors do not transfer, so instead
+candidate under the class it was generated as (its intended class: `class_index` from the
+candidate's `dx`, `scripts/asism/ham10000_01_compute_signals.py`; corrected 2026-10-03, this read
+"under its predicted class", which the code never did). Chest-radiograph anatomical priors do not transfer, so instead
 of asking whether attention falls in an expected region, the method asks whether the attention
 *pattern* is **typical** of real images of that class: a per-class reference distribution of CAM
 statistics (focus area, peripheral mass) is built from real `gen_train` images, and each candidate

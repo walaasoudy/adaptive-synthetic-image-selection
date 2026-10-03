@@ -99,7 +99,7 @@ nv 112, mel 276, bkl 273, bcc 400, akiec 486, vasc 736, df 885.
 | Signal | Definition and fixed parameters | Source model | Status |
 |---|---|---|---|
 | Similarity | DINOv2 `vit_small_patch14_dinov2.lvd142m`, revision `936966a8…`; k-NN, k = 15, against `gen_train` of the same class; near-duplicate if similarity ≥ 0.95 | DINOv2, frozen | FROZEN |
-| IQA | 5 defect flags plus continuous sharpness and contrast. Blur threshold 17.53, calibrated on `gen_train`; border flag measured on the content box at the inherited constant 0.30 (border calibration disabled, `ham10000_stage3.yaml`; the artifact records `inherited_constant_uncalibrated`). Corrected 2026-10-02: this row earlier read "border threshold 0.329, calibrated", which no artifact used | — | FROZEN. Role in v2: **safety filter only**, through `safety.reject_invalid_iqa` (§10); not a ranking input (decision of 2026-09-27, "IQA: keep, but as a safety filter"; the quality flags are not safety criteria, E4 D2 approved 2026-10-02). Clarified 2026-10-02: this cell earlier read "used as a safety filter (S2 in the audit)"; no audit document defines an item S2 for IQA |
+| IQA | 5 defect flags plus continuous sharpness and contrast. Blur threshold 17.53, calibrated on `gen_train`; border flag measured on the content box at the inherited constant 0.30 (border calibration disabled, `ham10000_stage3.yaml`; the artifact records `inherited_constant_uncalibrated`). Corrected 2026-10-02: this row earlier read "border threshold 0.329, calibrated", which no artifact used | — | FROZEN. Role in v2: **ranking input and safety filter** (decision of Walaa, 2026-10-03, superseding the 2026-09-27 "IQA: keep, but as a safety filter"). As a ranking input, `iqa_composite` is one of the four features of the learned ranker, which learns its class-specific weight and direction. As a safety filter, `safety.reject_invalid_iqa` (§10) still removes undecodable images first; the quality flags are not safety criteria (E4 D2, approved 2026-10-02). Clarified 2026-10-02: this cell earlier read "used as a safety filter (S2 in the audit)"; no audit document defines an item S2 for IQA |
 | Uncertainty | MC dropout, 20 passes; mutual information normalised by ln 7 | V3a (`6849c456…`) | FIXED (passed Q3) |
 | Explainability | Grad-CAM for the intended class; two-sided conformal typicality against the `gen_train` reference of the same class | V3a, reference in `stage3_aux_v3/` | FIXED (passed Q4) |
 | Agreement | `P(intended) − 0.5 · P(best rival)` if the rival's probability is ≥ 0.5, else `P(intended)` (`compute_agreement_scores`, `rival_confidence_threshold`, `penalty_weight`) | **the agreement judge** | Formula FROZEN; **judge PENDING** |
@@ -171,7 +171,21 @@ Fixed requirements:
 - validation is on held-out subsets, against a correlation threshold written before training;
 - no architecture search. One documented fix is allowed after a failure (audit SC3).
 
-PENDING: the architecture, the loss, the correlation threshold.
+**Set-utility form (Walaa approved the change 2026-10-03; implemented in
+`scripts/asism_v2/pipeline.py`, CPU only, no real label used).** The ranker is supervised by measured
+subset utility through
+
+    U(S) = b + λ · log(1 + Σ_{i∈S} w_i),   w_i = 1 + (class-specific linear score of the 4 signals) + class term.
+
+`w_i` is an image's effective count. The earlier mean-pooled form (mean score + λ·log(1+n)) is
+retired: there an image below the current set mean was predicted to hurt, so a class could be dropped
+at the first step and the selected count came from dilution. A CPU check on toy utilities that are not
+of the fitted form (all images helpful, some harmful, no benefit, all harmful, classes of different
+quality, useless-but-harmless images, a truly mean-pooled utility) is recorded in
+`docs/asism_v2_quantity_design_check_2026-10-03.md`, with the failure modes it found.
+
+PENDING: the loss and training configuration to pre-register (§7 of that document lists them), the
+held-out acceptance threshold.
 
 ## 10. Selection and quantity (PENDING — Step 9)
 
@@ -192,8 +206,11 @@ PENDING: the architecture, the loss, the correlation threshold.
 - record the counts and the stopping trajectory;
 - no access to `classifier_val` or `final_eval_heldout`.
 
-PENDING: the exact criterion. The proposal is to stop when the lower 95% bound of the marginal
-utility reaches 0. It is frozen before Stage 4.
+**LOCKED (Walaa, 2026-10-03).** Stop a class when the lower 95% confidence bound of the estimated
+marginal utility of its next-ranked image reaches 0 or below. ASISM decides both which images and how
+many; E4's q* is an independent external check and is not the ASISM count. Implemented in
+`scripts/asism_v2/stopping.py`: one-sided 95% bound = 5th percentile over a bootstrap ensemble of the
+ranker; the size term must be identifiable, so the supervision has to span several subset sizes.
 
 ## 11. Downstream classifier (Stage 4)
 
