@@ -64,7 +64,7 @@ leakage checks are zero, and the split files are md5-verified on the pod.
 | v1 utility subsets | 42 | `ham10000_stage3.yaml: subset_design.seed` | FROZEN for v1 |
 | Stage 4 classifier | 42, 43, 44 | `ham10000_stage4.yaml: seeds` | FROZEN for v1. The v2 count is PENDING (§11). |
 | Bootstrap | 42 | `scripts/eval/ham10000_compare_conditions.py: run(seed=42)` | FROZEN |
-| v2 utility repeats, baseline seeds | — | — | PENDING (§8) |
+| v2 utility repeats | training seeds 42–46; role, design and fit seed 42 | `configs/ham10000_asism_v2_ranker.yaml` | APPROVED 2026-10-03 (§8) |
 
 Training is not bit-deterministic: `cudnn.deterministic` is never set (`scripts/utils/classifier.py:136`).
 Results are reproduced as distributions, not bit for bit. This is a recorded limitation, not
@@ -131,7 +131,7 @@ every new judge without change. For how Q5 is to be read, see Amendment 5. FIXED
 | Utility train/validation subsets | disjoint subset sets drawn from the candidate pool. v1 used 64/16 with `val_pool_fraction` 0.20 | Design PENDING (§8) |
 | Never used for ASISM | `classifier_val`, `final_eval_heldout` | FROZEN |
 
-## 8. Utility target (PENDING — Steps 5–6 of the audit plan)
+## 8. Utility target (APPROVED 2026-10-03; no measurement run yet)
 
 Fixed now, as requirements on the v2 design:
 
@@ -145,21 +145,27 @@ Fixed now, as requirements on the v2 design:
   - the ICC;
   - the reliability at the chosen number of repeats.
 
-PENDING (needed before E4 runs):
+**APPROVED (Walaa, 2026-10-03)**, replacing the PENDING list that stood here. The values are in
+`configs/ham10000_asism_v2_ranker.yaml`, frozen in `scripts/asism_v2/prereg.py`, and described in
+`docs/asism_v2_quantity_design_check_2026-10-03.md` §8 and §9:
 
-- the sizes;
-- the number of subsets per size;
-- the repeats;
-- the baseline seeds;
-- the proxy recipe;
-- the utility metric;
-- the reliability target;
-- the GPU budget (audit SC5).
+- metric: macro AUROC (one-vs-rest) on `asism_tuning_heldout`, absolute;
+- sizes: 125, 250, 500, 1,000 (train subsets); 125, 250, 500 (validation and test subsets);
+- 120 train, 40 validation and 40 test subsets, image-disjoint by role, class fractions varied, half
+  random and half tilted on one signal;
+- 5 repeats per subset (training seeds 42 to 46): 1,000 proxy runs, about 4 GPU-hours;
+- reliability target (gate G1): reliability of the 5-seed subset means ≥ 0.80, before any fit;
+- the multi-seed real-only baseline exists as E4's size-0 cell (10 seeds, Stage 4 recipe); it is reported and does not
+  enter the label.
 
-The cheap proxy (224 px, 300 steps) already failed its reliability test (ICC 0.108). Re-using it
-needs a written reason.
+The cheap proxy (224 px, 300 steps) failed its reliability test on random same-size subsets
+(ICC 0.108). Written reason for re-using it: those subsets barely differ, the designed ones are built
+to differ in size, class mix and signal; its direction agreed with the Stage 4 recipe (Spearman
+0.755); and G1 re-tests its reliability on the designed subsets before anything is fitted.
 
-## 9. Ranking network (PENDING — Steps 7–8)
+No GPU run is approved by this section. The measurement needs its own approval.
+
+## 9. Ranking network (APPROVED 2026-10-03; not trained on real labels yet)
 
 Name: **Multi-Signal Utility Ranking Network**.
 
@@ -184,10 +190,18 @@ of the fitted form (all images helpful, some harmful, no benefit, all harmful, c
 quality, useless-but-harmless images, a truly mean-pooled utility) is recorded in
 `docs/asism_v2_quantity_design_check_2026-10-03.md`, with the failure modes it found.
 
-PENDING: the loss and training configuration to pre-register (§7 of that document lists them), the
-held-out acceptance threshold.
+**APPROVED (Walaa, 2026-10-03).** Loss: mean squared error on the subset means. Fit: Adam, learning
+rate 0.03, weight decay 1e-5, full batch, up to 600 epochs, patience 60, starting λ 0.02, seed 42,
+200 bootstrap models. Acceptance on the 40 test subsets, read once: (a) Spearman within size ≥ 0.50
+with one-sided permutation p ≤ 0.05, and (b) lower test error than the same model with no signals.
+If either fails, the learned ranking is not used and the failure is the reported result. No other
+architecture or stopping formulation is tried at this point.
 
-## 10. Selection and quantity (PENDING — Step 9)
+Documented limitation of this form (design check §4): it is conservative. Helpful images whose weight
+is not confidently above 0 are left out, a mostly harmful class can be nearly excluded, harmless
+images that add nothing can be kept, and there is no stop for diminishing returns.
+
+## 10. Selection and quantity (LOCKED 2026-10-03)
 
 **Removed for v2** (they stay in the v1 config and code, for reproducing v1):
 
@@ -211,6 +225,8 @@ marginal utility of its next-ranked image reaches 0 or below. ASISM decides both
 many; E4's q* is an independent external check and is not the ASISM count. Implemented in
 `scripts/asism_v2/stopping.py`: one-sided 95% bound = 5th percentile over a bootstrap ensemble of the
 ranker; the size term must be identifiable, so the supervision has to span several subset sizes.
+200 bootstrap models; no minimum-gain threshold; the selection is repeated at fit seeds 42 to 46 and
+the per-class counts are reported for each, with the selection at seed 42 the one that is used.
 
 ## 11. Downstream classifier (Stage 4)
 
@@ -242,9 +258,9 @@ ranker; the size term must be identifiable, so the supervision has to span sever
 | 1 | Scope: full v2 or a narrowed claim | before E4 (GPU) | supervisor |
 | 2 | Agreement judge: one candidate and its criteria | Step 3 | Walaa |
 | 3 | E4 design and GPU budget | before E4 | Walaa |
-| 4 | Utility proxy, metric, repeats, reliability target | Step 6 | Walaa |
-| 5 | Ranking correlation threshold | Step 8 | Walaa |
-| 6 | Stopping criterion | Step 9 | Walaa |
+| 4 | Utility proxy, metric, repeats, reliability target | Step 6 | Walaa — decided 2026-10-03 (§8) |
+| 5 | Ranking correlation threshold | Step 8 | Walaa — decided 2026-10-03 (§9) |
+| 6 | Stopping criterion | Step 9 | Walaa — decided 2026-10-03 (§10) |
 | 7 | D draws, number of Stage 4 seeds | Step 11 | Walaa |
 | 8 | Test-set policy | before Stage 5 | supervisor |
 | 9 | ECE bins | Step 10 | Walaa |

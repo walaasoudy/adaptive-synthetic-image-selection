@@ -1,7 +1,10 @@
 # ASISM V2 quantity logic: CPU design check (2026-10-03)
 
 Status: CPU only, toy data only. No HAM10000 label, no GPU run, no Probe P, no real ranker fit.
-Sections 1 to 6 report what was checked. Sections 7 and 8 are proposals and are NOT APPROVED.
+Sections 1 to 6 report what was checked. Sections 7 and 8 were proposals; **Walaa approved both on
+2026-10-03**, together with the sum form as the V2 direction (no fixed K, no ratio to the real data,
+no other architecture or stopping formulation at this point, the conservative behaviour kept as a
+documented limitation). Section 9 records how they were implemented on CPU.
 
 ## 1. The question
 
@@ -117,7 +120,7 @@ A subset designer, a measurement runner, saving and loading a fitted ranker, a s
 condition C and the matched random D for Stage 4, and the held-out acceptance check. The Stage 4
 aggregator also rejects two valid adaptive outcomes (C equal to all candidates, C empty).
 
-## 7. Proposed pre-registration of the fit and the stopping rule (NOT APPROVED)
+## 7. Pre-registration of the fit and the stopping rule (APPROVED 2026-10-03)
 
 | Item | Proposed value | Reason |
 |---|---|---|
@@ -129,7 +132,7 @@ aggregator also rejects two valid adaptive outcomes (C equal to all candidates, 
 | Stability report | the selection repeated at fit seeds 42 to 46; per-class counts reported for each | shows how much of the count is the bootstrap |
 | Minimum-gain threshold | none | not introduced |
 
-## 8. Proposed utility measurement and ranker acceptance (contract §8 and §9; NOT APPROVED)
+## 8. Utility measurement and ranker acceptance (contract §8 and §9; APPROVED 2026-10-03)
 
 **Why earlier labels failed.** They were measured on random subsets of one size. Random subsets
 barely differ from one another, so the difference between them was below the training noise
@@ -152,3 +155,43 @@ barely differ from one another, so the difference between them was below the tra
 
 Not decided here: the supervisor's test-set policy, and how the count itself is tested at Stage 5
 (C against D tests only which images).
+
+## 9. Implementation of sections 7 and 8 (CPU only, 2026-10-03)
+
+| Piece | Where |
+|---|---|
+| The approved values, in YAML and frozen in code; a differing YAML is refused | `configs/ham10000_asism_v2_ranker.yaml`, `scripts/asism_v2/prereg.py` |
+| Safe-pool signal table, roles, the 200 designed subsets, the frozen plan | `scripts/asism_v2/supervision.py` |
+| G1 reliability, ranker acceptance (test subsets read once), stability across the 5 fit seeds | `scripts/asism_v2/gates.py` |
+| Explicit fit configuration; a signal mask for the no-signal and similarity-only models | `scripts/asism_v2/pipeline.py` |
+
+Values that section 8 left open and the implementation had to fix. They are part of the frozen
+configuration and are stated here so that they are not chosen later:
+
+- Roles are assigned with seed 42, within class, by largest remainder (60 / 20 / 20%).
+- Class fractions of a subset are drawn from Dirichlet(20 × the role's class proportions), then
+  capped by what the role holds of each class. Design seed 42.
+- Size cycles through the role's sizes; blocks of subsets alternate random and tilted, so every size
+  has both kinds. The eight tilts (4 signals × upper / lower) are used in turn.
+- A tilted class draw takes its images at random from the upper (or lower) half of the signal within
+  that class and role. When the class needs more than half of what the role holds, it takes the top
+  (or bottom) images by that signal.
+- Training seeds 42 to 46.
+- G1 is computed on the train and validation subsets only; the test subsets stay unread until the
+  acceptance check. The gated number is the reliability of the subset means over all of them, as
+  approved. Because subsets differ in size, that number includes the effect of size, and labels that
+  depend on size alone can pass it. The same reliability within each size is therefore reported next
+  to it. It does not gate; the within-size acceptance criterion (a) is what tests which images.
+- Acceptance: 10,000 permutations of the measured values within size, seed 42. Criterion (b) compares
+  test mean squared error with the same model fitted with every signal weight held at 0.
+- The reported selection is the one at fit seed 42. The other four seeds are reported, never chosen
+  from.
+
+Dry run of the design on the real signal table (3,168 candidates, no label, nothing frozen): roles
+hold 1,904 / 632 / 632 images; 1,000 runs planned; every image is in at least 5 subsets (median 26);
+both the size term and the class term are identifiable. One 200-bootstrap fit at this size takes
+roughly 1.5 CPU-hours, so the five-seed stability report is roughly 8 CPU-hours.
+
+Not built yet: the measurement runner (the only GPU step), saving and loading a fitted ranker, the
+selector that writes condition C and the matched random D, and the Stage 4 aggregator change that
+accepts C equal to all candidates or C empty.
