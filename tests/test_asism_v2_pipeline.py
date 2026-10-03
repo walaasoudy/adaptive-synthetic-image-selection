@@ -6,7 +6,7 @@ import torch
 
 from scripts.asism_v2.contracts import fingerprint
 from scripts.asism_v2.features import SIGNALS
-from scripts.asism_v2.pipeline import fit_ranker
+from scripts.asism_v2.pipeline import AdditiveUtilityRanker, _matrix, fit_ranker
 
 
 def toy_problem(fixed_mix=False):
@@ -164,3 +164,89 @@ def test_class_mix_is_frozen_when_sizes_vary_but_class_fractions_do_not():
     fit = fit_ranker(frame, changed, rows, [11, 12, 13], protocol, max_epochs=20, patience=20)
     assert fit.history["frozen_unidentifiable"] == ["class_mix"]
     assert fit.history["subset_sizes"] == [4, 8]
+
+
+def small_scale_problem():
+    """A truth of the model's own form whose targets move by about 0.001 within a size, as a
+    macro AUROC does. Noise-free, so a fit that reaches the minimum recovers the planted weights."""
+    rng = np.random.default_rng(77)
+    slopes = {"a": np.array([.5, 0, 0, -.3]), "b": np.array([-.5, .2, 0, 0])}
+    rows, subsets, measurements, planted = [], {}, [], {}
+    protocol = {"dataset": "synthetic_toy", "instrument_decision": "synthetic_toy_only",
+                "recipe": "planted-sum-pooled-utility", "metric": "toy_score"}
+    pools = {}
+    for role, n in (("train", 300), ("validation", 150), ("test", 150)):
+        for dx in ("a", "b"):
+            pools[role, dx] = []
+            for j in range(n):
+                values = rng.normal(0, 1, len(SIGNALS))
+                image_id = f"{role}-{dx}-{j}"
+                rows.append({"image_id": image_id, "dx": dx, **dict(zip(SIGNALS, values))})
+                planted[image_id] = 1 + slopes[dx] @ values
+                pools[role, dx].append(image_id)
+    for role, n_subsets in (("train", 120), ("validation", 40), ("test", 40)):
+        for k in range(n_subsets):
+            size = (20, 40, 80)[k % 3]
+            n_a = int(size * (0.3 + 0.1 * (k % 5)))
+            ids = list(rng.choice(pools[role, "a"], n_a, replace=False))
+            ids += list(rng.choice(pools[role, "b"], size - n_a, replace=False))
+            sid = f"{role}-{k}"
+            subsets[sid] = {"role": role, "image_ids": ids}
+            value = 0.86 + 0.012 * np.log1p(sum(planted[i] for i in ids))
+            for seed in (11, 12, 13):
+                measurements.append({"subset_id": sid, "seed": seed,
+                                     "members_sha256": fingerprint({"ids": sorted(ids)}),
+                                     "protocol_sha256": fingerprint(protocol), "augmented_metric": float(value)})
+    return pd.DataFrame(rows), subsets, measurements, protocol, planted
+
+
+def test_the_pooled_forward_is_the_forward():
+    frame, subsets, _, _, _ = small_scale_problem()
+    fitted_classes = ("a", "b")
+    from scripts.asism_v2.features import TrainingStandardizer
+    ids = sorted(subsets)[:25]
+    normalizer = TrainingStandardizer.fit(frame, list(frame.image_id))
+    batch = _matrix(subsets, ids, frame, normalizer, fitted_classes)
+    torch.manual_seed(3)
+    model = AdditiveUtilityRanker(2)
+    with torch.no_grad():
+        model.weights.normal_(0, 0.3)
+        model.class_mix.normal_(0, 0.3)
+    with torch.no_grad():
+        assert torch.allclose(model(*batch), model.forward_pooled(*model.pool(*batch)), atol=1e-5)
+
+
+def test_standardised_targets_recover_a_planted_truth_at_the_scale_of_an_auroc():
+    frame, subsets, measurements, protocol, planted = small_scale_problem()
+    truth = frame.image_id.map(planted).to_numpy()
+    rows = fitting_rows(measurements)
+
+    def recovered(**settings):
+        fitted = fit_ranker(frame, subsets, rows, [11, 12, 13], protocol, **settings)
+        learned = fitted.score_frame(frame)["image_weight"].to_numpy()
+        return fitted, float(np.corrcoef(learned, truth)[0, 1])
+
+    amended, good = recovered(standardise_targets=True, weight_decay=0.0, max_epochs=5000, patience=200)
+    _, before = recovered(weight_decay=1e-5, max_epochs=600, patience=60)
+    assert good > 0.99 and before < good - 0.1
+    assert amended.history["epoch_limit_reached"] is False
+    assert amended.history["fit_config"]["standardise_targets"] is True
+    # the saved parameters are in the metric's own units: the planted intercept and size coefficient
+    assert float(amended.model.log_count.detach()) == pytest.approx(0.012, abs=0.002)
+    assert float(amended.model.intercept.detach()) == pytest.approx(0.86, abs=0.01)
+    # and the recorded validation error is the error of those parameters, in those units
+    ids = sorted(sid for sid, s in subsets.items() if s["role"] == "validation")
+    batch = _matrix(subsets, ids, frame, amended.normalizer, amended.classes)
+    target = {}
+    for row in rows:
+        target[row["subset_id"]] = row["augmented_metric"]
+    with torch.no_grad():
+        error = float(((amended.model(*batch) - torch.tensor([target[i] for i in ids])) ** 2).mean())
+    assert error == pytest.approx(amended.history["validation_mse"], rel=0.05, abs=1e-9)
+
+
+def test_targets_that_do_not_vary_cannot_be_standardised():
+    frame, subsets, measurements, protocol, _ = small_scale_problem()
+    flat = [{**row, "augmented_metric": 0.9} for row in fitting_rows(measurements)]
+    with pytest.raises(ValueError, match="do not vary"):
+        fit_ranker(frame, subsets, flat, [11, 12, 13], protocol, standardise_targets=True)

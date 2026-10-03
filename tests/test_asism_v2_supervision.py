@@ -32,8 +32,9 @@ def test_the_yaml_is_the_approved_configuration():
     loaded = load_prereg()
     assert {k: loaded[k] for k in FROZEN} == FROZEN
     assert loaded["prereg_sha256"] == fingerprint(FROZEN)
-    assert fit_arguments(loaded) == {"seed": 42, "bootstrap": 200, "max_epochs": 600, "patience": 60,
-                                     "learning_rate": 0.03, "weight_decay": 1e-5, "initial_lam": 0.02}
+    assert fit_arguments(loaded) == {"seed": 42, "bootstrap": 200, "max_epochs": 5000, "patience": 200,
+                                     "learning_rate": 0.03, "weight_decay": 0.0, "initial_lam": 0.02,
+                                     "standardise_targets": True}
 
 
 def test_a_changed_configuration_is_refused(monkeypatch):
