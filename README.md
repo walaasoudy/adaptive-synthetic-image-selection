@@ -1,116 +1,126 @@
-# Adaptive Quality-Aware Synthetic Data Selection Framework
+# Adaptive Synthetic Image Selection (ASISM)
 
-Master's thesis project (AI, Zewail City University): fine-tuning SDXL with LoRA on CheXpert
-chest X-rays, generating synthetic data, and adaptively selecting/weighting it (ASISM) before
-classifier training and evaluation. See `docs/proposal.md` for the full 5-stage framework and
-`docs/literature_review.md` for the grounding literature.
+Master's thesis project (AI, Zewail City University). A diffusion model generates synthetic medical
+images, and the Adaptive Synthetic Image Selection Module (ASISM) decides which of them, and how
+many, are added to the real training set of a classifier.
 
-The repository contains executable code for Stages 1--5. Production thesis results still require
-the real CheXpert data, trained checkpoints, generated images, and GPU execution; committed smoke
-artifacts validate engineering connectivity only.
+The experiments are on **HAM10000** (dermatoscopy, 10,015 images, 7 classes). The pipeline was first
+built for CheXpert chest X-rays; that track is still in the repository and is described in
+[docs/chexpert_pipeline.md](docs/chexpert_pipeline.md).
 
-Stage 5 compares three conditions on `final_eval_heldout` (`configs/stage4_classifier.yaml` →
-`conditions: [A, B, C]`): **A** real only, **B** real + all synthetic, **C** real + ASISM-
-selected synthetic. There is no separate weighted-baseline selector or condition — ASISM is the full
-module (`docs/stages2_to_5_plan.md` §4.9), including the Multi-Signal Utility Ranking Network and
-Adaptive Threshold Learning below. Primary comparison: **C vs. B**. See
-`docs/stages2_to_5_plan.md` §7.1 for a known limitation of that comparison (no matched-random
-control) still pending a supervisor decision.
+## Framework
 
-Learned-ASISM order (after Stage 2, auxiliary classifier, signal computation, and Go/No-Go):
+| Stage | What it does |
+|---|---|
+| 1 | Fine-tune Stable Diffusion XL with LoRA on the real images |
+| 2 | Generate synthetic images |
+| 3 | **ASISM**: score every synthetic image, rank it, and select |
+| 4 | Train a DenseNet-121 classifier on real + selected synthetic images |
+| 5 | Evaluate against real only and real + all synthetic |
 
-```bash
-python scripts/asism/04_build_utility_subsets.py --phase feasibility
-python scripts/asism/04_build_utility_subsets.py --phase build
-python scripts/asism/04b_evaluate_utility_subsets.py --phase estimate
-python scripts/asism/04b_evaluate_utility_subsets.py --phase run
-python scripts/asism/05_train_learned_asism.py
-python scripts/asism/06_learn_thresholds_select.py
-# 06 is the fixed-ratio learned threshold — an intermediate/ablation artifact, not a Stage 4
-# condition. The adaptive path that feeds condition C continues with:
-python scripts/asism/07_build_threshold_contexts.py
-python scripts/asism/07b_verify_thresholds_proxy.py --phase estimate
-python scripts/asism/07b_verify_thresholds_proxy.py --phase run --i-understand-this-trains-real-models
-python scripts/asism/08_train_threshold_network.py
-python scripts/asism/08b_verify_full_policy_proxy.py --phase estimate
-python scripts/asism/08b_verify_full_policy_proxy.py --phase run --i-understand-this-trains-real-models
-python scripts/asism/09_finalize_learned_selection.py
-```
+ASISM uses four signals per image:
 
-`scripts/asism/03_tune_freeze_select.py` (the pre-learned weighted-score selector) is retained as
-the historical baseline the learned module replaced, and is exercised only by its own tests. Nothing
-imports it and nothing in the Stage 4/5 pipeline consumes its output — do not run it as a pipeline
-step. The shared signal-merge used by the learned stages (04–09) is
-`scripts/asism/candidate_pool.py`, not this script.
+- similarity to real images of the same class (DINOv2, k-NN);
+- image quality assessment (blur, contrast, border artifacts);
+- uncertainty (Monte Carlo dropout, 20 passes);
+- explainability (Grad-CAM typicality against real images of the same class).
 
-## Environment
+A ranking network learns a weight for each image from these signals, and a stopping rule decides how
+many images of each class are kept. No count or ratio is given to it.
 
-Target hardware: RunPod, 1x NVIDIA A40 (48GB), PyTorch 2.8.0 / CUDA 12.8 template. All paths that
-must survive a pod restart (data, checkpoints, logs, HF cache) are expected to live on the
-persistent volume — set `PROJECT_ROOT` (see `configs/stage1_lora_sdxl.yaml`) to wherever this repo
-is cloned (e.g. `/workspace/chest-synth-thesis` on RunPod, or the local checkout when developing).
+Stage 5 compares four conditions:
+
+| Condition | Training data |
+|---|---|
+| A | real images only |
+| B | real + all synthetic images |
+| C | real + images selected by ASISM |
+| D | real + a random draw with the same number of images per class as C |
+
+C against D isolates the effect of selection.
+
+## Status
+
+- **Stages 1 and 2:** done. One rank-32 LoRA (8,000 steps); 3,168 candidate images.
+- **Signals:** computed for all candidates; the four signals passed the Go/No-Go gate.
+- **Version 1** ran end to end. Balanced accuracy on the held-out test set (3 seeds):
+  A 0.566, B 0.645, C 0.612. C used 616 images and did not beat B. The results and their
+  limitations are in [docs/ham10000_results_and_limitations.md](docs/ham10000_results_and_limitations.md).
+- **Follow-up experiments** (noise floor, instrument check, selection headroom, quantity curve) are
+  in `scripts/followup/`.
+- **Version 2** (`scripts/asism_v2/`): the ranking and stopping code is written and tested on toy
+  data. It has not been trained on real measurements yet. Design:
+  [docs/ham10000_v2_experimental_contract.md](docs/ham10000_v2_experimental_contract.md),
+  [docs/asism_v2_quantity_design_check_2026-10-03.md](docs/asism_v2_quantity_design_check_2026-10-03.md).
+
+A short summary of the whole project is in `docs/Thesis_Summary_ASISM.docx`.
+
+## Setup
 
 ```bash
 pip install -r environment/requirements.txt
 ```
 
-After a verified working setup, freeze exact versions:
+GPU stages run on RunPod. Set `PROJECT_ROOT` to the checkout; every config path resolves against it.
+CPU steps and the tests run locally in a Python 3.11 environment with the same requirements.
+
+## Tests
 
 ```bash
-pip freeze > environment/requirements-lock.txt
+python tests/run_all.py                                # every suite
+python -m pytest tests/test_asism_v2_stopping.py -q    # one suite
 ```
 
-## Pipeline (Stage 1)
+## Running the HAM10000 pipeline
 
-Run from the repo root, in order. `NS` is the split namespace every later stage is pinned to
-(`dev-<run>` or `production-<run>`):
+The full ordered command list, with what to check after each step, is in
+[docs/ham10000_runpod_commands.md](docs/ham10000_runpod_commands.md). In outline:
 
 ```bash
-NS=production-thesis-v1
-python scripts/data/00_download_dataset.py                  # kagglehub download + link into data/chexpert/raw/ (idempotent)
-python scripts/data/01_verify_download.py                   # sanity-check the extracted CheXpert-v1.0-small archive
-python scripts/data/02b_build_sixway_splits.py --namespace production --run-id "$NS" --freeze
-python scripts/data/03_preprocess_images.py --namespace "$NS" --splits gen_train gen_val classifier_train classifier_val asism_tuning_heldout final_eval_heldout
-python scripts/data/04_generate_captions.py --namespace "$NS" --splits gen_train gen_val
-bash scripts/train/launch_resumable.sh                      # resumable SDXL LoRA training (checks checkpoints/.../latest.json)
+NS=ham-stratified-v1
+python scripts/data/ham10000/00_download_dataset.py
+python scripts/data/ham10000/01_build_splits.py --namespace production --run-id $NS --freeze
+python scripts/data/ham10000/02_preprocess_images.py --namespace $NS
+python scripts/data/ham10000/04_prepare_lora_inputs.py --namespace $NS
+python scripts/train/ham10000_train_lora_sdxl.py --run-id ham-lora-v1                 # Stage 1
+python scripts/generate/ham10000_generate_synthetic_images.py --build-recipes         # Stage 2
+python scripts/classify/ham10000_train_auxiliary_classifier.py --namespace $NS
+python scripts/asism/ham10000_01_compute_signals.py --namespace $NS                   # Stage 3 signals
+python scripts/asism/ham10000_02_gonogo.py --namespace $NS
 ```
 
-`scripts/data/02_build_patient_splits.py` is the superseded schema-v1 three-way builder and is not a
-pipeline step; `configs/splits.yaml` replaced it. For the full Stage 1–5 sequence, including the dev
-namespace, see `run_dev_subset.sh` — it is the executable version of this list.
+Stage 2 generates a small pilot first and needs a recorded approval before the full run. Stage 4 is
+`scripts/classify/ham10000_train_conditions.py`; Stage 5 is `scripts/eval/ham10000_stage5_evaluate.py`
+followed by `scripts/eval/ham10000_compare_conditions.py`.
 
-Evaluation/monitoring:
+## Data splits
 
-```bash
-python scripts/eval/generate_probe_samples.py --checkpoint <path>
-python scripts/eval/compute_fid_clipscore.py --checkpoint <path>
-```
+HAM10000 is split at lesion level into six parts with fixed uses:
 
-## Dataset
-
-CheXpert-v1.0-small, obtained from Kaggle (`ashery/chexpert`) via `scripts/data/00_download_dataset.py`,
-which downloads it with `kagglehub`, symlinks (or copies) it into `data/chexpert/raw/`, and runs
-`01_verify_download.py` automatically. Requires Kaggle API credentials configured for `kagglehub`
-(e.g. `~/.kaggle/kaggle.json` or the `KAGGLE_USERNAME`/`KAGGLE_KEY` env vars). Not included in this repo.
-See `docs/stage1_plan.md` §6 for the exact expected structure.
+| Split | Images | Used for |
+|---|---|---|
+| `gen_train` | 3,586 | LoRA training; reference for similarity and Grad-CAM |
+| `gen_val` | 388 | monitoring Stage 1 |
+| `classifier_train` | 1,641 | the real part of every classifier |
+| `classifier_val` | 1,401 | monitoring Stage 4 |
+| `asism_tuning_heldout` | 1,377 | utility measurements inside ASISM |
+| `final_eval_heldout` | 1,622 | the final evaluation only |
 
 ## Layout
 
 ```
-data/chexpert/{raw,processed}/   # dataset (gitignored except splits/manifests)
-configs/                         # YAML configs — single source of truth for tunables
-scripts/data/                    # download, verify, six-way splits, preprocess, captions
-scripts/train/                   # Stage 1 SDXL + LoRA
-scripts/generate/                # Stage 2 label recipes + synthetic generation
-scripts/asism/                   # Stage 3 signals, Go/No-Go, learned ASISM (04–09)
-scripts/classify/                # auxiliary classifier + Stage 4 conditions
-scripts/eval/                    # Stage 1 monitoring + Stage 5 evaluation and analysis
-scripts/smoke/                   # CPU/GPU fixture pipelines (non-scientific by construction)
-scripts/utils/                   # shared config, provenance, labels, splits, metrics, classifier
-tests/                           # contract + unit suites; tests/run_all.py is the STOP gate
-cloud/                           # Modal entry points (Stage 1, benchmarks, GPU probe)
-notebooks/                       # thesis_full_project_code.ipynb — the whole project, one notebook
-checkpoints/stage1_lora_sdxl/    # resumable + inference-ready LoRA checkpoints (gitignored, per-run metadata tracked)
-logs/, outputs/                  # TensorBoard logs, probe sample grids (gitignored)
-docs/                            # proposal, literature review, this stage's design plan
+configs/            YAML configs (ham10000_*.yaml for HAM10000)
+scripts/data/       download, splits, preprocessing
+scripts/train/      Stage 1
+scripts/generate/   Stage 2
+scripts/asism/      Stage 3: signals, gate, version 1 ranking and thresholds
+scripts/asism_v2/   Stage 3: version 2 ranking and stopping
+scripts/followup/   experiments run after version 1
+scripts/classify/   auxiliary classifier and Stage 4
+scripts/eval/       Stage 5
+scripts/utils/      shared code
+tests/              test suites
+docs/               design documents, results, thesis text
 ```
+
+The dataset, checkpoints, generated images and run outputs are not in the repository.
