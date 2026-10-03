@@ -137,7 +137,8 @@ def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int, noise
     }
     if fit:
         report.update({
-            "fit": {k: fit[k] for k in ("best_epoch", "validation_mse", "frozen_unidentifiable", "bootstrap_models")},
+            "fit": {k: fit[k] for k in ("best_epoch", "validation_mse", "epoch_limit_reached", "bootstrap_models_at_epoch_limit",
+                                        "frozen_unidentifiable", "bootstrap_models", "fit_config")},
             "selection": {k: selection[k] for k in ("selection_outcome", "protocol", "per_class", "n_selected_c",
                                                     "n_selected_d", "score_sources")},
             "selection_files": sorted(selection["files_sha256"]),

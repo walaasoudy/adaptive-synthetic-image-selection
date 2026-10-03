@@ -50,9 +50,12 @@ fit:
   initial_lam: 0.02
   optimizer: "adam"
   learning_rate: 0.03
-  weight_decay: 1.0e-5
-  max_epochs: 600
-  patience: 60
+  # Amendment 2026-10-03 (before any measurement): the four values below. Before: weight decay
+  # 1.0e-5, 600 epochs, patience 60, targets in the metric's own units.
+  weight_decay: 0.0
+  max_epochs: 5000                           # a limit the fit should not reach; reaching it is recorded
+  patience: 200
+  standardised_fit: true                     # fit on (target - train mean) / train SD, size term centred
 
 stopping:
   lower_bound_quantile: 0.05                 # contract §10, one-sided 95%

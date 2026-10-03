@@ -59,6 +59,19 @@ class AdditiveUtilityRanker(nn.Module):
         total = self.image_weight(x, classes).masked_fill(~mask, 0).sum(1)
         return self.intercept + self.log_count * torch.log1p(torch.relu(total))
 
+    def pool(self, x: torch.Tensor, classes: torch.Tensor, mask: torch.Tensor):
+        """-> per-class signal sums [subsets, classes, signals] and per-class counts [subsets, classes].
+        The sum of a subset's image weights is linear in these, so a fit needs nothing else."""
+        member = (torch.nn.functional.one_hot(classes, self.weights.shape[0]) * mask.unsqueeze(-1)).to(x.dtype)
+        return torch.einsum("bmc,bmf->bcf", member, x.masked_fill(~mask.unsqueeze(-1), 0)), member.sum(1)
+
+    def forward_pooled(self, sums: torch.Tensor, counts: torch.Tensor, size_centre: float = 0.0) -> torch.Tensor:
+        """forward() from pool()'s output. `size_centre` is subtracted from the size term; it is
+        used only while fitting on standardised targets and is folded into the intercept after."""
+        total = (counts.sum(1) + (self.weights * sums).sum((1, 2))
+                 + (counts * (self.class_mix - self.class_mix.mean())).sum(1))
+        return self.intercept + self.log_count * (torch.log1p(torch.relu(total)) - size_centre)
+
 
 @dataclass
 class FittedRanking:
@@ -123,7 +136,8 @@ def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list
                seeds: list[int], protocol: dict, *, seed: int = 42, max_epochs: int = 600,
                patience: int = 60, learning_rate: float = 0.03, bootstrap: int = 0,
                weight_decay: float = 1e-5, initial_lam: float = SIZE_TERM_INITIAL,
-               signal_mask: tuple[bool, ...] | None = None) -> FittedRanking:
+               signal_mask: tuple[bool, ...] | None = None,
+               standardise_targets: bool = False) -> FittedRanking:
     """Train on measured subset outcomes; tune on image-disjoint validation.
 
     The protected test subsets are never inspected in fitting or early stopping.
@@ -139,6 +153,12 @@ def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list
     `signal_mask` (one flag per SIGNALS entry) holds the score weights of the unflagged signals at
     0 for every class. All False is the size-and-class-only model the acceptance check compares
     the ranker with; one True is a single-signal baseline. None uses all four.
+
+    `standardise_targets` fits on (target - train mean) / train SD with the size term centred on
+    its train mean, then writes the intercept and lam back in the metric's own units. The model
+    and its predictions are the same; only the optimiser's problem is better conditioned. Without
+    it, targets that move by about 0.001 leave gradients of the order of the weight decay and an
+    intercept nearly collinear with the size term (design check 2026-10-03 §10, amendment in §11).
     """
     validate_frame(frame)
     if "dx" not in frame or frame.dx.isna().any():
@@ -220,39 +240,57 @@ def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list
         # confounded with the intercept: it cannot be identified, so it is not fitted.
         frozen.append("class_mix")
     config = (len(classes), tuple(frozen), max_epochs, patience, learning_rate, weight_decay,
-              initial_lam, mask)
-    model, best, best_epoch = _train(tensors["train"], targets["train"], tensors["validation"],
-                                     targets["validation"], seed, *config)
+              initial_lam, mask, bool(standardise_targets))
+    pooler = AdditiveUtilityRanker(len(classes))
+    pooled = {role: pooler.pool(*tensors[role]) for role in ("train", "validation")}
+    model, best, best_epoch, at_limit = _train(pooled["train"], targets["train"], pooled["validation"],
+                                               targets["validation"], seed, *config)
     ensemble = []
+    members_at_limit = 0
     n_train = len(targets["train"])
     for b in range(bootstrap):
         rows = torch.from_numpy(np.random.default_rng([seed, b]).integers(0, n_train, n_train))
-        resampled = tuple(t[rows] for t in tensors["train"])
-        member, _, _ = _train(resampled, targets["train"][rows], tensors["validation"],
-                              targets["validation"], seed + 1 + b, *config)
+        resampled = tuple(t[rows] for t in pooled["train"])
+        member, _, _, limit = _train(resampled, targets["train"][rows], pooled["validation"],
+                                     targets["validation"], seed + 1 + b, *config)
+        members_at_limit += int(limit)
         ensemble.append(member)
     return FittedRanking(model, normalizer, classes,
                          {"best_epoch": best_epoch, "validation_mse": best,
                           "train_subsets": n_train,
                           "validation_subsets": len(targets["validation"]),
+                          "epoch_limit_reached": at_limit,
+                          "bootstrap_models_at_epoch_limit": members_at_limit,
                           "subset_sizes": sorted(sizes),
                           "training_seed": seed, "instrument_decision": decision,
                           "frozen_unidentifiable": frozen, "bootstrap_models": bootstrap,
                           "signals_used": [s for s, used in zip(SIGNALS, mask) if used],
                           "fit_config": {"max_epochs": max_epochs, "patience": patience,
                                          "learning_rate": learning_rate, "weight_decay": weight_decay,
-                                         "initial_lam": initial_lam, "optimizer": "adam, full batch"}},
+                                         "initial_lam": initial_lam, "optimizer": "adam, full batch",
+                                         "standardise_targets": bool(standardise_targets)}},
                          frozenset(memberships["train"]), frozenset(memberships["validation"]),
                          tuple(ensemble))
 
 
 def _train(train, train_y, validation, validation_y, seed, n_classes, frozen, max_epochs,
-           patience, learning_rate, weight_decay, initial_lam, mask):
-    """One fit with validation early stopping. Frozen parameters keep their initial value."""
+           patience, learning_rate, weight_decay, initial_lam, mask, standardise):
+    """One fit with validation early stopping, on pooled subsets (AdditiveUtilityRanker.pool).
+    Frozen parameters keep their initial value. -> model, validation MSE in the metric's units,
+    best epoch, and whether the epoch limit ended the fit instead of the patience."""
     torch.manual_seed(seed)
     model = AdditiveUtilityRanker(n_classes)
+    mean, sd, centre = 0.0, 1.0, 0.0
+    if standardise:
+        mean, sd = float(train_y.mean()), float(train_y.std())
+        if not (math.isfinite(sd) and sd > 0):
+            raise ValueError("Train targets do not vary; nothing to fit")
+        centre = float(torch.log1p(train[1].sum(1)).mean())
+        train_y, validation_y = (train_y - mean) / sd, (validation_y - mean) / sd
     with torch.no_grad():
-        model.log_count.fill_(initial_lam)
+        model.log_count.fill_(initial_lam / sd)
+        if standardise:
+            model.intercept.fill_(0.0)
     if not all(mask):
         # weights start at 0; a zeroed gradient keeps the unused signals there
         keep = torch.tensor(mask, dtype=torch.float32)
@@ -264,23 +302,27 @@ def _train(train, train_y, validation, validation_y, seed, n_classes, frozen, ma
             model.log_count.fill_(SIZE_TERM_WHEN_FROZEN)
     optimizer = torch.optim.Adam([p for p in model.parameters() if p.requires_grad],
                                  lr=learning_rate, weight_decay=weight_decay)
-    best, best_state, best_epoch = float("inf"), None, -1
+    best, best_state, best_epoch, at_limit = float("inf"), None, -1, True
     for epoch in range(max_epochs):
         model.train()
-        loss = torch.nn.functional.mse_loss(model(*train), train_y)
+        loss = torch.nn.functional.mse_loss(model.forward_pooled(*train, centre), train_y)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         model.eval()
         with torch.no_grad():
-            val = float(torch.nn.functional.mse_loss(model(*validation), validation_y))
+            val = float(torch.nn.functional.mse_loss(model.forward_pooled(*validation, centre), validation_y))
         if math.isfinite(val) and val < best - 1e-9:
             best, best_epoch = val, epoch
             best_state = copy.deepcopy(model.state_dict())
         elif epoch - best_epoch >= patience:
+            at_limit = False
             break
     if best_state is None:
         raise ValueError("No finite validation fit")
     model.load_state_dict(best_state)
+    with torch.no_grad():                    # back to the metric's own units, size term uncentred
+        model.intercept.copy_((model.intercept - model.log_count * centre) * sd + mean)
+        model.log_count.mul_(sd)
     model.eval()
-    return model, best, best_epoch
+    return model, best * sd * sd, best_epoch, at_limit

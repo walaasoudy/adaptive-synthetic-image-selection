@@ -4,6 +4,12 @@ Approved by Walaa on 2026-10-03 (docs/asism_v2_quantity_design_check_2026-10-03.
 any real utility measurement. configs/ham10000_asism_v2_ranker.yaml is what a reader edits; FROZEN is
 what was approved. load_prereg() refuses to continue when the two differ, so a value cannot change
 without a change to this module, which is a dated amendment and a commit of its own.
+
+Amendment, 2026-10-03, approved by Walaa before any real utility measurement (design check §11):
+the fit runs on standardised targets with no weight decay, epoch limit 5000 and patience 200.
+Before: weight decay 1e-5, epoch limit 600, patience 60, targets in the metric's own units. The
+CPU dry run on planted data showed those settings stop at the epoch limit far from the planted
+truth. Nothing else changed: the model, the learning rate, the seeds and every gate are as approved.
 """
 from __future__ import annotations
 
@@ -37,7 +43,8 @@ FROZEN = {
     },
     "reliability": {"min_reliability_of_subset_means": 0.80},
     "fit": {"seed": 42, "bootstrap_models": 200, "initial_lam": 0.02, "optimizer": "adam",
-            "learning_rate": 0.03, "weight_decay": 1.0e-5, "max_epochs": 600, "patience": 60},
+            "learning_rate": 0.03, "weight_decay": 0.0, "max_epochs": 5000, "patience": 200,
+            "standardised_fit": True},
     "stopping": {"lower_bound_quantile": 0.05, "minimum_gain": None,
                  "stability_fit_seeds": [42, 43, 44, 45, 46]},
     "acceptance": {"min_within_size_spearman": 0.50, "max_one_sided_p": 0.05, "permutations": 10000,
@@ -66,4 +73,5 @@ def fit_arguments(prereg: dict, seed: int | None = None) -> dict:
     return {"seed": int(fit["seed"] if seed is None else seed), "bootstrap": int(fit["bootstrap_models"]),
             "max_epochs": int(fit["max_epochs"]), "patience": int(fit["patience"]),
             "learning_rate": float(fit["learning_rate"]), "weight_decay": float(fit["weight_decay"]),
-            "initial_lam": float(fit["initial_lam"])}
+            "initial_lam": float(fit["initial_lam"]),
+            "standardise_targets": bool(fit["standardised_fit"])}
