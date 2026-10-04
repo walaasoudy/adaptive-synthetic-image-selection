@@ -235,7 +235,3 @@ def test_the_approved_fit_arguments_name_the_network_and_a_changed_ranker_is_ref
                         lambda *_: OmegaConf.create({**changed, "paths": {"outputs_dir": "x"}}))
     with pytest.raises(PreregistrationError, match="ranker"):
         load_prereg()
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))
