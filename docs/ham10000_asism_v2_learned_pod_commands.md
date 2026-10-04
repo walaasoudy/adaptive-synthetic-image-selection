@@ -243,6 +243,15 @@ The outcome decides the Stage 4 protocol. Nobody chooses it:
 | `subset` | `asism_v2_learned` | A, B, C, D |
 | `all` or `none` | `asism_v2_learned_all_or_none` | A, B (C is B's or A's training set by definition) |
 
+For a `subset` outcome, the cut the stopping rule arrived at in each class, as one table (CPU,
+seconds; a report only, it reads the selection and changes nothing in it; refused for `all` or `none`):
+
+```bash
+python -m scripts.followup.ham10000_asism_v2_threshold_report --candidates $CAND --scores-dir $SCORES
+```
+
+It writes `adaptive_thresholds.json` and `adaptive_thresholds.csv` beside the selection, once.
+
 Download the whole `stage3_asism_v2_ranker/$NS/` directory before going on. **Stage 4 needs its own
 approval.** The pod can be stopped here.
 

@@ -549,3 +549,40 @@ block was removed.
 
 None of this is a HAM10000 result. Whether the network is accepted on real labels is known only
 after the measurement, which remains unapproved.
+
+## 15. The per-class cut as a report (2026-10-04, CPU, a report only)
+
+The framework names an adaptive threshold. In this design that is the stopping rule of contract §10:
+no threshold is configured, and each class is cut where the lower 95% bound of the marginal utility
+is no longer above 0, so the cut and the count differ by class and come from the measured labels.
+The rule is unchanged. What was missing is one place where the cut it arrived at can be read.
+
+`scripts/followup/ham10000_asism_v2_threshold_report.py` reads the selection manifest and
+`c_trajectory.csv`, checks the trajectory against the hash the manifest recorded, and writes
+`adaptive_thresholds.json` and `adaptive_thresholds.csv` once, beside the selection. Per class:
+candidates in the safe pool, selected, fraction, the ranking score and the own lower bound of the
+last image accepted, the lowest ranking score among the selected, and the stop reason. It selects
+nothing and changes no selection file (tested: every file's hash is the same after it runs). It is
+refused when the outcome is `all` or `none`. The contract is not touched: nothing here can affect
+which images are selected or how many.
+
+On the two planted scenarios of section 14 (not evidence):
+
+| class | scenario 2: selected of candidates | score at the cut | scenario 3: selected of candidates | score at the cut |
+|---|---|---|---|---|
+| akiec | 479 of 486 | −0.517 | 486 of 486 (class exhausted) | −0.334 |
+| bcc | 264 of 400 | 0.069 | 284 of 400 | −0.038 |
+| bkl | 211 of 273 | −0.691 | 227 of 273 | −0.978 |
+| df | 566 of 885 | −0.173 | 611 of 885 | −0.327 |
+| mel | 166 of 276 | 0.389 | 173 of 276 | −0.949 |
+| nv | 45 of 112 | 0.016 | 103 of 112 | 0.269 |
+| vasc | 619 of 736 | −0.684 | 736 of 736 (class exhausted) | −0.382 |
+
+Two things to read with the table:
+
+- The own lower bound at the cut is just above 0 in every class that was not exhausted (0.00005 to
+  0.002). That is the rule itself, not a finding.
+- The ranking score of the last image accepted is not always the lowest score selected (scenario 2:
+  mel 0.389 against a lowest of −0.528). The rule orders a class by the lower bound over the
+  bootstrap ensemble, not by the point score, so the cut is exact in the lower bound and only
+  approximate in the score. The report gives both columns for that reason.
