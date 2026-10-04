@@ -81,7 +81,9 @@ hashes and refuses stale inputs.
   `scripts/followup/ham10000_asism_v2_utility.py` (plan, measure, G1) followed by
   `ham10000_asism_v2_learned_select.py` (accept, fit, select, stability). Its GPU measure phase
   is refused in code until approved; `scripts/smoke/asism_v2_ranker_dry_run.py` runs the whole
-  path on CPU with a planted formula in place of the classifier.
+  path on CPU with a planted formula in place of the classifier, and
+  `scripts/smoke/asism_v2_learned_e2e_smoke.py` carries it on through Stage 4, the aggregator and
+  the comparison on fixture images. Pod order: `docs/ham10000_asism_v2_learned_pod_commands.md`.
 
 ## Experimental rules that constrain code changes
 

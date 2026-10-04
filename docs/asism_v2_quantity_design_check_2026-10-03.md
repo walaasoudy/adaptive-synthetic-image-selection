@@ -424,3 +424,30 @@ What this shows, on planted data only:
 
 None of this is a HAM10000 result. The real within-size reliability of the labels, and so whether the
 ranker is accepted at all, is known only after the measurement, which remains unapproved.
+
+## 13. Wiring smoke from the plan to the comparison (2026-10-04, CPU, not evidence)
+
+`scripts/smoke/asism_v2_learned_e2e_smoke.py` runs every step on the paths the committed configs
+give, under a fixture PROJECT_ROOT: plan, measure, G1, accept, fit, select, stability, then Stage 4,
+the aggregator and the comparison on classifier_val as the commands a pod would run. The images are
+random 64 px fixtures, the utility of a cell is the planted formula of scenario 3, the fit uses 20
+bootstrap models, and Stage 4 is one step at 64 px for seeds 42 and 43. The real proxy trainer is
+called once on a one-step budget, outside the measure phase, on the records the measure phase
+builds. Run of 2026-10-04 (`C:/Users/walaa/ham10000_work/smoke_learned_e2e_02`): PASS in about 16
+minutes.
+
+What it showed:
+
+- The measure phase builds its own inputs from the splits and the candidate manifest, and the real
+  trainer accepts them. The measure phase is refused again once the smoke's process-local switch is
+  cleared.
+- The files Stage 4 reads for C and D are the files the selector wrote, at the configured paths; D
+  has C's per-class counts for every seed.
+- The eight Stage 4 runs trained on 0 (A), 3,168 (B), 2,705 (C) and 2,705 (D) synthetic images; the
+  aggregator accepted the grid under `asism_v2_learned`; the comparison has C against D on balanced
+  accuracy as its only confirmatory entry and carries the three added metrics.
+
+What it does not show: the real proxy recipe on a GPU (224 px, 300 steps, ImageNet weights), the real
+Stage 4 recipe, and anything about HAM10000. The command order for a pod is
+`docs/ham10000_asism_v2_learned_pod_commands.md`; no GPU step in it is approved.
+
