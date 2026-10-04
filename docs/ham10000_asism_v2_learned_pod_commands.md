@@ -45,20 +45,67 @@ The wiring smoke (CPU, about 20 minutes; the work directory must be new and outs
 python -m scripts.smoke.asism_v2_learned_e2e_smoke --candidates C:/Users/walaa/ham10000_work/v3_signals/stage2/all_candidates.csv --scores-dir C:/Users/walaa/ham10000_work/v3_signals/four_signal/gonogo_signal_set --work-dir C:/Users/walaa/ham10000_work/smoke_learned_e2e_NN
 ```
 
-The code goes to the pod as a git bundle of the approved branch (the repository is private and SSH is
-blocked on this network; see the session notes). The four-signal set is uploaded beside it: the
-eight files of `ham10000_work/v3_signals/four_signal/gonogo_signal_set/`.
+### 0a. The run line and the bundle
+
+The order matters: the pod runs the code it is given, and the measure phase reads
+`MEASUREMENT_APPROVED` from that code. So the approval commit is made first and the bundle second.
+
+1. Walaa's approval is written as a dated entry in the contract (§8), in a commit of its own.
+2. `MEASUREMENT_APPROVED = True` is set in a second commit of its own.
+3. Both sit on a run line, `run/ham10000-asism-v2-learned`, cut from the reviewed branch. That branch
+   already contains `main`, `run/ham10000-e4` and every ASISM v2 branch, so one branch carries
+   everything the pod needs. Nothing has to be pushed to GitHub for the pod.
+
+```bash
+git bundle create C:/Users/walaa/ham10000_work/bundles/ham10000-asism-v2-learned.bundle run/ham10000-asism-v2-learned
+```
+
+```bash
+git rev-parse --short run/ham10000-asism-v2-learned
+```
+
+Write the printed commit down: step 1 checks it on the pod.
+
+### 0b. What is uploaded (Jupyter file browser, into `/workspace/upload/`)
+
+- `ham10000-asism-v2-learned.bundle`
+- the eight files of `C:\Users\walaa\ham10000_work\v3_signals\four_signal\gonogo_signal_set\`
+  (four `*_scores.parquet` and four `*_scores.provenance.json`)
+
+### 0c. The pod itself
+
+The pod must be started on the network volume that holds `/workspace/master` (the frozen candidate
+manifest stores absolute paths under `/workspace/master/outputs/ham10000/stage2/ham-stratified-v1/full/`,
+so `PROJECT_ROOT` must be `/workspace/master`). The recorded timings are for an RTX 5090; the whole
+measurement should run on one GPU type.
 
 ## 1. Pod preflight (CPU on the pod, no training)
+
+A new terminal (after a reconnect, for example) knows neither the environment nor `$NS`, `$CAND`
+and `$SCORES`. The one line marked below sets all of them and is repeated in every new terminal; the
+measure command in step 3 does not depend on it.
 
 ```bash
 source /workspace/env.sh && cd $PROJECT_ROOT && git status --short && git log --oneline -1
 ```
 
+Bring the code to the run line (expected: no local changes above; the commit printed at the end is
+the one written down in step 0a):
+
 ```bash
-export NS=ham-stratified-v1
-export CAND=$PROJECT_ROOT/outputs/ham10000/stage2/$NS/all_candidates.csv
-export SCORES=/workspace/signals/four_signal/gonogo_signal_set
+source /workspace/env.sh && cd $PROJECT_ROOT && git fetch /workspace/upload/ham10000-asism-v2-learned.bundle run/ham10000-asism-v2-learned:run/ham10000-asism-v2-learned && git checkout run/ham10000-asism-v2-learned && git log --oneline -1
+```
+
+The signal set goes where the commands below expect it:
+
+```bash
+mkdir -p /workspace/signals/four_signal/gonogo_signal_set && cp /workspace/upload/*_scores.parquet /workspace/upload/*_scores.provenance.json /workspace/signals/four_signal/gonogo_signal_set/
+```
+
+The three variables every later block uses (repeat this line in any new terminal):
+
+```bash
+source /workspace/env.sh && cd $PROJECT_ROOT && export NS=ham-stratified-v1 CAND=$PROJECT_ROOT/outputs/ham10000/stage2/ham-stratified-v1/all_candidates.csv SCORES=/workspace/signals/four_signal/gonogo_signal_set
 ```
 
 The candidate pool must be the frozen one. Expected:
@@ -69,7 +116,9 @@ sha256sum $CAND
 ```
 
 Every candidate image, and the three splits the path reads, must be on the volume. Expected: 3168
-candidates, 0 missing; a non-zero count for each split.
+candidates, 0 missing; at least as many image files as the split has rows (contract §2:
+`classifier_train` 1,641, `classifier_val` 1,401, `asism_tuning_heldout` 1,377); eight files in
+`$SCORES`.
 
 ```bash
 python -c "import pandas as pd, pathlib as p; d=pd.read_csv('$CAND'); print(len(d), 'candidates,', sum(not p.Path(x).is_file() for x in d.image_path), 'missing')"
@@ -111,9 +160,25 @@ Output: `$PROJECT_ROOT/outputs/ham10000/stage3_asism_v2_ranker/$NS/utility_plan.
 Refused in code until the approval commit exists. Resumable: a restart continues with the cells
 that are not yet written, and refuses if the inputs changed.
 
+**Never start it twice.** Two copies would both write the same cells, and G1 refuses a repeated cell;
+the run files are evidence and are not edited by hand. So the first command, before a start and
+before every restart, is the check that nothing is running (expected: no output):
+
 ```bash
-setsid nohup python -m scripts.followup.ham10000_asism_v2_utility --phase measure --candidates $CAND --i-understand-this-trains-real-models < /dev/null > /workspace/asism_v2_measure.log 2>&1 &
+pgrep -af ham10000_asism_v2_utility
 ```
+
+Start, and restart after an interruption, with the same line. The log is appended to, not replaced:
+
+```bash
+source /workspace/env.sh && cd $PROJECT_ROOT && setsid nohup python -m scripts.followup.ham10000_asism_v2_utility --phase measure --candidates $PROJECT_ROOT/outputs/ham10000/stage2/ham-stratified-v1/all_candidates.csv --i-understand-this-trains-real-models < /dev/null >> /workspace/asism_v2_measure.log 2>&1 &
+```
+
+The first two lines of the log are `measure inputs: frozen` (`identical` on a restart) and
+`1000 of 1000 utility runs pending on <GPU name>` (fewer on a restart). **If the device is `cpu`,
+stop it at once** (`pkill -f ham10000_asism_v2_utility`): the trainer falls back to the CPU silently.
+The first run also downloads the ImageNet DenseNet-121 weights if the volume's cache does not hold
+them.
 
 Look at the first ten runs before leaving it: each line should take about 14 s and print a macro
 AUROC; the two run files should be growing.
@@ -126,8 +191,13 @@ tail -n 12 /workspace/asism_v2_measure.log
 wc -l $PROJECT_ROOT/outputs/ham10000/stage3_asism_v2_ranker/$NS/utility_runs_*.jsonl
 ```
 
-Done when the two files hold 1,000 lines together (800 fit, 200 test). The test file is not opened by
-anything before step 5.
+Done when the two files hold 1,000 lines together (800 fit, 200 test) and `pgrep` prints nothing.
+The test file is not opened by anything before step 5.
+
+If a restart stops with `measure inputs changed since the first run`, a split, the candidate
+manifest, the plan or the measurement code differs from the first run: stop and find out which, do
+not delete `measure_inputs.json`. If it stops with a JSON error while reading a run file, the pod
+died in the middle of writing a line: stop and report it; the file is not repaired by hand.
 
 ## 4. G1 (CPU, seconds)
 
