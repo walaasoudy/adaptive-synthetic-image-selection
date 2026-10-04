@@ -206,6 +206,31 @@ Loss, model, Adam, learning rate 0.03, starting λ 0.02, seed 42, the 200 bootst
 acceptance criteria are unchanged. Reason and evidence (planted data on CPU, no HAM10000 outcome):
 `docs/asism_v2_quantity_design_check_2026-10-03.md` §10 and §11.
 
+**AMENDMENT (Walaa, 2026-10-04, before any utility measurement).** The per-image score only. It is
+a neural network:
+
+    w_i = 1 + network(x_i, class_i) + class term
+
+- input: the image's four signals (standardised on the train images) and its class, one-hot;
+- one hidden layer of 8 tanh units; one output;
+- the output layer starts at zero, so every image starts at weight 1, as before.
+
+Before: a class-specific linear score of the four signals. Unchanged: the set-utility form
+`U(S) = b + λ·log(1 + Σ w_i)`, the loss, every fit setting of the amendment above, the 200 bootstrap
+models, both acceptance criteria and their thresholds, and all of §10. In acceptance criterion (b),
+"the same model with no signals" is this network with its four signal inputs held at zero.
+
+Reason: the thesis framework names this component a ranking network, and a linear score has no
+hidden layer. This is the one architecture; none other is tried (the "no architecture search"
+requirement above). The capacity requirement above is met again for the network before any real
+label exists: planted utilities on CPU, including one in which the signals have no effect, recorded
+in `docs/asism_v2_quantity_design_check_2026-10-03.md` §14.
+
+The linear score stays in the code and is fitted on the same subsets as a reported baseline
+(`linear_additive`), evaluated on the test subsets in the same single read. It does not gate and is
+never used to select. **If the network fails acceptance, the learned ranking is not used and that is
+the reported result, whatever the linear baseline did (Walaa, 2026-10-04).**
+
 Documented limitation of this form (design check §4): it is conservative. Helpful images whose weight
 is not confidently above 0 are left out, a mostly harmful class can be nearly excluded, harmless
 images that add nothing can be kept, and there is no stop for diminishing returns.
@@ -282,3 +307,4 @@ and §12.
 | 8 | Test-set policy | before Stage 5 | supervisor |
 | 9 | ECE bins | Step 10 | Walaa — decided 2026-10-04 (§12): 15 equal-width bins |
 | 10 | How the quantity chosen by ASISM is tested | before Stage 5 | Walaa — decided 2026-10-04 (§12); the statistic stays with the supervisor |
+| 11 | Ranker architecture: per-image network, one hidden layer of 8; and what a failed acceptance means | before the utility measurement | Walaa — decided 2026-10-04 (§9 amendment) |
