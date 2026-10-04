@@ -36,9 +36,9 @@ from scripts.asism_v2.supervision import (PLAN_NAME, build_plan, describe, freez
 from scripts.followup.ham10000_proxy_noise_floor import (V1_ARCHITECTURE, _append_jsonl, _gpu_name,
                                                          _read_jsonl, freeze_measure_inputs, variant_proxy)
 
-# The GPU measurement has NOT been approved. Setting this is Walaa's decision, recorded in the
-# contract first and made here in a commit of its own; the flag alone never starts a run.
-MEASUREMENT_APPROVED = False
+# Approved by Walaa on 2026-10-04 (contract §8, "MEASUREMENT APPROVED"), recorded in the contract
+# first and set here in a commit of its own; the flag alone never starts a run.
+MEASUREMENT_APPROVED = True
 REAL_MODELS_FLAG = "--i-understand-this-trains-real-models"
 
 PROXY_VARIANT = "v1"                                  # the 224 px / 300 step recipe
