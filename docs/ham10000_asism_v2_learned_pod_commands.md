@@ -1,6 +1,8 @@
 # ASISM v2 (learned ranker and stopping rule) on RunPod: the command order
 
-**STATUS, 2026-10-04: NO GPU STEP IN THIS FILE IS APPROVED. DO NOT RUN ANYTHING BELOW YET.**
+**STATUS, 2026-10-04: THE UTILITY MEASUREMENT (STEPS 1 TO 6) IS APPROVED (contract §8, Walaa,
+2026-10-04). STAGE 4 (STEP 7 ONWARDS) IS NOT APPROVED. The text below was written before the
+approval and is kept as written.**
 
 This file is the order of commands for after Walaa approves the utility measurement. It is written
 before the approval so that the order can be read and checked first. Two things are still closed:

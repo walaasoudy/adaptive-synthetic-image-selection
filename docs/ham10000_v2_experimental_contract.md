@@ -168,6 +168,16 @@ No GPU run is approved by this section. The measurement needs its own approval; 
 Walaa, 2026-10-03: G1 is the check that the labels are repeatable; acceptance criterion (a) in §9 is
 the strict gate for which images matter.
 
+**MEASUREMENT APPROVED (Walaa, 2026-10-04).** Asked to write "موافقة على قياس الـ GPU" for the
+utility measurement of this section (1,000 proxy runs, about 4 GPU-hours, on RunPod), Walaa answered:
+"موافقتى الصريحة." This approves the measure phase and the CPU phases around it (plan, G1, accept,
+fit, select, stability, the threshold report). It does not approve Stage 4 of this design or any
+Stage 5 run; each needs its own approval. The configuration measured is the one frozen in
+`scripts/asism_v2/prereg.py` on this date, with the ranking network of §9 after its one documented
+fix. Nothing was measured before this entry. `MEASUREMENT_APPROVED` is set in the commit after this
+one. The GPU is an RTX PRO 4500 (the timings in the pod commands were recorded on an RTX 5090); the
+whole measurement runs on that one GPU type.
+
 ## 9. Ranking network (APPROVED 2026-10-03; not trained on real labels yet)
 
 Name: **Multi-Signal Utility Ranking Network**.
