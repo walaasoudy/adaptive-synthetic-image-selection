@@ -19,6 +19,8 @@ Amendment, 2026-10-04, approved by Walaa before any real utility measurement (co
 per-image score is a network with one hidden layer of 8 tanh units (`ranker`). Before: a
 class-specific linear score, which stays as the reported baseline `linear_additive`. The set
 utility, the fit settings, the stopping rule and every gate and threshold are unchanged.
+Its one documented fix, approved the same day after the capacity check on planted data failed: the
+class selects one of seven outputs instead of being an input (design check §14).
 """
 from __future__ import annotations
 
@@ -51,7 +53,7 @@ FROZEN = {
         "training_seeds": [42, 43, 44, 45, 46],
     },
     "reliability": {"min_reliability_of_subset_means": 0.80},
-    "ranker": {"architecture": "mlp", "hidden_units": 8, "activation": "tanh"},
+    "ranker": {"architecture": "mlp", "hidden_units": 8, "activation": "tanh", "outputs": "one_per_class"},
     "fit": {"seed": 42, "bootstrap_models": 200, "initial_lam": 0.02, "optimizer": "adam",
             "learning_rate": 0.03, "weight_decay": 0.0, "max_epochs": 5000, "patience": 200,
             "standardised_fit": True},

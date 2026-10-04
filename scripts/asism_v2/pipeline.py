@@ -8,8 +8,8 @@ whatever else is in the set. The earlier mean-pooled form (mean score + lam * lo
 retired: there an image below the current set mean was predicted to hurt, so the count came from
 dilution, not from utility. Image interactions are still not represented. No V1 module is imported.
 
-The per-image score (contract §9, amendment of 2026-10-04): a network with one hidden layer,
-NetworkUtilityRanker. The class-specific linear score, AdditiveUtilityRanker, is the form before
+The per-image score (contract §9, amendment of 2026-10-04 and its one documented fix): a network
+with one hidden layer and one output per class, NetworkUtilityRanker. The class-specific linear score, AdditiveUtilityRanker, is the form before
 that amendment and stays as the reported baseline; both give an image one weight of its own, so
 stopping.py reads either.
 """
@@ -106,11 +106,16 @@ class NetworkUtilityRanker(AdditiveUtilityRanker):
     """The same set utility with the per-image score given by a small network (contract §9,
     amendment of 2026-10-04):
 
-        score(x_i, class_i) = output(tanh(hidden([x_i, one-hot class_i])))
+        score(x_i, class_i) = output_{class_i}(tanh(hidden(x_i)))
 
-    One hidden layer. The output layer starts at zero, so every image starts at weight 1, as the
-    linear score does. w_i, lam, the intercept and the class term are as in AdditiveUtilityRanker,
-    and an image's weight is still its own, whatever else is in the set.
+    One hidden layer over the four signals, one output unit per class. The outputs start at zero,
+    so every image starts at weight 1, as the linear score does. w_i, lam, the intercept and the
+    class term are as in AdditiveUtilityRanker, and an image's weight is still its own, whatever
+    else is in the set.
+
+    The class selects the output and is not an input: that is the one documented fix of the
+    amendment. With the class as an added input, eight units could not give each class its own
+    signal directions and the network failed the capacity check on planted data.
     """
 
     def __init__(self, n_classes: int, n_features: int = len(SIGNALS), hidden_units: int = HIDDEN_UNITS):
@@ -119,16 +124,15 @@ class NetworkUtilityRanker(AdditiveUtilityRanker):
             raise ValueError("The hidden layer needs at least one unit")
         del self.weights
         self.n_classes = n_classes
-        self.hidden = nn.Linear(n_features + n_classes, hidden_units)
-        self.output = nn.Linear(hidden_units, 1)
+        self.hidden = nn.Linear(n_features, hidden_units)
+        self.output = nn.Linear(hidden_units, n_classes)
         nn.init.zeros_(self.output.weight)
         nn.init.zeros_(self.output.bias)
         self.register_buffer("signal_keep", torch.ones(n_features))
 
     def score(self, x: torch.Tensor, classes: torch.Tensor) -> torch.Tensor:
-        one_hot = torch.nn.functional.one_hot(classes, self.n_classes).to(x.dtype)
-        inputs = torch.cat((x * self.signal_keep, one_hot), dim=-1)
-        return self.output(torch.tanh(self.hidden(inputs))).squeeze(-1)
+        every_class = self.output(torch.tanh(self.hidden(x * self.signal_keep)))
+        return every_class.gather(-1, classes.unsqueeze(-1)).squeeze(-1)
 
     def pool(self, x, classes, mask):
         raise NotImplementedError("a network score is not linear in the signals; use prepare()")
@@ -162,7 +166,7 @@ class NetworkUtilityRanker(AdditiveUtilityRanker):
         return x, classes, membership[rows]
 
     def restrict_signals(self, mask: tuple[bool, ...]) -> None:
-        """Hold the unflagged signals at zero on the way in. The class input stays."""
+        """Hold the unflagged signals at zero on the way in. Each class keeps its own output."""
         with torch.no_grad():
             self.signal_keep.copy_(torch.tensor(mask, dtype=torch.float32))
 
@@ -372,7 +376,8 @@ def fit_ranker(frame: pd.DataFrame, subsets: dict[str, dict], measurements: list
                           "training_seed": seed, "instrument_decision": decision,
                           "frozen_unidentifiable": frozen, "bootstrap_models": bootstrap,
                           "signals_used": [s for s, used in zip(SIGNALS, mask) if used],
-                          "architecture": ({"kind": "mlp", "hidden_units": int(hidden_units), "activation": "tanh"}
+                          "architecture": ({"kind": "mlp", "hidden_units": int(hidden_units), "activation": "tanh",
+                                            "outputs": "one_per_class"}
                                            if architecture == "mlp" else {"kind": "linear"}),
                           "trainable_parameters": sum(p.numel() for p in model.parameters() if p.requires_grad),
                           "fit_config": {"max_epochs": max_epochs, "patience": patience,

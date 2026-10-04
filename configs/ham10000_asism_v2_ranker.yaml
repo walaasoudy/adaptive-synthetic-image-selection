@@ -46,9 +46,10 @@ reliability:
 # ---- contract §9, amendment 2026-10-04 (before any measurement): the per-image score is a network.
 # Before: a class-specific linear score of the four signals, now the reported baseline linear_additive.
 ranker:
-  architecture: "mlp"                        # input: four signals + one-hot class; one output
+  architecture: "mlp"                        # input: the four signals
   hidden_units: 8                            # one hidden layer
   activation: "tanh"
+  outputs: "one_per_class"                   # the one documented fix: the class selects the output
 
 # ---- §7: the fit and the stopping rule -------------------------------------------------------------
 fit:
