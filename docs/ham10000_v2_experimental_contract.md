@@ -251,8 +251,8 @@ and §12.
 | Architecture | DenseNet-121, ImageNet weights, dropout 0.2, 512 px | `ham10000_stage4.yaml: model` | FROZEN |
 | Training | 3,000 steps, batch 32, LR 1e-4 constant, weight decay 1e-4, unweighted CE, no augmentation, last checkpoint | `ham10000_stage4.yaml: training` | FROZEN |
 | Budget rule | equal optimiser steps across conditions | `ham10000_stage4.yaml` | FROZEN |
-| Conditions | A real; B + all 3,168; C + ASISM v2; **D + size-matched random draws of the same per-class counts as C** | A–C exist; D to be added | D's draw count PENDING |
-| Seeds | v1 used 3 | — | PENDING: number from a power calculation, before Stage 4 |
+| Conditions | A real; B + all 3,168; C + ASISM v2; **D + size-matched random draws of the same per-class counts as C** | `scripts/asism_v2/selection_files.py: draw_matched_random` | DECIDED (Walaa, 2026-10-04): one D draw per Stage 4 seed, from the same safe pool as C |
+| Seeds | 20 per condition, 42 to 61 (v1 used 3) | `ham10000_asism_v2_learned_stage4.yaml: seeds`; the number is the power calculation of `docs/ham10000_asism_v2_final_protocol.md` §4 | DECIDED (Walaa, 2026-10-04), before any Stage 4 run of the learned selection |
 
 ## 12. Evaluation (Stage 5)
 
@@ -260,10 +260,11 @@ and §12.
 |---|---|---|---|
 | Primary metric | balanced accuracy | `PRIMARY_METRIC` in `scripts/eval/ham10000_compare_conditions.py` | FROZEN |
 | Secondary metrics | macro-F1, macro AUROC (one-vs-rest), accuracy, per-class recall | same file | FROZEN |
-| To add | average precision, Brier score, ECE | — | PENDING (bin count for ECE) |
+| To add | average precision, Brier score, ECE with 15 equal-width bins | not yet in code | bin count DECIDED (Walaa, 2026-10-04), before any v2 result exists |
 | Intervals | lesion-level bootstrap, 2,000 resamples, seed 42, α 0.05 | `run(n_resamples=2000, seed=42, alpha=0.05)` | FROZEN |
 | Multiplicity | Holm on the confirmatory family, Benjamini–Hochberg on the exploratory one | same file | FROZEN |
 | Confirmatory comparison | v1: C against B. **v2 proposal: C against D** (selection at matched size) | — | PENDING |
+| Test of the quantity | C against D tests which images only, since both have the same counts. How many is read from C against A and C against B (same metrics and intervals as above), and from the count of C set beside E4's quantity curve as an independent check. No new threshold is introduced by this row; whether these comparisons are confirmatory, and with what statistic, is the supervisor's decision | — | DECIDED as the reported comparisons (Walaa, 2026-10-04); statistic PENDING (supervisor) |
 | **Test-set policy** | `final_eval_heldout` was read once, for v1 (2026-09-21), and every v2 design choice comes after it. Either (a) re-use it and state that history, or (b) set aside part of an unused split as the v2 test set before any v2 result exists | — | **PENDING (owner: supervisor)** |
 | Final manifest | code commit, config hashes, checkpoints (judge, ASISM, Stage 4), selected counts per class, seeds | — | Written before the single final read |
 
@@ -277,6 +278,7 @@ and §12.
 | 4 | Utility proxy, metric, repeats, reliability target | Step 6 | Walaa — decided 2026-10-03 (§8) |
 | 5 | Ranking correlation threshold | Step 8 | Walaa — decided 2026-10-03 (§9) |
 | 6 | Stopping criterion | Step 9 | Walaa — decided 2026-10-03 (§10) |
-| 7 | D draws, number of Stage 4 seeds | Step 11 | Walaa (the learned Stage 4 config holds the earlier design's 20 seeds and one D draw per seed as placeholders) |
+| 7 | D draws, number of Stage 4 seeds | Step 11 | Walaa — decided 2026-10-04 (§11): 20 seeds, one D draw per seed |
 | 8 | Test-set policy | before Stage 5 | supervisor |
-| 9 | ECE bins | Step 10 | Walaa |
+| 9 | ECE bins | Step 10 | Walaa — decided 2026-10-04 (§12): 15 equal-width bins |
+| 10 | How the quantity chosen by ASISM is tested | before Stage 5 | Walaa — decided 2026-10-04 (§12); the statistic stays with the supervisor |

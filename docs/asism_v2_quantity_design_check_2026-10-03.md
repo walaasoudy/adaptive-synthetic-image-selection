@@ -234,8 +234,9 @@ Still open, and not decided by this code:
 - Contract §13 decision 7 (D draws, number of Stage 4 seeds). The new Stage 4 config copies the
   earlier design's values, 20 seeds and one independent D draw per seed, and D's draw seed base is
   20261003. They are placeholders until that decision is made; Stage 4 is a GPU step and is not
-  approved.
-- How HOW MANY is tested at Stage 5. C against D holds the count fixed.
+  approved. (Decided 2026-10-04: these values stand; contract §11.)
+- How HOW MANY is tested at Stage 5. C against D holds the count fixed. (Decided 2026-10-04:
+  contract §12, row "Test of the quantity".)
 - Test-set policy and the confirmatory statistic (supervisor).
 
 ### Dry run (CPU, no training, not evidence)
