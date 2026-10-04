@@ -119,6 +119,49 @@ def one_vs_rest_average_precision(probabilities: np.ndarray, y_true: np.ndarray,
     )
 
 
+# Contract §12, decided by Walaa on 2026-10-04 before any v2 result exists: top-label ECE with 15
+# equal-width bins.
+ECE_BINS = 15
+
+
+def macro_average_precision(probabilities: np.ndarray, y_true: np.ndarray, n_classes: int | None = None) -> float:
+    """Mean of the one-vs-rest average precisions; a class with no positives is left out, not scored 0."""
+    values = one_vs_rest_average_precision(probabilities, y_true, n_classes)
+    usable = values[np.isfinite(values)]
+    return float(usable.mean()) if usable.size else float("nan")
+
+
+def multiclass_brier_score(probabilities: np.ndarray, y_true: np.ndarray) -> float:
+    """Mean over images of the squared distance between the probability vector and the one-hot
+    truth, summed over classes. 0 is perfect, 2 is certain and wrong; lower is better."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=int)
+    if len(y_true) == 0:
+        return float("nan")
+    one_hot = np.zeros_like(probabilities)
+    one_hot[np.arange(len(y_true)), y_true] = 1.0
+    return float(((probabilities - one_hot) ** 2).sum(axis=1).mean())
+
+
+def top_label_ece(probabilities: np.ndarray, y_true: np.ndarray, n_bins: int = ECE_BINS) -> float:
+    """Expected calibration error of the decision the model makes: confidence is the highest
+    probability, correctness is whether its class is the true one. Equal-width bins on [0, 1],
+    each (lower, upper], the first one closed at 0; lower is better."""
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=int)
+    if len(y_true) == 0:
+        return float("nan")
+    confidence = probabilities.max(axis=1)
+    correct = (probabilities.argmax(axis=1) == y_true).astype(np.float64)
+    edges = np.linspace(0.0, 1.0, int(n_bins) + 1)
+    error = 0.0
+    for lower, upper in zip(edges[:-1], edges[1:]):
+        in_bin = (confidence > lower) & (confidence <= upper) if lower > 0 else (confidence >= lower) & (confidence <= upper)
+        if in_bin.any():
+            error += in_bin.mean() * abs(correct[in_bin].mean() - confidence[in_bin].mean())
+    return float(error)
+
+
 def full_metric_suite(probabilities: np.ndarray, y_true: np.ndarray, labels: list[str] | None = None) -> dict:
     """Every HAM10000 metric for one condition, with per-class support attached.
 

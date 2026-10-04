@@ -50,8 +50,11 @@ from scripts.utils.ham10000_conditions import DEFAULT_PROTOCOL, PROTOCOLS, get_p
 from scripts.utils.ham10000_metrics import (  # noqa: E402
     balanced_accuracy,
     confusion_matrix,
+    macro_average_precision,
     macro_f1,
+    multiclass_brier_score,
     one_vs_rest_auroc,
+    top_label_ece,
 )
 from scripts.utils.manifest import get_git_commit_hash, read_json, write_json  # noqa: E402
 from scripts.utils.metrics import (  # noqa: E402
@@ -69,10 +72,13 @@ CONFIRMATORY_COMPARISONS = get_protocol("v1").confirmatory
 EXPLORATORY_COMPARISONS = get_protocol("v1").exploratory
 
 PRIMARY_METRIC = "balanced_accuracy"
+# For these a negative left-minus-right difference favours the left condition.
+LOWER_IS_BETTER = ("brier_score", "ece_top_label")
 
 
-def metric_functions() -> dict:
-    """Each takes (probabilities, truth) over a set of rows and returns one number."""
+def metric_functions(protocol=None) -> dict:
+    """Each takes (probabilities, truth) over a set of rows and returns one number. A protocol
+    adds its `added_metrics` (contract §12); without one, and for v1, these are v1's four."""
 
     def _balanced(probabilities, truth):
         return balanced_accuracy(confusion_matrix(truth, probabilities.argmax(axis=1), len(CLASSIFIER_TARGET_LABELS)))
@@ -88,12 +94,21 @@ def metric_functions() -> dict:
     def _accuracy(probabilities, truth):
         return float((probabilities.argmax(axis=1) == truth).mean()) if len(truth) else float("nan")
 
-    return {
+    functions = {
         "balanced_accuracy": _balanced,
         "macro_f1": _macro_f1,
         "macro_auroc_ovr": _macro_auroc,
         "accuracy": _accuracy,
     }
+    added = {
+        "macro_average_precision": lambda probabilities, truth: macro_average_precision(
+            probabilities, truth, len(CLASSIFIER_TARGET_LABELS)),
+        "brier_score": multiclass_brier_score,
+        "ece_top_label": top_label_ece,
+    }
+    for name in (protocol.added_metrics if protocol is not None else ()):
+        functions[name] = added[name]
+    return functions
 
 
 def per_class_recall_function(class_index: int):
@@ -162,7 +177,7 @@ def compare(by_condition, reference, n_resamples: int, seed: int, alpha: float, 
     protocol = protocol or get_protocol(DEFAULT_PROTOCOL)
     truth = reference["true_class_index"].to_numpy(dtype=int)
     lesions = reference["lesion_id"].astype(str).to_numpy()
-    metrics = metric_functions()
+    metrics = metric_functions(protocol)
 
     per_condition = {}
     for condition in protocol.conditions:
@@ -218,7 +233,7 @@ def compare(by_condition, reference, n_resamples: int, seed: int, alpha: float, 
         entry.update(exploratory_corrected.get(name, {}))
         entry["family"] = "exploratory"
 
-    return {
+    result = {
         "per_condition": per_condition,
         "confirmatory": confirmatory,
         "exploratory": exploratory,
@@ -232,6 +247,10 @@ def compare(by_condition, reference, n_resamples: int, seed: int, alpha: float, 
         "n_resamples": int(n_resamples),
         "alpha": float(alpha),
     }
+    if protocol.added_metrics:                       # v1's report keeps exactly the keys it had
+        result["added_metrics"] = list(protocol.added_metrics)
+        result["lower_is_better"] = [name for name in protocol.added_metrics if name in LOWER_IS_BETTER]
+    return result
 
 
 def run(run_dir: Path, n_resamples: int = 2000, seed: int = 42, alpha: float = 0.05,
@@ -262,7 +281,7 @@ def run(run_dir: Path, n_resamples: int = 2000, seed: int = 42, alpha: float = 0
     for condition in protocol.conditions:
         entry = result["per_condition"][condition]
         row = {"condition": condition, "n_seeds": entry["n_seeds"]}
-        for name in metric_functions():
+        for name in metric_functions(protocol):
             row[name] = entry[name]["point_estimate"]
             row[f"{name}_ci_lower"] = entry[name]["ci_lower"]
             row[f"{name}_ci_upper"] = entry[name]["ci_upper"]

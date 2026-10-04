@@ -78,6 +78,15 @@ class ConditionProtocol:
     """For a selector whose COUNT is its own output: the `selection_outcome` values of the selection
     manifest under which this protocol is the one to train. Empty: the manifest is not consulted
     (every protocol before asism_v2_learned)."""
+    added_metrics: tuple[str, ...] = ()
+    """Metrics reported at Stage 5 on top of the four v1 reports. Empty for v1, whose recorded
+    comparison must re-generate unchanged: every added metric enlarges the exploratory family that
+    Benjamini-Hochberg corrects over."""
+
+
+# Contract §12 (decided 2026-10-04, before any v2 Stage 5 result): average precision, Brier score
+# and top-label ECE with 15 equal-width bins, for every protocol after v1.
+V2_ADDED_METRICS = ("macro_average_precision", "brier_score", "ece_top_label")
 
 
 V1 = ConditionProtocol(
@@ -139,6 +148,7 @@ V2 = ConditionProtocol(
         evidence_keys=("n_selected_c2", "n_selected_d2"),
     ),
     stage5_dirname="stage5_v2",
+    added_metrics=V2_ADDED_METRICS,
 )
 
 # ASISM v2 final (docs/ham10000_asism_v2_final_protocol.md), frozen before any E4 result. Which of
@@ -174,6 +184,7 @@ ASISM_V2 = ConditionProtocol(
     ),
     selection_manifest=_ASISM_V2_SELECTION,
     stage5_dirname="stage5_asism_v2",
+    added_metrics=V2_ADDED_METRICS,
 )
 
 ASISM_V2_NONE = ConditionProtocol(
@@ -199,6 +210,7 @@ ASISM_V2_NONE = ConditionProtocol(
         evidence_keys=("e4_verdict", "q_star"),
     ),
     stage5_dirname="stage5_asism_v2",
+    added_metrics=V2_ADDED_METRICS,
 )
 
 # ASISM v2 with the learned ranker and the stopping rule (contract §9 and §10, approved 2026-10-03).
@@ -237,6 +249,7 @@ ASISM_V2_LEARNED = ConditionProtocol(
     ),
     stage5_dirname="stage5_asism_v2_learned",
     selection_outcomes=("subset",),
+    added_metrics=V2_ADDED_METRICS,
 )
 
 ASISM_V2_LEARNED_ALL_OR_NONE = ConditionProtocol(
@@ -264,6 +277,7 @@ ASISM_V2_LEARNED_ALL_OR_NONE = ConditionProtocol(
     ),
     stage5_dirname="stage5_asism_v2_learned",
     selection_outcomes=("all", "none"),
+    added_metrics=V2_ADDED_METRICS,
 )
 
 PROTOCOLS = {protocol.name: protocol for protocol in (
