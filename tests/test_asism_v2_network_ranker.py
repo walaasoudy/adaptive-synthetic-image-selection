@@ -1,7 +1,7 @@
 """The per-image score as a network (contract §9, amendment of 2026-10-04). Toy data only.
 
-What is checked: the network is the one that was approved (one hidden layer of 8, every image
-starting at weight 1); it learns a planted utility, including one a linear score cannot express;
+What is checked: the network is the one that was approved (one hidden layer of 8 over the four
+signals, one output per class, every image starting at weight 1); it learns a planted utility, including one a linear score cannot express;
 the stopping rule, the saved file and the acceptance gate work with it unchanged; and the linear
 score is still there as the reported baseline.
 """
@@ -77,13 +77,14 @@ def heldout_correlation(fitted, frame, planted):
 
 def test_the_network_is_the_approved_one_and_every_image_starts_at_weight_one():
     assert HIDDEN_UNITS == 8
-    assert FROZEN["ranker"] == {"architecture": "mlp", "hidden_units": 8, "activation": "tanh"}
+    assert FROZEN["ranker"] == {"architecture": "mlp", "hidden_units": 8, "activation": "tanh",
+                                "outputs": "one_per_class"}
     model = new_ranker("mlp", 7)
     assert isinstance(model, NetworkUtilityRanker) and not hasattr(model, "weights")
-    assert model.hidden.in_features == len(SIGNALS) + 7 and model.hidden.out_features == 8
-    assert model.output.in_features == 8 and model.output.out_features == 1
-    # hidden 11*8 + 8, output 8 + 1, class term 7, intercept, lam
-    assert sum(p.numel() for p in model.parameters()) == 96 + 9 + 7 + 1 + 1
+    assert model.hidden.in_features == len(SIGNALS) and model.hidden.out_features == 8
+    assert model.output.in_features == 8 and model.output.out_features == 7
+    # hidden 4*8 + 8, outputs 7*8 + 7, class term 7, intercept, lam
+    assert sum(p.numel() for p in model.parameters()) == 40 + 63 + 7 + 1 + 1
     x, classes = torch.randn(50, len(SIGNALS)), torch.randint(0, 7, (50,))
     with torch.no_grad():
         assert torch.equal(model.image_weight(x, classes), torch.ones(50))
@@ -118,7 +119,8 @@ def test_the_network_recovers_a_planted_truth_at_the_scale_of_an_auroc_and_is_de
     second = fit_ranker(frame, subsets, rows, [11, 12, 13], protocol, architecture="mlp", **AMENDED)
     assert first.history == second.history
     assert first.score_frame(frame).equals(second.score_frame(frame))
-    assert first.history["architecture"] == {"kind": "mlp", "hidden_units": 8, "activation": "tanh"}
+    assert first.history["architecture"] == {"kind": "mlp", "hidden_units": 8, "activation": "tanh",
+                                             "outputs": "one_per_class"}
     assert first.history["epoch_limit_reached"] is False
     assert heldout_correlation(first, frame, planted) > 0.98
     assert float(first.model.log_count.detach()) == pytest.approx(0.012, abs=0.003)
@@ -179,7 +181,7 @@ def test_a_saved_network_ranker_selects_identically_and_records_its_architecture
     save_fitted(path, fitted, PROVENANCE)
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["format"] == FORMAT == "asism_v2_fitted_ranking/2"
-    assert payload["architecture"] == {"kind": "mlp", "hidden_units": 8, "activation": "tanh"}
+    assert payload["architecture"]["outputs"] == "one_per_class" and payload["architecture"]["hidden_units"] == 8
     loaded, _ = load_fitted(path, PROVENANCE)
     assert isinstance(loaded.model, NetworkUtilityRanker) and len(loaded.ensemble) == 20
     assert loaded.score_frame(pool).equals(fitted.score_frame(pool))
