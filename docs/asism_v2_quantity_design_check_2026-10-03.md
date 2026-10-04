@@ -451,3 +451,101 @@ What it does not show: the real proxy recipe on a GPU (224 px, 300 steps, ImageN
 Stage 4 recipe, and anything about HAM10000. The command order for a pod is
 `docs/ham10000_asism_v2_learned_pod_commands.md`; no GPU step in it is approved.
 
+
+## 14. The per-image score becomes a network (contract §9 amendment and its one documented fix, 2026-10-04, before any measurement)
+
+**The amendment.** The set utility `U(S) = b + λ·log(1 + Σ w_i)` and the stopping rule are unchanged.
+What changes is how `w_i = 1 + score(x_i, class_i) + class term` gets its score: a network over the
+four signals with one hidden layer of 8 tanh units, in place of a linear score per class. The linear
+score stays in the code and is reported next to the network as `linear_additive`; it does not select.
+If the network fails acceptance, that is the reported result, whatever the linear score does. Reason
+for the change: the framework names this component a ranking network. No measurement existed when it
+was written.
+
+**First form (class as a one-hot input, one output; 114 parameters): failed a capacity check.** The
+four planted scenarios of sections 11 and 12 were repeated (CPU, planted formula, not evidence).
+Within-size Spearman on the test subsets:
+
+| scenario | network, first form | linear score | accepted (network) |
+|---|---|---|---|
+| 1, seed noise 0.003 | 0.275 (p 0.051) | 0.471 | no |
+| 2, seed noise 0.001 | 0.525 | 0.801 | yes |
+| 3, strong effect | 0.770 | 0.990 | yes |
+| 4, no signal effect | −0.074 | −0.352 | no (correct) |
+
+Scenarios 2 and 3 were stopped by hand during the bootstrap fit (`STOPPED.txt` in each directory);
+nothing from them is used.
+
+**Diagnosis** (`C:/Users/walaa/ham10000_work/asism_v2_network_capacity_diagnosis_2026-10-04`,
+scenario 3 measurements, one fit each without bootstrap, planted data only):
+
+| variant | parameters | train MSE | train ρ | validation ρ | test ρ |
+|---|---|---|---|---|---|
+| linear | 37 | 2.24e-07 | 0.983 | 0.976 | 0.990 |
+| 8 units, class as input (first form) | 114 | 1.21e-05 | 0.898 | 0.829 | 0.770 |
+| same, patience 1000 | 114 | 1.96e-06 | 0.950 | 0.875 | 0.870 |
+| same, learning rate 0.01, patience 1000 | 114 | 7.65e-07 | 0.954 | 0.833 | 0.834 |
+| 32 units, class as input | 426 | 1.97e-06 | 0.909 | 0.899 | 0.785 |
+| 8 units, one output per class | 112 | 3.59e-07 | 0.978 | 0.985 | 0.949 |
+
+The first form's error on its own training subsets is about 50 times the linear score's, so this is
+a failure to fit, not overfitting. Eight shared units with the class as an input cannot give each
+class its own response to the signals; more training or more units did not repair it. One output per
+class did.
+
+**The one documented fix (approved 2026-10-04).** One output per class; the class is no longer an
+input; the image's score is the output of its own class. Outputs start at zero, so every image starts
+at weight 1. 112 trainable parameters. The contract allows one documented fix after a failure and no
+architecture search: this was it, and no further change to the architecture is allowed.
+
+**The four scenarios with the fixed form** (`asism_v2_dry_run_net_s1` … `s4`; CPU, planted formula,
+not evidence):
+
+| scenario | network | linear score | size and class only | accepted (network) |
+|---|---|---|---|---|
+| 1, seed noise 0.003 | 0.383 (p 0.010) | 0.471 | −0.006 | no (below 0.50) |
+| 2, seed noise 0.001 | 0.750 | 0.801 | 0.043 | yes |
+| 3, strong effect | 0.963 | 0.990 | 0.003 | yes |
+| 4, no signal effect | −0.200 | −0.352 | −0.094 | no (correct) |
+
+Selection for fit seed 42, and the five stability fits (seeds 42 to 46):
+
+| | scenario 2 | scenario 3 |
+|---|---|---|
+| selected | 2,350 | 2,620 |
+| akiec / bcc / bkl / df / mel / nv / vasc | 479 / 264 / 211 / 566 / 166 / 45 / 619 | 486 / 284 / 227 / 611 / 173 / 103 / 736 |
+| selected with a non-positive planted weight | 1 | 0 |
+| positive planted weight, not selected (of 2,778) | 429 | 158 |
+| total over the five fit seeds | 2,315 to 2,372 | 2,598 to 2,625 |
+| Jaccard with the seed-42 selection | 0.954 to 0.963 | 0.990 to 0.992 |
+| widest class range over seeds | vasc 570 to 619 | bcc 274 to 290 |
+
+With the linear score the same scenarios selected 2,429 and 2,710 (section 12), leaving out 350 and
+68 positive images.
+
+What this shows, on planted data only:
+
+- The fixed network recovers a planted linear utility almost as well as the linear score, which is
+  the exact model for these data. It is behind the linear score in all three scenarios with a signal
+  effect, and in scenarios 2 and 3 it selects fewer images.
+- It does not find an effect where none was planted (scenario 4).
+- In scenario 1 neither model reaches 0.50: at that noise level the test labels
+  themselves are too unreliable within a size.
+- The selection is stable over fit seeds.
+
+Two things about how these numbers were produced. The session was interrupted during the stability
+phase of scenarios 2 and 3; the stability phase was started again with the runner
+(`ham10000_asism_v2_learned_select --phase stability`) on the same directories, so those two
+directories have `selection_stability.json` but no `DRY_RUN_REPORT.json`, and the planted-weight
+rows above were computed afterwards from `c_selected.csv`. CPU time on a laptop with two fits and
+the test gate running together: one fit of 200 bootstrap networks 15 to 26 minutes, the stability
+phase 45 to 65 minutes.
+
+The wiring smoke of section 13 was repeated with the network
+(`C:/Users/walaa/ham10000_work/smoke_learned_e2e_03`): PASS, with 0 (A), 3,168 (B), 2,606 (C) and
+2,606 (D) synthetic images. The full gate (`tests/run_all.py`): 997 passed, 0 failed across 54
+suites, with the network suite then run on its own through pytest (11 passed) after its self-runner
+block was removed.
+
+None of this is a HAM10000 result. Whether the network is accepted on real labels is known only
+after the measurement, which remains unapproved.

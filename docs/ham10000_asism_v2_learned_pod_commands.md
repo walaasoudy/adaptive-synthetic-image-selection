@@ -24,7 +24,7 @@ check the current price):
 | 2 plan | CPU | — | seconds | — |
 | 3 measure | GPU | 1,000 × about 14 s | about 4 h | about $3 |
 | 4 G1 | CPU | — | seconds | — |
-| 5 accept, fit, select, stability | CPU | 200 bootstrap models × 5 fit seeds | about 1.5 h on a laptop CPU | — |
+| 5 accept, fit, select, stability | CPU | 200 bootstrap models × 5 fit seeds | 1 to 1.5 h on a laptop CPU (network fit: 15 to 26 min per fit seed, measured 2026-10-04 on planted data) | — |
 | 7 Stage 4 | GPU | 80 × about 578 s (A, B, C, D × 20 seeds) | about 13 h | about $9 |
 | 8 aggregate, compare on classifier_val | CPU | — | minutes | — |
 
