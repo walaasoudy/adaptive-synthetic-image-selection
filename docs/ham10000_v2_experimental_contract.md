@@ -260,7 +260,7 @@ and §12.
 |---|---|---|---|
 | Primary metric | balanced accuracy | `PRIMARY_METRIC` in `scripts/eval/ham10000_compare_conditions.py` | FROZEN |
 | Secondary metrics | macro-F1, macro AUROC (one-vs-rest), accuracy, per-class recall | same file | FROZEN |
-| To add | average precision, Brier score, ECE with 15 equal-width bins | not yet in code | bin count DECIDED (Walaa, 2026-10-04), before any v2 result exists |
+| Added after v1 | macro average precision (mean of the one-vs-rest APs); multi-class Brier score (squared distance to the one-hot truth, summed over classes, 0 to 2); top-label ECE, 15 equal-width bins. Reported per condition with the same intervals, and their differences are in the exploratory family. v1 keeps its four metrics, so its recorded comparison re-generates unchanged | `added_metrics` in `scripts/utils/ham10000_conditions.py`; `scripts/utils/ham10000_metrics.py` | DECIDED (Walaa, 2026-10-04: top-label, 15 bins, every protocol after v1), before any v2 Stage 5 result; implemented |
 | Intervals | lesion-level bootstrap, 2,000 resamples, seed 42, α 0.05 | `run(n_resamples=2000, seed=42, alpha=0.05)` | FROZEN |
 | Multiplicity | Holm on the confirmatory family, Benjamini–Hochberg on the exploratory one | same file | FROZEN |
 | Confirmatory comparison | v1: C against B. **v2 proposal: C against D** (selection at matched size) | — | PENDING |
