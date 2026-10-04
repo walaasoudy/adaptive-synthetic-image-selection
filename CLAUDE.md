@@ -74,7 +74,7 @@ hashes and refuses stale inputs.
   headroom, the E4 quantity curve and its consequences, and the v2 select / Stage 4 grid / compare
   scripts.
 - *ASISM v2* (`scripts/asism_v2/`): `features.py` (four signals, train-only normalisation),
-  `models.py` / `pipeline.py` (size-aware additive ranker), `stopping.py` (per-class stopping on the
+  `models.py` / `pipeline.py` (size-aware set utility; the per-image score is a one-hidden-layer network, the linear score its reported baseline), `stopping.py` (per-class stopping on the
   lower 95% bound of marginal utility), `contracts.py` (exclusive-create outputs, split-role and
   grid validation), `instrument.py`, `preserve.py`, `prereg.py` (the approved configuration, frozen in code),
   `supervision.py`, `gates.py`, `persist.py`, `selection_files.py`. The runner is

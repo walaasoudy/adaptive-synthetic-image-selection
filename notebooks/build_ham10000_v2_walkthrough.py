@@ -506,20 +506,31 @@ def build_sections() -> list[dict]:
 
 **3) بوابة G1 (قبل أي تعلّم).** بتسأل: الفرق بين المجموعات حقيقي ولا ضوضاء seeds؟ بتحسب ثبات متوسط الـ 5 تكرارات، ولازم يبقى **≥ 0.80**. بتتحسب على مجموعات train و validation بس؛ الـ test لسه ما اتفتحش. ملحوظة مكتوبة في الكود: الرقم ده فيه أثر الحجم، ونفس الرقم جوه كل حجم بيتكتب جنبه بس مش هو اللي بيحكم.
 
-**4) النموذج.**
+**4) النموذج: شبكة عصبية صغيرة (ranking network).**
 
 `U(S) = b + λ · log(1 + Σ wᵢ)` ،  `wᵢ = 1 + score(xᵢ, classᵢ) + class term`
 
-`wᵢ` هو «العدد الفعلي» للصورة: 1 صورة متوسطة، أكتر من 1 صورة بتتحسب بأكتر، صفر ما بتضيفش، وسالب بتضر. الـ `score` مجموع الإشارات الأربعة مضروبة في أوزان بتتعلم **لكل class**.
+`wᵢ` هو «العدد الفعلي» للصورة: 1 صورة متوسطة، أكتر من 1 صورة بتتحسب بأكتر، صفر ما بتضيفش، وسالب بتضر.
+
+الـ `score` بيطلع من الشبكة:
+
+- **الداخل:** الإشارات الأربعة للصورة.
+- **طبقة مخفية واحدة:** 8 خلايا `tanh`.
+- **الخارج:** مخرج لكل class (7 مخارج)؛ درجة الصورة هي مخرج الـ class بتاعها.
+- المخارج بتبدأ بأصفار، فكل الصور بتبدأ بوزن 1. المجموع 112 رقم بيتعلموا.
+
+الشبكة بتدّي كل صورة وزنها لوحدها، فقاعدة الوقوف بتشتغل عليها من غير تغيير.
+
+**تاريخ الشكل ده (العقد §9، يوم 2026-10-04، قبل أي قياس):** الـ score كان معادلة خطية لكل class. اتغير لشبكة عشان الإطار بيسمّي المكوّن ده ranking network. أول شكل للشبكة (الـ class داخل مع الإشارات) فشل في اختبار القدرة على داتا مزروعة، فاتعمل الإصلاح الواحد المسموح: مخرج لكل class. المعادلة الخطية فضلت في الكود كـ baseline بيتسجل جنب الشبكة (`linear_additive`)، ومش بتتستخدم في الاختيار.
 
 **5) accept (مرة واحدة).** بعد الـ fit، بنقرا مجموعات الـ test مرة واحدة والملف بيتكتب exclusive، فما ينفعش تتقري وتتعدّل وتتقري تاني. شرطين لازم الاتنين:
 
 - ارتباط Spearman **جوه كل حجم** بين التوقع والقياس ≥ 0.50، و p ≤ 0.05 (10,000 permutation).
 - خطأ الـ ranker على الـ test أقل من نموذج «الحجم والـ class بس» (من غير إشارات).
 
-كمان بيتسجل للمقارنة: similarity لوحدها، والـ composite متساوي الأوزان.
+كمان بيتسجل للمقارنة: المعادلة الخطية، similarity لوحدها، والـ composite متساوي الأوزان.
 
-**لو G1 أو accept فشل: الترتيب المتعلَّم ما بيتستخدمش، ودي النتيجة اللي بتتكتب.**
+**لو G1 أو accept فشل: الترتيب المتعلَّم ما بيتستخدمش، ودي النتيجة اللي بتتكتب.** ده حتى لو المعادلة الخطية نجحت؛ القاعدة دي مكتوبة قبل القياس.
 
 """ + table([
         ("توزيع الأدوار جوه كل class", ref(sup_py, "assign_roles")),
@@ -528,7 +539,9 @@ def build_sections() -> list[dict]:
         ("التدريب الصغير نفسه", ref("scripts/asism/ham10000_03_build_utility_subsets.py", "_measure")),
         ("اشتراط الشبكة الكاملة (كل مجموعة × كل seed)", ref("scripts/asism_v2/contracts.py", "validate_measurements")),
         ("G1", ref(gates_py, "reliability_gate")),
-        ("النموذج", ref(pipe_py, "AdditiveUtilityRanker")),
+        ("الشبكة (النموذج المعتمد)", ref(pipe_py, "NetworkUtilityRanker")),
+        ("المعادلة الخطية (baseline، ومنها بتورث الشبكة شكل `U`)", ref(pipe_py, "AdditiveUtilityRanker")),
+        ("اختيار النموذج حسب الإعدادات", ref(pipe_py, "new_ranker")),
         ("الـ fit (مع early stopping على الـ validation)", ref(pipe_py, "fit_ranker")),
         ("Spearman جوه كل حجم", ref(gates_py, "stratified_spearman")),
         ("accept", ref(gates_py, "acceptance")),
@@ -537,7 +550,9 @@ def build_sections() -> list[dict]:
 **الداخل:** الـ pool بإشاراته، الخطة، والـ 1,000 قياس.
 **الخارج:** `g1_reliability.json`، `ranker_acceptance.json`.
 """))
-    add(markdown(excerpt(pipe_py, "AdditiveUtilityRanker", start="def score", end="return self.intercept + self.log_count * torch.log1p")))
+    add(markdown(excerpt(pipe_py, "NetworkUtilityRanker", start="self.hidden = nn.Linear", end="nn.init.zeros_(self.output.bias)")))
+    add(markdown(excerpt(pipe_py, "NetworkUtilityRanker.score")))
+    add(markdown(excerpt(pipe_py, "AdditiveUtilityRanker", start="def image_weight", end="return self.intercept + self.log_count * torch.log1p")))
     add(markdown(excerpt(gates_py, "reliability_gate", start="groups = ")))
     add(markdown(TOY_U_INTRO))
     add(code(TOY_U_CODE))
@@ -565,7 +580,7 @@ def build_sections() -> list[dict]:
         ("تحميله مع فحص المصدر", ref("scripts/asism_v2/persist.py", "load_fitted")),
     ]) + """
 
-**الإعدادات المعتمدة:** 200 نسخة، Adam، learning rate 0.03، من غير weight decay، حد أقصى 5,000 epoch و patience 200، والـ fit على درجات مطبّعة.
+**الإعدادات المعتمدة:** 200 نسخة (كل نسخة شبكة كاملة)، Adam، learning rate 0.03، من غير weight decay، حد أقصى 5,000 epoch و patience 200، والـ fit على درجات مطبّعة.
 
 **الداخل:** قياسات train و validation.
 **الخارج:** `ranker_fit_seed42.json`.
