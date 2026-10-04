@@ -55,10 +55,11 @@ def _fake(pool, noise, calls=None, stop_after=None):
     return measure, inputs
 
 
-def test_the_gpu_measurement_is_refused_until_it_is_approved(tmp_path):
+def test_the_gpu_measurement_is_refused_until_it_is_approved(tmp_path, monkeypatch):
     pool = _frozen(tmp_path)
     measure, inputs = _fake(pool, 0.002)
-    assert utility.MEASUREMENT_APPROVED is False
+    assert utility.MEASUREMENT_APPROVED is True      # contract §8, approved 2026-10-04
+    monkeypatch.setattr(utility, "MEASUREMENT_APPROVED", False)
     with pytest.raises(utility.UtilityError, match="NOT been approved"):
         utility.run_measure(NAMESPACE, None, True, out_dir=tmp_path, measure_fn=measure, inputs=inputs)
     assert not (tmp_path / utility.FIT_RUNS).exists() and not (tmp_path / utility.INPUTS_NAME).exists()
