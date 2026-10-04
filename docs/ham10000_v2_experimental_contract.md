@@ -231,6 +231,30 @@ The linear score stays in the code and is fitted on the same subsets as a report
 never used to select. **If the network fails acceptance, the learned ranking is not used and that is
 the reported result, whatever the linear baseline did (Walaa, 2026-10-04).**
 
+**THE ONE DOCUMENTED FIX (Walaa, 2026-10-04, before any utility measurement).** How the class
+enters the network, and nothing else:
+
+    score(x_i, class_i) = output_{class_i}(tanh(hidden(x_i)))
+
+- input: the image's four standardised signals only;
+- the same one hidden layer of 8 tanh units;
+- one output unit per class; an image's score is the output unit of its own class. Every output
+  starts at zero.
+
+Before (the amendment above, same day): the class was a one-hot input next to the signals and there
+was one output. Reason: that network failed the capacity requirement on planted data. On the frozen
+pool and the 200 designed subsets, with a planted utility in which each class has its own signal
+weights and little noise, it left a training error about 50 times the linear score's and reached a
+within-size Spearman of 0.770 on the test subsets where the linear score reached 0.990. The cause is
+capacity, not overfitting: eight units that receive the class as an added input cannot give seven
+classes seven different signal directions. A longer fit or 32 units did not repair it; a class-specific
+output did (0.949 with the same hidden layer and about the same number of parameters). What was run,
+on planted data only, is recorded in `docs/asism_v2_quantity_design_check_2026-10-03.md` §14.
+
+This is the fix that the "no architecture search" requirement allows after a failure. No further
+change to the architecture is made, whatever the planted or the real results are. Everything the
+amendment above left unchanged is still unchanged, including what a failed acceptance means.
+
 Documented limitation of this form (design check §4): it is conservative. Helpful images whose weight
 is not confidently above 0 are left out, a mostly harmful class can be nearly excluded, harmless
 images that add nothing can be kept, and there is no stop for diminishing returns.
@@ -307,4 +331,4 @@ and §12.
 | 8 | Test-set policy | before Stage 5 | supervisor |
 | 9 | ECE bins | Step 10 | Walaa — decided 2026-10-04 (§12): 15 equal-width bins |
 | 10 | How the quantity chosen by ASISM is tested | before Stage 5 | Walaa — decided 2026-10-04 (§12); the statistic stays with the supervisor |
-| 11 | Ranker architecture: per-image network, one hidden layer of 8; and what a failed acceptance means | before the utility measurement | Walaa — decided 2026-10-04 (§9 amendment) |
+| 11 | Ranker architecture: per-image network, one hidden layer of 8; and what a failed acceptance means | before the utility measurement | Walaa — decided 2026-10-04 (§9 amendment); the one documented fix (one output per class) approved the same day |
