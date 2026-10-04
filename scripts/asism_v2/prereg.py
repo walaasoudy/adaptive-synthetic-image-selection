@@ -14,6 +14,11 @@ truth. Nothing else changed: the model, the learning rate, the seeds and every g
 Amendment, 2026-10-03, approved by Walaa before any real utility measurement (design check §12):
 within a class, images are offered in the order of their own lower bound (stopping.offer_order),
 not of the point model's score. The stopping condition is unchanged.
+
+Amendment, 2026-10-04, approved by Walaa before any real utility measurement (contract §9): the
+per-image score is a network with one hidden layer of 8 tanh units (`ranker`). Before: a
+class-specific linear score, which stays as the reported baseline `linear_additive`. The set
+utility, the fit settings, the stopping rule and every gate and threshold are unchanged.
 """
 from __future__ import annotations
 
@@ -46,6 +51,7 @@ FROZEN = {
         "training_seeds": [42, 43, 44, 45, 46],
     },
     "reliability": {"min_reliability_of_subset_means": 0.80},
+    "ranker": {"architecture": "mlp", "hidden_units": 8, "activation": "tanh"},
     "fit": {"seed": 42, "bootstrap_models": 200, "initial_lam": 0.02, "optimizer": "adam",
             "learning_rate": 0.03, "weight_decay": 0.0, "max_epochs": 5000, "patience": 200,
             "standardised_fit": True},
@@ -53,7 +59,7 @@ FROZEN = {
                  "stability_fit_seeds": [42, 43, 44, 45, 46]},
     "acceptance": {"min_within_size_spearman": 0.50, "max_one_sided_p": 0.05, "permutations": 10000,
                    "permutation_seed": 42, "must_beat": "size_and_class_only",
-                   "reported_baselines": ["similarity_only", "equal_weight_composite"]},
+                   "reported_baselines": ["linear_additive", "similarity_only", "equal_weight_composite"]},
 }
 
 
@@ -78,4 +84,6 @@ def fit_arguments(prereg: dict, seed: int | None = None) -> dict:
             "max_epochs": int(fit["max_epochs"]), "patience": int(fit["patience"]),
             "learning_rate": float(fit["learning_rate"]), "weight_decay": float(fit["weight_decay"]),
             "initial_lam": float(fit["initial_lam"]),
-            "standardise_targets": bool(fit["standardised_fit"])}
+            "standardise_targets": bool(fit["standardised_fit"]),
+            "architecture": str(prereg["ranker"]["architecture"]),
+            "hidden_units": int(prereg["ranker"]["hidden_units"])}

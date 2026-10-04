@@ -13,6 +13,11 @@ plus seed noise (--noise-sd), where an image's planted weight is 1 + (planted cl
 Because the truth is planted, the report can also say how many of the images with a positive planted
 weight the selection kept.
 
+--no-signal-effect plants weight 1 for every image: the utility then depends on how many images a
+subset holds and on nothing else. A ranker that is accepted there has fitted noise, so this is the
+check that the acceptance gate refuses a ranker with nothing to learn (contract §9, amendment of
+2026-10-04).
+
 The fit uses fewer bootstrap models than the pre-registered 200 (--bootstrap, default 20) so that the
 dry run takes about an hour instead of about ten. Everything is written under --out-dir, which must
 be new and outside the project's outputs. Every artifact is stamped scientific_evidence: false.
@@ -42,9 +47,11 @@ NAMESPACE = "ham-stratified-v1"
 PLANT_SEED = 20261003
 
 
-def planted_weights(frame) -> dict[str, float]:
+def planted_weights(frame, signal_effect: bool = True) -> dict[str, float]:
     """image_id -> planted weight. Class weight vectors differ in size, so classes differ in how
-    many of their images are worth adding."""
+    many of their images are worth adding. Without a signal effect every image weighs 1."""
+    if not signal_effect:
+        return {str(image_id): 1.0 for image_id in frame["image_id"]}
     rng = np.random.default_rng(PLANT_SEED)
     weights = {}
     for dx, group in frame.groupby("dx", sort=True):
@@ -55,7 +62,8 @@ def planted_weights(frame) -> dict[str, float]:
     return weights
 
 
-def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int, noise_sd: float, lam: float, base: float) -> dict:
+def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int, noise_sd: float, lam: float, base: float,
+        signal_effect: bool = True) -> dict:
     prereg = load_prereg()
     out_dir = Path(out_dir)
     if out_dir.exists() or Path(prereg["paths"]["outputs_dir"]).resolve() in out_dir.resolve().parents:
@@ -63,7 +71,7 @@ def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int, noise
     started = time.perf_counter()
     plan_summary = utility.run_plan(NAMESPACE, candidates, scores_dir, out_dir)
     frame, _ = load_signal_table(candidates, scores_dir, prereg["safety"])
-    weight = planted_weights(frame)
+    weight = planted_weights(frame, signal_effect)
 
     def fake_classifier(train, tuning, proxy, seed, device):
         ids = [record["image_id"] for record in train]
@@ -119,7 +127,8 @@ def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int, noise
     report = {
         "scientific_evidence": False,
         "what_this_is": "CPU dry run; the classifier is a planted formula, not a trained model",
-        "planted": {"base": base, "lam": lam, "seed_noise_sd": noise_sd},
+        "planted": {"base": base, "lam": lam, "seed_noise_sd": noise_sd, "signal_effect": bool(signal_effect)},
+        "ranker": prereg["ranker"],
         "stopped_at": None if fit else f"acceptance: {stopped}",
         "bootstrap_models_used": int(bootstrap), "bootstrap_models_pre_registered": prereg["fit"]["bootstrap_models"],
         "minutes": round((time.perf_counter() - started) / 60, 1),
@@ -138,7 +147,8 @@ def run(candidates: Path, scores_dir: Path, out_dir: Path, bootstrap: int, noise
     if fit:
         report.update({
             "fit": {k: fit[k] for k in ("best_epoch", "validation_mse", "epoch_limit_reached", "bootstrap_models_at_epoch_limit",
-                                        "frozen_unidentifiable", "bootstrap_models", "fit_config")},
+                                        "frozen_unidentifiable", "bootstrap_models", "fit_config", "architecture",
+                                        "trainable_parameters")},
             "selection": {k: selection[k] for k in ("selection_outcome", "protocol", "per_class", "n_selected_c",
                                                     "n_selected_d", "score_sources")},
             "selection_files": sorted(selection["files_sha256"]),
@@ -160,8 +170,11 @@ def main() -> int:
     parser.add_argument("--noise-sd", type=float, default=0.003, help="planted seed noise of one run")
     parser.add_argument("--lam", type=float, default=0.012, help="planted size coefficient")
     parser.add_argument("--base", type=float, default=0.86, help="planted value of the empty set")
+    parser.add_argument("--no-signal-effect", action="store_true",
+                        help="plant weight 1 for every image: only the count matters, and acceptance should refuse")
     args = parser.parse_args()
-    report = run(args.candidates, args.scores_dir, args.out_dir, args.bootstrap, args.noise_sd, args.lam, args.base)
+    report = run(args.candidates, args.scores_dir, args.out_dir, args.bootstrap, args.noise_sd, args.lam, args.base,
+                 signal_effect=not args.no_signal_effect)
     print(json.dumps({k: v for k, v in report.items() if k != "plan"}, indent=2))
     return 0
 

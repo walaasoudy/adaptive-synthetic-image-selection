@@ -133,6 +133,11 @@ def acceptance(frame: pd.DataFrame, subsets: dict[str, dict], fit_measurements: 
                                                 signal_mask=SIZE_AND_CLASS_ONLY, **no_bootstrap),
               "similarity_only": fit_ranker(frame, subsets, fit_measurements, seeds, protocol,
                                             signal_mask=SIMILARITY_ONLY, **no_bootstrap)}
+    if no_bootstrap.get("architecture", "linear") != "linear":
+        # Contract §9, amendment of 2026-10-04: the linear score the network replaced, reported
+        # next to it. It does not gate and is never used to select.
+        models["linear_additive"] = fit_ranker(frame, subsets, fit_measurements, seeds, protocol,
+                                               **{**no_bootstrap, "architecture": "linear"})
     report = {}
     for name, fitted in models.items():
         predicted = predict_subsets(fitted, frame, subsets, test_ids)
